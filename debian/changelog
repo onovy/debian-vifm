@@ -1,0 +1,58 @@
+vifm (0.2a-2) unstable; urgency=low
+
+  * Renamed pauseme to vifm-pauseme (making a diversion or putting it into a
+    seperate package just seems to be too much effort for a 8-line shell
+    script, IMHO; Closes: #274782: file conflicts in vifm tkdesk).
+
+ -- Edelhard Becker <edelhard@debian.org>  Mon,  4 Oct 2004 11:35:25 +0200
+
+vifm (0.2a-1) unstable; urgency=low
+
+  * New upstream release (thanks Jeroen van Wolffelaar for the hint)
+  * changed Maintainer to my debian account
+  * updated standards to 3.6.1 (no changes needed)
+  * removed CVS directories from source
+
+ -- Edelhard Becker <edelhard@debian.org>  Wed, 29 Sep 2004 18:00:36 +0200
+
+vifm (0.2-2) unstable; urgency=low
+
+  * updated watch file
+
+ -- Edelhard Becker <edelhard@debian.org>  Wed, 29 Sep 2004 16:09:30 +0200
+
+vifm (0.2-1) unstable; urgency=low
+
+  * New upstream release
+  * install helpfile vifm.txt and vim plugin vifm.vim in /etc/vim
+  * patched config.c to reflect package file structure
+
+ -- Edelhard Becker <becker@edelhard.de>  Wed, 23 Apr 2003 19:07:16 +0200
+
+vifm (0.1-4) unstable; urgency=low
+
+  * reworked package to be built without debhelper
+  * first upload (Closes: bug#182420).
+
+ -- Edelhard Becker <becker@edelhard.de>  Wed, 26 Feb 2003 17:59:03 +0100
+
+vifm (0.1-3) unstable; urgency=low
+
+  * deleted postinst from debian dir (was just empty after removing the
+    old-style /usr/doc link)
+
+ -- Edelhard Becker <becker@edelhard.de>  Wed, 13 Nov 2002 01:03:58 +0100
+
+vifm (0.1-2) unstable; urgency=low
+
+  * changed the colors in ui.c to be a bit nicer and consistent with (at least
+    my and therefore Debian default) $LS_COLORS
+
+ -- Edelhard Becker <becker@edelhard.de>  Thu, 29 Aug 2002 19:40:31 +0200
+
+vifm (0.1-1) unstable; urgency=low
+
+  * Initial Release.
+
+ -- Edelhard Becker <becker@edelhard.de>  Tue, 27 Aug 2002 19:19:28 +0200
+

@@ -1,0 +1,15 @@
+
+   Debian-scpecific configuration
+   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+When you start vifm for the first time, a subdirectory ~/.vifm is created
+with a personal config file vifmrc0.2 and a Trash folder. You should edit
+the configuration file to match your preferences.
+
+
+   Vim configuration:
+
+This package automatically installs and compiles its helptags. Just start
+vim and try ":h vifm". The vifm.vim plugin is also installed, see the
+plugin section in the helpfile for commands.

@@ -1,0 +1,20 @@
+This package was debianized by Edelhard Becker <becker@edelhard.de> on
+Tue, 27 Aug 2002 19:19:28 +0200.
+
+It was downloaded from http://vifm.sourceforge.net/
+
+Upstream Author(s): ksteen@users.sourceforge.net.
+  The pauseme script is from the tkdesk program.
+  Some of the code is from emelfm by Michael Clark.
+  The file sorting function is from the git program by Tudor Hulubei 
+      and Andrei Pitis.  
+  A patch for filetypes detection was written by Stefan Walter.
+
+Copyright:
+  This software is copyright (c) by Ken Steen.
+
+  You are free to distribute this software under the terms of
+  the GNU General Public License.
+  On Debian systems, the complete text of the GNU General Public
+  License can be found in the file `/usr/share/common-licenses/GPL'.
+

@@ -1,0 +1,3 @@
+version=2
+# Homepage Pattern                              [Version  [Action]]
+http://vifm.sourceforge.net/vifm-(.*)\.tar\.gz  debian    uupdate
