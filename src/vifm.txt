@@ -36,6 +36,7 @@ The builtin commands are:
 :apropos manpage - will create a menu of items returned by the apropos
   command.  Selecting an item in the menu will open the corresponding 
 	manpage.
+:c[hange] - 
 :cd - change to your home directory.
 	:cd /usr/local - change directory to /usr/local.
 :[range]d[elete][count] - delete selected file or files.
@@ -55,20 +56,15 @@ The builtin commands are:
   Selecting a file from the menu will reload the current file list in vifm 
 	to show the selected file.
 :marks - menu of bookmarks.
+:o[nly] - switch to a one window view.
 :pwd - show the present working directory.
 :q[uit] or :x  - will exit vifm.
 :sh[ell] - will start a shell.
-:screen - toggles whether to use the screen program or not.
+:sc[reen] - toggles whether to use the screen program or not.
 :s[ort] - menu of different sorting methods.
+:sp[lit] - switch to a two window view. 
 :sy[nc] - change the other panel to the current panels directory.
 :x - exit vifm.
-
-Please note:
-  Because vifm does not have nearly as many commands as vi, some of the 
-  commands can be used in a shorter form than in vi.  :c can be used for 
-  :cd because vifm does not have a :c[hange] command.  This should not 
-  cause too many problems as you can use the vi version of the command 
-  and it will work.
 
 command macros:
   %a user arguments.

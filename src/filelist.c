@@ -473,7 +473,6 @@ moveto_list_pos(FileView *view, int pos)
 	char file_name[view->window_width +2];
 	int x;
 
-
 	if(pos < 1)
 		pos = 0;
 
@@ -510,6 +509,7 @@ moveto_list_pos(FileView *view, int pos)
 	view->list_pos = pos;
 
 
+
 	if(redraw)
 		draw_dir_list(view, view->top_line, view->curr_line);
 
@@ -527,6 +527,7 @@ moveto_list_pos(FileView *view, int pos)
 
 			for (x = strlen(file_name); x < view->window_width ; x++)
 				file_name[x] = ' ';
+
 			file_name[view->window_width] = ' ';
 			file_name[view->window_width +1 ] = '\0';
 			mvwaddstr(view->win, view->curr_line, 0, file_name);
@@ -791,7 +792,6 @@ change_directory(FileView *view, char *directory)
 	stat(view->curr_dir, &s);
 	view->dir_mtime = s.st_mtime;
 	closedir(dir);
-	update_term_title(view->curr_dir);
 }
 
 static void
@@ -820,8 +820,6 @@ load_dir_list(FileView *view, int reload)
 	int x;
 	int namelen = 0;
 	int old_list = view->list_rows;
-
-
 
 	dir = opendir(view->curr_dir);
 
@@ -970,6 +968,10 @@ load_dir_list(FileView *view, int reload)
 
 	closedir(dir);
 	
+	if(!reload && s.st_size > 2048)
+	{
+		status_bar_message("Sorting Directory...");
+	}
 	qsort(view->dir_entry, view->list_rows, sizeof(dir_entry_t),
 				sort_dir_list);
 

@@ -1,0 +1,7 @@
+#!/bin/sh
+
+eval "$*"
+#echo  Press Return...
+#read throwaway_variable
+screen -X eval 'focus bottom' remove
+

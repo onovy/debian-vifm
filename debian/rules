@@ -2,7 +2,6 @@
 # minimal debian/rules for vifm
 
 PACKAGE = vifm
-CC = cc
 CFLAGS = -O2
 ifneq (,$(findstring debug,$(DEB_BUILD_OPTIONS)))
   CFLAGS += -g
@@ -23,7 +22,7 @@ config.status: configure
 		--prefix=$(PREFIX) --mandir=$(MANDIR)
 
 build: config.status
-	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS)"
+	$(MAKE) CFLAGS="$(CFLAGS)"
 
 clean distclean:
 	-test -f Makefile && $(MAKE) distclean

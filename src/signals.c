@@ -65,6 +65,7 @@ received_sigtstp(void)
 	curs_set(0);
 }
 
+
 static void
 received_sigchld(void)
 {

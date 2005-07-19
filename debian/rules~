@@ -48,7 +48,7 @@ binary-arch: build
 	$(MKDIR) $(MANDIR)
 	$(MKDIR) $(DOCDIR)
 	$(MKDIR) $(DOCDIR)/examples
-	$(INSTALLSCRIPT) src/pauseme $(BINDIR)
+	$(INSTALLSCRIPT) src/pauseme $(BINDIR)/vifm-pauseme
 	$(INSTALLSTRIP) src/vifm $(BINDIR)
 	$(INSTALL) ChangeLog $(DOCDIR)/changelog
 	# these are empty with vifm 0.2, dont install this time:
@@ -60,7 +60,8 @@ binary-arch: build
 	$(INSTALL) src/vifm-0.2.help.txt src/vifmrc0.2 $(DOCDIR)/examples
 	$(INSTALL) src/vifm.txt $(CNFDIR)/doc
 	$(INSTALL) src/vifm.vim $(CNFDIR)/plugin
-	$(INSTALL) pauseme.1 vifm.1 $(MANDIR)
+	$(INSTALL) vifm.1 $(MANDIR)
+	$(INSTALL) pauseme.1 $(MANDIR)/vifm-pauseme.1
 	gzip -9fqr $(MANDIR)/
 	#$(INSTALLSCRIPT) debian/prerm $(DESTDIR)/DEBIAN/prerm
 	$(INSTALLSCRIPT) debian/postinst $(DESTDIR)/DEBIAN/postinst

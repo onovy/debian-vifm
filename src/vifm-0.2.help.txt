@@ -86,10 +86,12 @@ The basic vi key bindings are used to move through the files and popup
 	:!!  same as :! but will pause the screen before returning to vifm.
 		:!!ls -l
 	:e load file into vi
+	:only - switch to a one window view.
 	:pwd - show the present working directory 
 	:cd - change directory
 		:cd ~/bin
 	:s[ort] - popup menu of different sorting methods
+	:sp[lit] - switch to a two window view.
 	:his[tory] - popup menu of directories visited
 	:jobs - shows menu of current backgrounded processes.
 	:vifm
@@ -187,6 +189,7 @@ Menus
 
 Reserved :commands
 		!
+		change
 		cd
 		cmap
 		com

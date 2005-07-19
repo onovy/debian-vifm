@@ -35,5 +35,5 @@ int execute_command(FileView *view, char *action);
 int sort_this(const void *one, const void *two);
 int is_user_command(char *command);
 int command_is_reserved(char *command);
-char * expand_macros(FileView *view, char *command, char *args);
+char * expand_macros(FileView *view, char *command, char *args, int *menu, int *split);
 void remove_command(char *name);

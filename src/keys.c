@@ -33,6 +33,7 @@
 #include "fileops.h"
 #include "keys.h"
 #include "menus.h"
+#include "registers.h"
 #include "search.h"
 #include "signals.h"
 #include "sort.h"
@@ -105,11 +106,24 @@ check_if_filelists_have_changed(FileView *view)
 	if(s.st_mtime  != view->dir_mtime)
 		reload_window(view);
 
-	stat(other_view->curr_dir, &s);
-	if((s.st_mtime != other_view->dir_mtime) && !cfg.show_full)
-		reload_window(other_view);
+	if (curr_stats.number_of_windows != 1)
+	{
+		stat(other_view->curr_dir, &s);
+		if(s.st_mtime != other_view->dir_mtime)
+			reload_window(other_view);
+	}
 
 }
+
+static void
+repeat_last_command(FileView *view)
+{
+	if (0 > cfg.cmd_history_num)
+		show_error_msg(" Command Error ", "Command history list is empty. ");
+	else
+		execute_command(view, cfg.cmd_history[0]);
+}
+
 
 void
 rename_file(FileView *view)
@@ -117,20 +131,25 @@ rename_file(FileView *view)
 	char * filename = get_current_file_name(view);
 	char command[1024];
 	int key;
-	int pos;
-	int index = 0;
+	int pos = strlen(filename) + 1;
+	int index = pos - 1;
 	int done = 0;
 	int abort = 0;
-	int len = 0;
+	int len = pos;
 	int found = -1;
 	char buf[view->window_width -2];
 
 	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR));
-	pos = 1;
 	wmove(view->win, view->curr_line, 0);
 	wclrtoeol(view->win);
-
 	wmove(view->win, view->curr_line, 1);
+	waddstr(view->win, filename);
+	memset(buf, '\0', view->window_width -2);
+	strncpy(buf, filename, sizeof(buf));
+	len = strlen(filename);
+	wmove(view->win, view->curr_line, strlen(filename) + 1);
+
+//	wmove(view->win, view->curr_line, 1);
 	curs_set(1);
 
   while(!done)
@@ -159,17 +178,52 @@ rename_file(FileView *view)
 			case 8: /* ascii Backspace  ascii Ctrl H */
 			case KEY_BACKSPACE: /* ncurses BACKSPACE KEY */
 				{
-					pos--;
-					index--;
-					len--;
+					/*
+					if(index == len)
+					{
+					*/
+						pos--;
+						index--;
+						len--;
 
-					if(pos < 2)
-						pos = 2;
+						if(pos < 1)
+							pos = 1;
+						if(index < 0)
+							index = 0;
+						
+						mvwdelch(view->win, view->curr_line, pos);
+						buf[index] = '\0';
+						buf[len] = '\0';
+				//	}
+				}
+				break;
+			case KEY_LEFT:
+				{
+					index--;
+					pos--;
+
 					if(index < 0)
 						index = 0;
-					
-					mvwdelch(view->win, view->curr_line, pos);
-					buf[index] = '\0';
+
+					if(pos < 1)
+						pos = 1;
+
+					wmove(view->win, view->curr_line, pos);
+
+				}
+				break;
+			case KEY_RIGHT:
+				{
+					index++;
+					pos++;
+
+					if(index > len)
+						index = len;
+
+					if(pos > len + 1)
+						pos = len + 1;
+
+					wmove(view->win, view->curr_line, pos);
 				}
 				break;
 			default:
@@ -179,6 +233,11 @@ rename_file(FileView *view)
 					buf[index] = key;
 					index++;
 					buf[index] = '\0';
+					if(len < index)
+					{
+						len++;
+						buf[index] = '\0';
+					}
 					if(index > 62)
 					{
 						abort = 1;
@@ -201,7 +260,7 @@ rename_file(FileView *view)
 		return;
 	}
 
-	if (access(buf, F_OK) == 0)
+	if (access(buf, F_OK) == 0 && strncmp(filename, buf, len) != 0)
 	{
 		show_error_msg("File exists", "That file already exists. Will not overwrite.");
 
@@ -341,20 +400,77 @@ tag_file(FileView *view)
 		wmove(view->win, view->curr_line, 0);
 }
 
+int
+put_files_from_register(FileView *view)
+{
+	int x;
+	int i = -1;
+	int y = 0;
+	char buf[PATH_MAX + (NAME_MAX * 2) + 4];
+
+	for (x = 0; x < NUM_REGISTERS; x++)
+	{
+		if (reg[x].name == curr_stats.curr_register)
+		{
+			i = x;
+			break;
+		}
+	}
+
+	if ((i < 0) || (reg[i].num_files < 1))
+	{
+		status_bar_message("Register is empty");
+		wrefresh(status_bar);
+		return 1;
+	}
+
+	for (x = 0; x < reg[i].num_files; x++)
+	{
+		snprintf(buf, sizeof(buf), "%s/%s", cfg.trash_dir, reg[i].files[x]);
+		if (!access(buf, F_OK))
+		{
+			snprintf(buf, sizeof(buf), "mv \"%s/%s\" %s",
+					cfg.trash_dir, reg[i].files[x], view->curr_dir);
+			if ( background_and_wait_for_errors(buf))
+				y++;
+		}
+	}
+
+	clear_register(curr_stats.curr_register);
+	curr_stats.use_register  = 0;
+	curr_stats.register_saved = 0;
+
+	if (y)
+	{
+		snprintf(buf, sizeof(buf), " %d %s inserted", y,
+				y==1 ? "file" : "files");
+
+		load_dir_list(view, 0);
+		moveto_list_pos(view, view->curr_line);
+
+		status_bar_message(buf);
+		return 1;
+	}
+
+	return 0;
+}
+
 int 
 put_files(FileView *view)
 {
 	char command[NAME_MAX];
 	char directory[PATH_MAX];
 	int x;
-	int error = 0;
-	int save = 0;
 	char buf[PATH_MAX + (NAME_MAX * 2) + 4];
+	int y = 0;
 
-	if(!curr_stats.num_yanked_files)
+	if (curr_stats.use_register && curr_stats.register_saved)
+		return put_files_from_register(view);
+
+	if (!curr_stats.num_yanked_files)
 		return 0;
 
-	if(!strcmp(curr_stats.yanked_files_dir, cfg.trash_dir))
+	if (!strcmp(curr_stats.yanked_files_dir, cfg.trash_dir))
 	{
 		snprintf(command, sizeof(command), "mv");
 		snprintf(directory, sizeof(directory), "%s",
@@ -369,22 +485,31 @@ put_files(FileView *view)
 
 	for(x = 0; x < curr_stats.num_yanked_files; x++)
 	{
-		snprintf(buf, sizeof(buf), "%s \"%s/%s\" %s",
-				command, directory, curr_stats.yanked_files[x],
-				view->curr_dir);
-		start_background_job(buf);
+		snprintf(buf, sizeof(buf), "%s/%s", directory, curr_stats.yanked_files[x]);
+		if (!access(buf, F_OK))
+		{
+			snprintf(buf, sizeof(buf), "%s \"%s/%s\" %s",
+					command, directory, curr_stats.yanked_files[x],
+					view->curr_dir);
+			if ( background_and_wait_for_errors(buf))
+				y++;
+		}
 	}
 
-	if(!error)
+	if (y)
 	{
-		snprintf(buf, sizeof(buf), " %d %s inserted", x,
-				x==1 ? "file" : "files");
-		save = 1;
+		snprintf(buf, sizeof(buf), " %d %s inserted", y,
+				y==1 ? "file" : "files");
+
+		load_dir_list(view, 0);
+		moveto_list_pos(view, view->curr_line);
+
+		status_bar_message(buf);
+
+		return 1;
 	}
-	load_dir_list(view, 0);
-	moveto_list_pos(view, view->curr_line);
-	status_bar_message(buf);
-	return save;
+
+	return 0;
 }
 
 void
@@ -448,13 +573,16 @@ change_window(FileView **view)
 	switch_views();
 	*view = curr_view;
 
-	wattroff(other_view->title, A_BOLD);
-	wattroff(other_view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	mvwaddstr(other_view->win, other_view->curr_line, 0, "*");
-	erase_current_line_bar(other_view);
-	werase(other_view->title);
-	wprintw(other_view->title, other_view->curr_dir);
-	wnoutrefresh(other_view->title);
+	if (curr_stats.number_of_windows != 1)
+	{
+		wattroff(other_view->title, A_BOLD);
+		wattroff(other_view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
+		mvwaddstr(other_view->win, other_view->curr_line, 0, "*");
+		erase_current_line_bar(other_view);
+		werase(other_view->title);
+		wprintw(other_view->title, other_view->curr_dir);
+		wnoutrefresh(other_view->title);
+	}
 
 	wattron(curr_view->title, A_BOLD);
 	werase(curr_view->title);
@@ -466,12 +594,15 @@ change_window(FileView **view)
 
 	change_directory(curr_view, curr_view->curr_dir);
 
-	if(cfg.show_full)
+	if (curr_stats.number_of_windows == 1)
 		load_dir_list(curr_view, 1);
 
 	moveto_list_pos(curr_view, curr_view->list_pos);
 	werase(status_bar);
 	wnoutrefresh(status_bar);
+	
+	if (curr_stats.number_of_windows == 1)
+		update_all_windows();
 }
 
 static void
@@ -522,41 +653,96 @@ filter_selected_files(FileView *view)
 void
 update_all_windows(void)
 {
-	touchwin(lborder);
-	touchwin(lwin.title);
-	touchwin(lwin.win);
-	touchwin(mborder);
-	touchwin(rwin.title);
-	touchwin(rwin.win);
-	touchwin(stat_win);
-	touchwin(status_bar);
-	touchwin(pos_win);
-	touchwin(num_win);
-	touchwin(rborder);
+	/* In One window view */
+	if (curr_stats.number_of_windows == 1)
+	{
+		if (curr_view == &lwin)
+		{
+			touchwin(lwin.title);
+			touchwin(lwin.win);
+			touchwin(lborder);
+			touchwin(stat_win);
+			touchwin(status_bar);
+			touchwin(pos_win);
+			touchwin(num_win);
+			touchwin(rborder);
 
-	/*
-	 * redrawwin() shouldn't be needed.  But without it there is a 
-	 * lot of flickering when redrawing the windows?
-	 */
+			/*
+			 * redrawwin() shouldn't be needed.  But without it there is a 
+			 * lot of flickering when redrawing the windows?
+			 */
 
-	redrawwin(lborder);
-	redrawwin(lwin.title);
-	redrawwin(lwin.win);
-	redrawwin(mborder);
-	redrawwin(rwin.title);
-	redrawwin(rwin.win);
-	redrawwin(stat_win);
-	redrawwin(status_bar);
-	redrawwin(pos_win);
-	redrawwin(num_win);
-	redrawwin(rborder);
+			redrawwin(lborder);
+			redrawwin(stat_win);
+			redrawwin(status_bar);
+			redrawwin(pos_win);
+			redrawwin(lwin.title);
+			redrawwin(lwin.win);
+			redrawwin(num_win);
+			redrawwin(rborder);
+
+			wnoutrefresh(lwin.title);
+			wnoutrefresh(lwin.win);
+		}
+		else
+		{
+			touchwin(rwin.title);
+			touchwin(rwin.win);
+			touchwin(lborder);
+			touchwin(stat_win);
+			touchwin(status_bar);
+			touchwin(pos_win);
+			touchwin(num_win);
+			touchwin(rborder);
+
+			redrawwin(rwin.title);
+			redrawwin(rwin.win);
+			redrawwin(lborder);
+			redrawwin(stat_win);
+			redrawwin(status_bar);
+			redrawwin(pos_win);
+			redrawwin(num_win);
+			redrawwin(rborder);
+
+			wnoutrefresh(rwin.title);
+			wnoutrefresh(rwin.win);
+		}
+	}
+	/* Two Pane View */
+	else
+	{
+		touchwin(lwin.title);
+		touchwin(lwin.win);
+		touchwin(mborder);
+		touchwin(rwin.title);
+		touchwin(rwin.win);
+		touchwin(lborder);
+		touchwin(stat_win);
+		touchwin(status_bar);
+		touchwin(pos_win);
+		touchwin(num_win);
+		touchwin(rborder);
+
+		redrawwin(lwin.title);
+		redrawwin(lwin.win);
+		redrawwin(mborder);
+		redrawwin(rwin.title);
+		redrawwin(rwin.win);
+		redrawwin(lborder);
+		redrawwin(stat_win);
+		redrawwin(status_bar);
+		redrawwin(pos_win);
+		redrawwin(num_win);
+		redrawwin(rborder);
+
+		wnoutrefresh(lwin.title);
+		wnoutrefresh(lwin.win);
+		wnoutrefresh(mborder);
+		wnoutrefresh(rwin.title);
+		wnoutrefresh(rwin.win);
+	}
 
 	wnoutrefresh(lborder);
-	wnoutrefresh(lwin.title);
-	wnoutrefresh(lwin.win);
-	wnoutrefresh(mborder);
-	wnoutrefresh(rwin.title);
-	wnoutrefresh(rwin.win);
 	wnoutrefresh(stat_win);
 	wnoutrefresh(status_bar);
 	wnoutrefresh(pos_win);
@@ -569,7 +755,7 @@ update_all_windows(void)
 
 
 /*
- * Main Loop 
+ *  Main Loop 
  * 	Everything is driven from this function with the exception of 
  * 	signals which are handled in signals.c
  */
@@ -583,6 +769,7 @@ main_key_press_cb(FileView *view)
 	int key = 0;
 	char count_buf[64] = "";
 	char status_buf[64] = "";
+	int save_reg = 0;
 
 	curs_set(0);
 
@@ -592,10 +779,7 @@ main_key_press_cb(FileView *view)
 	wtimeout(curr_view->win, 1000);
 	wtimeout(other_view->win, 1000);
 
-	if(cfg.show_full)
-		show_full_file_properties(view);
-	else
-		update_stat_window(view);
+	update_stat_window(view);
 
 	if (view->selected_files)
 	{
@@ -627,17 +811,37 @@ main_key_press_cb(FileView *view)
 		if (key == ERR)
 			continue;
 
-		/* From here down gets called only when a key is actually pressed */
+		/* This point down gets called only when a key is actually pressed */
 
 		curr_stats.save_msg = 0;
 
-		/* ascii 0 - 9 */
-		if((key > 47) && (key < 58))
+		if (curr_stats.use_register && !curr_stats.register_saved)
+		{
+			if (is_valid_register(key))
+			{
+				curr_stats.curr_register = key;
+				curr_stats.register_saved = 1;
+				save_reg = 1;
+				continue;
+			}
+			else
+			{
+				status_bar_message("Invalid Register Key");
+				curr_stats.save_msg = 1;
+				wrefresh(status_bar);
+				curr_stats.use_register = 0;
+				curr_stats.curr_register = -1;
+				curr_stats.register_saved = 0;
+				save_reg = 0;
+				continue;
+			}
+		}
+		else if((key > 47) && (key < 58)) /* ascii 0 - 9 */
 		{
 			if (count > 62)
 			{
 				show_error_msg(" Number is too large ", 
-						"Vifm cannot handle that large of a number as a cound. ");
+						"Vifm cannot handle that large of a number as a count. ");
 				clear_num_window();
 				continue;
 			}
@@ -653,6 +857,9 @@ main_key_press_cb(FileView *view)
 	  
 		switch(key)
 		{
+			case '"': /* "register */
+				curr_stats.use_register = 1;
+				break;
 			case 2: /* ascii Ctrl B */
 			case KEY_PPAGE:
 				view->list_pos = view->list_pos - view->window_rows;
@@ -677,19 +884,8 @@ main_key_press_cb(FileView *view)
 				moveto_list_pos(view, view->list_pos);
 				break;
 			case 7: /* ascii Ctrl G */
-				if(cfg.show_full)
-				{
-					change_directory(other_view, other_view->curr_dir);
-					load_dir_list(other_view, 1);
-					reset_last_char = 1;
-					cfg.show_full = 0;
-					change_directory(curr_view, curr_view->curr_dir);
-					wnoutrefresh(other_view->win);
-				}
-				else
-				{
-					cfg.show_full = 1;
-				}
+				if(!curr_stats.show_full)
+					curr_stats.show_full = 1;
 				break;
 			case 9: /* ascii Tab */
 			case 32:  /* ascii Spacebar */
@@ -716,6 +912,7 @@ main_key_press_cb(FileView *view)
 				}
 				break;
 			case '.': /* repeat last change */
+				repeat_last_command(view);
 				break;
 			case ':': /* command */
 				curr_stats.save_msg = get_command(view, GET_COMMAND, NULL);
@@ -953,9 +1150,13 @@ main_key_press_cb(FileView *view)
 						yank_files(view, count, count_buf);
 						reset_last_char++;
 						curr_stats.save_msg = 1;
+						save_reg = 0;
 					}
 					else
+					{
 						update_num_window("y");
+						save_reg = 1;
+					}
 					save_count = 1;
 				}
 				break;
@@ -981,7 +1182,7 @@ main_key_press_cb(FileView *view)
 			count = 0;
 		}
 
-		if(cfg.show_full)
+		if(curr_stats.show_full)
 			show_full_file_properties(view);
 		else
 			update_stat_window(view);
@@ -1002,6 +1203,15 @@ main_key_press_cb(FileView *view)
 		else if(!curr_stats.save_msg)
 			clean_status_bar(view);
 
+		if (curr_stats.use_register && curr_stats.register_saved)
+		{
+			if (!save_reg)
+			{
+				curr_stats.use_register = 0;
+				curr_stats.curr_register = -1;
+				curr_stats.register_saved = 0;
+			}
+		}
 
 		if(curr_stats.need_redraw)
 			redraw_window();

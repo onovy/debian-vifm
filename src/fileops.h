@@ -20,6 +20,12 @@
 
 #include"ui.h"
 
+#define FILE_CHANGE 1
+#define FILE_NAME 2
+#define FILE_OWNER 4
+#define FILE_GROUP 6
+#define FILE_PERMISSIONS 8
+
 typedef struct
 {
 	char *dir;
@@ -34,5 +40,6 @@ int my_system(char *command);
 void yank_selected_files(FileView *view);
 int pipe_and_capture_errors(char *command);
 int file_exec(char *command);
+void show_change_window(FileView *view, int type);
 
 #endif

@@ -34,6 +34,7 @@
 #include "fileops.h"
 #include "filetype.h"
 #include "keys.h"
+#include "registers.h"
 #include "status.h"
 #include "ui.h"
 #include "utils.h"
@@ -65,6 +66,7 @@ enum {
 	HISTORY,
 	JOBS,
 	LOCATE,
+	REGISTER,
 	USER,
 	VIFM
 };
@@ -551,7 +553,7 @@ execute_user_cb(FileView *view, menu_info *m)
 	char *dir = NULL;
 	char *file = NULL;
 	char *free_this = NULL;
-	int isdir = 0;
+	//int isdir = 0;
 
 	free_this = file = dir = strdup(m->data[m->pos]);
 	chomp(file);
@@ -559,6 +561,7 @@ execute_user_cb(FileView *view, menu_info *m)
 	if (m->action_program == NULL)
 	{
 		/* check if it really is a file */
+		/*
 		if (!access(file, R_OK))
 		{
 			if (is_dir(file))
@@ -594,6 +597,7 @@ execute_user_cb(FileView *view, menu_info *m)
 			else
 				moveto_list_pos(view, find_file_pos_in_list(view, file));
 		}
+		*/
 	}
 	else if (m->action_program != NULL)
 	{
@@ -668,7 +672,8 @@ execute_filetype_cb(FileView *view, menu_info *m)
 	{
 		if(strchr(prog_str, '%'))
 		{
-			char *expanded_command = expand_macros(view, prog_str, NULL);
+			int m = 0;
+			char *expanded_command = expand_macros(view, prog_str, NULL, &m, 0);
 			shellout(expanded_command, 0);
 			my_free(expanded_command);
 			return;
@@ -696,7 +701,8 @@ execute_filetype_cb(FileView *view, menu_info *m)
 			{
 				if(strchr(prog_str, '%'))
 				{
-					char *expanded_command = expand_macros(view, prog_copy, NULL);
+					int m = 0;
+					char *expanded_command = expand_macros(view, prog_copy, NULL, &m, 0);
 					shellout(expanded_command, 0);
 					my_free(expanded_command);
 					free(free_this);
@@ -716,7 +722,8 @@ execute_filetype_cb(FileView *view, menu_info *m)
 		}
 		if(strchr(prog_str, '%'))
 		{
-			char *expanded_command = expand_macros(view, prog_copy, NULL);
+			int m = 0;
+			char *expanded_command = expand_macros(view, prog_copy, NULL, &m, 0);
 			shellout(expanded_command, 0);
 			my_free(expanded_command);
 			free(free_this);
@@ -1043,7 +1050,7 @@ draw_menu(FileView *view,  menu_info *m)
 
 	box(menu_win, 0, 0);
 
-	if(m->win_rows >= m->len)
+	if(m->win_rows - 2 >= m->len)
 	{
 		m->top = 0;
 	}
@@ -1435,7 +1442,7 @@ show_locate_menu(FileView *view, char *args)
 }
 
 void
-show_user_menu(FileView *view, char *get_info_script, char *action_prog )
+show_user_menu(FileView *view, char *command)
 {
 	int x;
 	char buf[256];
@@ -1454,12 +1461,12 @@ show_user_menu(FileView *view, char *get_info_script, char *action_prog )
 	m.title = NULL;
 	m.args = NULL;
 	m.data = NULL;
-	m.get_info_script = get_info_script;
-	m.action_program = action_prog;
+	m.get_info_script = command;
+	m.action_program = NULL;
 
 	getmaxyx(menu_win, m.win_rows, x);
 
-	snprintf(buf, sizeof(buf), "%s",  m.get_info_script);
+	snprintf(buf, sizeof(buf), " %s ",  m.get_info_script);
 	m.title = strdup(buf);
 	file = popen(buf, "r");
 
@@ -1475,6 +1482,7 @@ show_user_menu(FileView *view, char *get_info_script, char *action_prog )
 
 	while(fgets(buf, sizeof(buf), file))
 	{
+		show_progress();
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(sizeof(buf) + 2);
 		snprintf(m.data[x], sizeof(buf), buf);
@@ -1558,8 +1566,8 @@ show_jobs_menu(FileView *view)
 		{
 			m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 			m.data[x] = (char *)malloc(strlen(p->cmd) + 24);
-			snprintf(m.data[x], strlen(p->cmd) + 22, " %d     %s  %s",
-					p->pid, p->cmd, p->stopped ? "Stopped" : "Running");
+			snprintf(m.data[x], strlen(p->cmd) + 22, " %d     %s ",
+					p->pid, p->cmd);
 
 			x++;
 		}
@@ -1595,6 +1603,64 @@ show_jobs_menu(FileView *view)
 	menu_key_cb(view, &m);
 	reset_popup_menu(&m);
 
+}
+
+void
+show_register_menu(FileView *view)
+{
+	int x;
+
+	menu_info m;
+	m.top = 0;
+	m.current = 1;
+	m.len = 0;
+	m.pos = 0;
+	m.win_rows = 0;
+	m.type = REGISTER;
+	m.matching_entries = 0;
+	m.match_dir = NONE;
+	m.regexp = NULL;
+	m.title = strdup(" Registers ");
+	m.args = NULL;
+	m.data = NULL;
+
+	getmaxyx(menu_win, m.win_rows, x);
+
+	for (x = 0; x < NUM_REGISTERS; x++)
+	{
+		if (reg[x].num_files > 0)
+		{
+			char buf[56];
+			int y = reg[x].num_files;
+			snprintf(buf, sizeof(buf), "\"%c", reg[x].name);
+			m.data = (char **)realloc(m.data, sizeof(char *) * (m.len + 1));
+			m.data[m.len] = strdup(buf);
+			m.len++;
+
+			while (y)
+			{
+
+				y--;
+				m.data = (char **)realloc(m.data, sizeof(char *) * (m.len + 1));
+				m.data[m.len] = strdup(reg[x].files[y]);
+
+				m.len++;
+			}
+		}
+	}
+
+	if (!m.len)
+	{
+		m.data = (char **)realloc(m.data, sizeof(char *) * 1);
+		m.data[0] = strdup(" Registers are empty ");
+		m.len = 1;
+	}
+
+	setup_menu(view);
+	draw_menu(view, &m);
+	moveto_menu_pos(view, 0, &m);
+	menu_key_cb(view, &m);
+	reset_popup_menu(&m);
 }
 
 void

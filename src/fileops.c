@@ -32,10 +32,14 @@
 #include"filelist.h"
 #include"fileops.h"
 #include"filetype.h"
+#include"keys.h"
 #include"menus.h"
+#include"registers.h"
 #include"status.h"
 #include"ui.h"
 #include"utils.h"
+
+
 
 int 
 my_system(char *command)
@@ -70,6 +74,7 @@ my_system(char *command)
 		}
 		else
 			return status;
+
 	}while(1);
 }
 
@@ -116,13 +121,26 @@ yank_selected_files(FileView *view)
 	curr_stats.yanked_files = (char **)calloc(view->selected_files, 
 			sizeof(char *));
 
+	if ((curr_stats.use_register) && (curr_stats.register_saved))
+	{
+		/* A - Z  append to register otherwise replace */
+		if ((curr_stats.curr_register < 65) || (curr_stats.curr_register > 90))
+			clear_register(curr_stats.curr_register);
+		else
+			curr_stats.curr_register = curr_stats.curr_register + 32;
+	}
+
 	for(x = 0; x < view->selected_files; x++)
 	{
 		if(view->selected_filelist[x])
 		{
-		namelen = strlen(view->selected_filelist[x]);
-		curr_stats.yanked_files[x] = malloc(namelen +1);
-		strcpy(curr_stats.yanked_files[x], view->selected_filelist[x]);
+			char buf[PATH_MAX];
+			namelen = strlen(view->selected_filelist[x]);
+			curr_stats.yanked_files[x] = malloc(namelen +1);
+			strcpy(curr_stats.yanked_files[x], view->selected_filelist[x]);
+			snprintf(buf, sizeof(buf), "%s/%s", view->curr_dir, 
+					view->selected_filelist[x]);
+			append_to_register(curr_stats.curr_register, view->selected_filelist[x]);
 		}
 		else
 		{
@@ -131,6 +149,7 @@ yank_selected_files(FileView *view)
 		}
 	}
 	curr_stats.num_yanked_files = x;
+
 	strncpy(curr_stats.yanked_files_dir, view->curr_dir,
 			sizeof(curr_stats.yanked_files_dir) -1);
 }
@@ -155,15 +174,14 @@ void
 view_file(FileView *view)
 {
 	char command[PATH_MAX + 5] = "";
-	char *filename = get_current_file_name(view);
+	char *filename = escape_filename(get_current_file_name(view), 0);
 
-	snprintf(command, sizeof(command), "%s \"%s\"", cfg.vi_command, filename);
+	snprintf(command, sizeof(command), "%s %s", cfg.vi_command, filename);
+
 	shellout(command, 0);
+	my_free(filename);
 	curs_set(0);
 }
-
-
-
 
 void
 handle_file(FileView *view)
@@ -176,6 +194,23 @@ handle_file(FileView *view)
 		moveto_list_pos(view, view->curr_line);
 		return;
 	}
+
+	if(cfg.vim_filter)
+	{
+		FILE *fp;
+		char filename[PATH_MAX] = "";
+
+		snprintf(filename, sizeof(filename), "%s/vimfiles", cfg.config_dir);
+		fp = fopen(filename, "w");
+		snprintf(filename, sizeof(filename), "%s/%s",
+				view->curr_dir,
+				view->dir_entry[view->list_pos].name);
+		endwin();
+		fprintf(fp, filename);
+		fclose(fp);
+		exit(0);
+	}
+
 	if(EXECUTABLE == view->dir_entry[view->list_pos].type)
 	{
 		if(cfg.auto_execute)
@@ -191,28 +226,15 @@ handle_file(FileView *view)
 	if(REGULAR == view->dir_entry[view->list_pos].type)
 	{
 		char *program = NULL;
-		if(cfg.vim_filter)
-		{
-			FILE *fp;
-			char filename[PATH_MAX] = "";
 
-			snprintf(filename, sizeof(filename), "%s/vimfiles", cfg.config_dir);
- 			fp = fopen(filename, "w");
-			snprintf(filename, sizeof(filename), "%s/%s",
-					view->curr_dir,
-					view->dir_entry[view->list_pos].name);
-			endwin();
-			fprintf(fp, filename);
-			fclose(fp);
-			exit(0);
-
-		}
-		else if((program = get_default_program_for_file(
+		if((program = get_default_program_for_file(
 					view->dir_entry[view->list_pos].name)) != NULL)
 		{
 			if(strchr(program, '%'))
 			{
-				char *command = expand_macros(view, program, NULL);
+				int m = 0;
+				int s = 0;
+				char *command = expand_macros(view, program, NULL, &m, &s);
 				shellout(command, 0);
 				my_free(command);
 				return;
@@ -365,6 +387,7 @@ pipe_and_capture_errors(char *command)
 	return 0;
 }
 
+
 void
 delete_file(FileView *view)
 {
@@ -379,24 +402,39 @@ delete_file(FileView *view)
 
 	get_all_selected_files(view);
 	yank_selected_files(view);
-	strncpy(curr_stats.yanked_files_dir, cfg.trash_dir,
-			sizeof(curr_stats.yanked_files_dir) -1);
+
 	for(x = 0; x < view->selected_files; x++)
 	{
 		if(!strcmp("../", view->selected_filelist[x]))
 		{
-			status_bar_message("You cannot delete the ../ directory");
+			show_error_msg(" Background Process Error ", 
+					"You cannot delete the ../ directory ");
 			continue;
 		}
 
-		if(cfg.use_trash)
-				snprintf(buf, sizeof(buf), "mv \"%s\" %s",
-					view->selected_filelist[x],  cfg.trash_dir);
+		if ((curr_stats.use_register) && (curr_stats.register_saved))
+		{
+			strncpy(curr_stats.yanked_files_dir, cfg.trash_dir,
+					sizeof(curr_stats.yanked_files_dir) -1);
+			snprintf(buf, sizeof(buf), "mv \"%s\" %s/%s", 
+					view->selected_filelist[x], cfg.trash_dir, 
+					view->selected_filelist[x]);
+
+			curr_stats.register_saved = 0;
+			curr_stats.use_register = 0;
+		}
+		else if(cfg.use_trash)
+		{
+			strncpy(curr_stats.yanked_files_dir, cfg.trash_dir,
+					sizeof(curr_stats.yanked_files_dir) -1);
+			snprintf(buf, sizeof(buf), "mv \"%s\" %s",
+				view->selected_filelist[x],  cfg.trash_dir);
+		}
 		else
 			snprintf(buf, sizeof(buf), "rm -fr '%s'",
 					 view->selected_filelist[x]);
 
-		start_background_job(buf);
+		background_and_wait_for_errors(buf);
 	}
 	free_selected_file_array(view);
 	view->selected_files = 0;
@@ -404,24 +442,450 @@ delete_file(FileView *view)
 	load_dir_list(view, 1);
 
 	moveto_list_pos(view, view->list_pos);
-	/*
-	char *buf = NULL;
-	char *files = expand_macros(view, "%f", NULL);
+}
 
-	buf = (char *)malloc(strlen(files) + PATH_MAX);
+void
+file_chmod(FileView *view, char *path, char *mode, int recurse_dirs)
+{
+  char cmd[PATH_MAX + 128] = " ";
 
-	if(cfg.use_trash)
-		snprintf(buf, strlen(files) + PATH_MAX, "mv %s %s &", files,  cfg.trash_dir);
+	if (recurse_dirs)
+		snprintf(cmd, sizeof(cmd), "chmod -R %s %s", mode, path);
 	else
-		snprintf(buf, strlen(files) + 24, "rm -fr %s &", files);
+		snprintf(cmd, sizeof(cmd), "chmod %s %s", mode, path);
 
-	start_background_job(buf);
-
-	my_free(files);
-	my_free(buf);
+	start_background_job(cmd);
 
 	load_dir_list(view, 1);
-
 	moveto_list_pos(view, view->list_pos);
-	*/
+  
+}
+
+static void
+reset_change_window(void)
+{
+	curs_set(0);
+	werase(change_win);
+	update_all_windows();
+	if(curr_stats.need_redraw)
+		redraw_window();
+}
+
+void
+change_file_owner(char *file)
+{
+
+}
+
+void
+change_file_group(char *file)
+{
+
+}
+
+void
+set_perm_string(FileView *view, int *perms, char *file)
+{
+	int i = 0;
+	char *add_perm[] = {"u+r", "u+w", "u+x", "u+s", "g+r", "g+w", "g+x", "g+s",
+											"o+r", "o+w", "o+x", "o+t"}; 
+	char *sub_perm[] = { "u-r", "u-w", "u-x", "u-s", "g-r", "g-w", "g-x", "g-s",
+											"o-r", "o-w", "o-x", "o-t"}; 
+	char perm_string[64] = " ";
+
+	for (i = 0; i < 12; i++)
+	{
+		if (perms[i])
+			strcat(perm_string, add_perm[i]);
+		else
+			strcat(perm_string, sub_perm[i]);
+
+		strcat(perm_string, ",");
+	}
+	perm_string[strlen(perm_string)] = '\0'; /* Remove last , */
+
+	file_chmod(view, file, perm_string, perms[12]);
+}
+
+static void
+permissions_key_cb(FileView *view, int *perms, int isdir)
+{
+	int done = 0;
+	int abort = 0;
+	int top = 3;
+	int bottom = 16;
+	int curr = 3;
+	int permnum = 0;
+	int step = 1;
+	int col = 9;
+	char filename[NAME_MAX];
+	char path[PATH_MAX];
+	int changed = 0;
+
+	if (isdir)
+		bottom = 17;
+
+	snprintf(filename, sizeof(filename), view->dir_entry[view->list_pos].name);
+	snprintf(path, sizeof(path), "%s/%s", view->curr_dir, 
+			view->dir_entry[view->list_pos].name);
+
+	curs_set(1);
+	wmove(change_win, curr, col);
+	wrefresh(change_win);
+
+	while(!done)
+	{
+		int key = wgetch(change_win);
+
+		switch(key)
+		{
+			case 'j':
+				{
+					curr+= step;
+					permnum++;
+
+					if(curr > bottom)
+					{
+						curr-= step;
+						permnum--;
+					}
+					if (curr == 7 || curr == 12)
+						curr++;
+
+					wmove(change_win, curr, col);
+					wrefresh(change_win);
+				}
+				break;
+			case 'k':
+				{
+					curr-= step;
+					permnum--;
+					if(curr < top)
+					{
+						curr+= step;
+						permnum++;
+					}
+
+					if (curr == 7 || curr == 12)
+						curr--;
+
+					wmove(change_win, curr, col);
+					wrefresh(change_win);
+				}
+				break;
+			case 't':
+				{
+					changed++;
+					if (perms[permnum])
+					{
+						perms[permnum] = 0;
+						mvwaddch(change_win, curr, col, ' ');
+					}
+					else
+					{
+						perms[permnum] = 1;
+						mvwaddch(change_win, curr, col, '*');
+					}
+
+					wmove(change_win, curr, col);
+					wrefresh(change_win);
+				}
+				break;
+			case 3: /* ascii Ctrl C */
+			case 27: /* ascii Escape */
+				done = 1;
+				abort = 1;
+				break;
+			case 'l': 
+			case 13: /* ascii Return */
+				done = 1;
+				break;
+			default:
+				break;
+		}
+	}
+
+	reset_change_window();
+
+	curs_set(0);
+
+	if (abort)
+	{
+		moveto_list_pos(view, find_file_pos_in_list(view, filename));
+		return;
+	}
+
+	if (changed)
+	{
+		set_perm_string(view, perms, path);
+		load_dir_list(view, 1);
+		moveto_list_pos(view, view->curr_line);
+	}
+
+}
+
+static void
+change_key_cb(FileView *view, int type)
+{
+	int done = 0;
+	int abort = 0;
+	int top = 2;
+	int bottom = 8;
+	int curr = 2;
+	int step = 2;
+	int col = 6;
+	char filename[NAME_MAX];
+
+	snprintf(filename, sizeof(filename), view->dir_entry[view->list_pos].name);
+
+	curs_set(0);
+	wmove(change_win, curr, col);
+	wrefresh(change_win);
+
+	while(!done)
+	{
+		int key = wgetch(change_win);
+
+		switch(key)
+		{
+			case 'j':
+				{
+					mvwaddch(change_win, curr, col, ' ');
+					curr+= step;
+
+					if(curr > bottom)
+						curr-= step;
+
+					mvwaddch(change_win, curr, col, '*');
+					wmove(change_win, curr, col);
+					wrefresh(change_win);
+				}
+				break;
+			case 'k':
+				{
+
+					mvwaddch(change_win, curr, col, ' ');
+					curr-= step;
+					if(curr < top)
+						curr+= step;
+
+					mvwaddch(change_win, curr, col, '*');
+					wmove(change_win, curr, col);
+					wrefresh(change_win);
+				}
+				break;
+			case 3: /* ascii Ctrl C */
+			case 27: /* ascii Escape */
+				done = 1;
+				abort = 1;
+				break;
+			case 'l': 
+			case 13: /* ascii Return */
+				done = 1;
+				break;
+			default:
+				break;
+		}
+	}
+
+	reset_change_window();
+
+	if(abort)
+	{
+		moveto_list_pos(view, find_file_pos_in_list(view, filename));
+		return;
+	}
+
+	switch(type)
+	{
+		case FILE_CHANGE:
+		{
+			if (curr == FILE_NAME)
+				rename_file(view);
+			else
+				show_change_window(view, curr);
+			/*
+			char * filename = get_current_file_name(view);
+			switch(curr)
+			{
+				case FILE_NAME: 
+					rename_file(view);
+					break;
+				case FILE_OWNER:
+					change_file_owner(filename);
+					break;
+				case FILE_GROUP:
+					change_file_group(filename);
+					break;
+				case FILE_PERMISSIONS:
+					show_change_window(view, type);
+					break;
+				default:
+					break;
+			}
+			*/
+		}
+		break;
+		case FILE_NAME:
+			break;
+		case FILE_OWNER:
+			break;
+		case FILE_GROUP:
+			break;
+		case FILE_PERMISSIONS:
+			break;
+		default:
+			break;
+	}
+}
+
+void
+show_file_permissions_menu(FileView *view, int x)
+{
+	mode_t mode = view->dir_entry[view->list_pos].mode;
+	char *filename = get_current_file_name(view);
+	int perms[] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
+	int isdir = 0;
+
+	if (strlen(filename) > x - 2)
+		filename[x - 4] = '\0';
+
+	mvwaddnstr(change_win, 1, (x - strlen(filename))/2, filename, x - 2);
+
+	mvwaddstr(change_win, 3, 2, "Owner [ ] Read");
+	if (mode & S_IRUSR)
+	{
+		perms[0] = 1;
+		mvwaddch(change_win, 3, 9, '*');
+	}
+	mvwaddstr(change_win, 4, 6, "  [ ] Write");
+
+	if (mode & S_IWUSR)
+	{
+		perms[1] = 1;
+		mvwaddch(change_win, 4, 9, '*');
+	}
+	mvwaddstr(change_win, 5, 6, "  [ ] Execute");
+
+	if (mode & S_IXUSR)
+	{
+		perms[2] = 1;
+		mvwaddch(change_win, 5, 9, '*');
+	}
+
+	mvwaddstr(change_win, 6, 6, "  [ ] SetUID");
+	if (mode & S_ISUID)
+	{
+		perms[3] = 1;
+		mvwaddch(change_win, 6, 9, '*');
+	}
+
+	mvwaddstr(change_win, 8, 2, "Group [ ] Read");
+	if (mode & S_IRGRP)
+	{
+		perms[4] = 1;
+		mvwaddch(change_win, 8, 9, '*');
+	}
+
+	mvwaddstr(change_win, 9, 6, "  [ ] Write");
+	if (mode & S_IWGRP)
+	{
+		perms[5] = 1;
+		mvwaddch(change_win, 9, 9, '*');
+	}
+
+	mvwaddstr(change_win, 10, 6, "  [ ] Execute");
+	if (mode & S_IXGRP)
+	{
+		perms[6] = 1;
+		mvwaddch(change_win, 10, 9, '*');
+	}
+
+	mvwaddstr(change_win, 11, 6, "  [ ] SetGID");
+	if (mode & S_ISGID)
+	{
+		perms[7] = 1;
+		mvwaddch(change_win, 11, 9, '*');
+	}
+
+	mvwaddstr(change_win, 13, 2, "Other [ ] Read");
+	if (mode & S_IROTH)
+	{
+		perms[8] = 1;
+		mvwaddch(change_win, 13, 9, '*');
+	}
+
+	mvwaddstr(change_win, 14, 6, "  [ ] Write");
+	if (mode & S_IWOTH)
+	{
+		perms[9] = 1;
+		mvwaddch(change_win, 14, 9, '*');
+	}
+
+	mvwaddstr(change_win, 15, 6, "  [ ] Execute");
+	if (mode & S_IXOTH)
+	{
+		perms[10] = 1;
+		mvwaddch(change_win, 15, 9, '*');
+	}
+
+	mvwaddstr(change_win, 16, 6, "  [ ] Sticky");
+	if (mode & S_ISVTX)
+	{
+		perms[11] = 1;
+		mvwaddch(change_win, 16, 9, '*');
+	}
+
+	if (is_dir(filename))
+	{
+		mvwaddstr(change_win, 17, 6, "  [ ] Set Recursively");
+		isdir = 1;
+	}
+
+	permissions_key_cb(view, perms, isdir);
+}
+void
+show_change_window(FileView *view, int type)
+{
+	int x, y;
+
+	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
+	curs_set(0);
+	doupdate();
+	werase(change_win);
+	box(change_win, ACS_VLINE, ACS_HLINE);
+
+	getmaxyx(change_win, y, x);
+	curs_set(1);
+
+
+	switch(type)
+	{
+		case FILE_CHANGE:
+		{
+			mvwaddstr(change_win, 0, (x - 20)/2, " Change Current File ");
+			mvwaddstr(change_win, 2, 4, " [ ] Name");
+			mvwaddstr(change_win, 4, 4, " [ ] Owner");
+			mvwaddstr(change_win, 6, 4, " [ ] Group");
+			mvwaddstr(change_win, 8, 4, " [ ] Permissions");
+			mvwaddch(change_win, 2, 6, '*');
+			change_key_cb(view, type);
+		}
+			break;
+		case FILE_NAME: 
+			return;
+			break;
+		case FILE_OWNER:
+			return;
+			break;
+		case FILE_GROUP:
+			return;
+			break;
+		case FILE_PERMISSIONS:
+			show_file_permissions_menu(view, x);
+			break;
+		default:
+			break;
+	}
+
 }

@@ -4,6 +4,9 @@ The pauseme script is from the tkdesk program.
 
 Some of the code is from emelfm by Michael Clark.
 
+The screen-open-region-with-program and screen-ren-program-in-region were
+written by Miciah Dashiel Butler Masters.
+
 The file sorting function is from the git program by Tudor Hulubei 
 	and Andrei Pitis.  
 

@@ -1,4 +1,18 @@
 0.2 to 0.3
+	
+	Added error message for shell commands that are too long.  
+
+	Added :split, :only  for one window view.
+
+	Added :ls command for screen and %s macro.
+
+	Added . to repeat last command.  This currently only works with :commands.
+
+	When deleting or putting files the process is backgrounded but it now 
+	waits for the process to return so that the changes show up quicker 
+	in the file lists.
+
+	Removed the code to change the xterm title.
 
 	User commands and the builtin commands now work with <Tab> expansion.
 
@@ -15,6 +29,8 @@
 	:!! segfault fixed by Dmitry Suzdalev.
 
 	Readline like expansion of files now escapes the filename.
+
+	Fixed menu scrolling bug when the menu list was the same size as window rows.
 
 0.1 to 0.2
 	

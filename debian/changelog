@@ -1,3 +1,11 @@
+vifm (0.3-1) unstable; urgency=low
+
+  * New upstream release
+  * removed CC=cc from debian/rules (broke with libtool --tag)
+  * remove CVS dirs from upstream tarball
+
+ -- Edelhard Becker <edelhard@debian.org>  Tue, 19 Jul 2005 15:30:01 +0200
+
 vifm (0.2a-2) unstable; urgency=low
 
   * Renamed pauseme to vifm-pauseme (making a diversion or putting it into a
