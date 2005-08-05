@@ -1,3 +1,10 @@
+vifm (0.3-1.1) unstable; urgency=low
+
+  * NMU durring BSP
+  * add build-depend on automake1.7 (Closes: #320118)
+
+ -- Blars Blarson <blarson@debian.org>  Fri,  5 Aug 2005 19:37:55 +0000
+
 vifm (0.3-1) unstable; urgency=low
 
   * New upstream release

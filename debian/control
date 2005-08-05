@@ -2,7 +2,7 @@ Source: vifm
 Section: utils
 Priority: optional
 Maintainer: Edelhard Becker <edelhard@debian.org>
-Build-Depends: libncurses5-dev
+Build-Depends: libncurses5-dev, automake1.7
 Standards-Version: 3.6.1
 
 Package: vifm
