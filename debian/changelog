@@ -1,3 +1,9 @@
+vifm (0.3-2) unstable; urgency=low
+
+  * ACK NMU, thanks Blars (Closes: #320118)
+
+ -- Edelhard Becker <edelhard@debian.org>  Tue,  9 Aug 2005 15:15:09 +0200
+
 vifm (0.3-1.1) unstable; urgency=low
 
   * NMU durring BSP
