@@ -1,0 +1,5 @@
+addon: vifm
+description: interface to the vifm file manager
+files:
+  - plugin/vifm.vim
+  - doc/vifm.txt

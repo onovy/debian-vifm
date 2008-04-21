@@ -6,9 +6,8 @@ vifm (0.3a-1) unstable; urgency=low
   * added patches from CVS
   * bump standards to 3.7.3 (no changes)
   * depend on vim|vim-tiny, install helpfile in /usr/share/vim/addons/doc,
-    vifm.vim in /usr/share/vim/addons/plugin and use vim-addon-manager for
-    local and system-wide installation (Closes: #443479); do not install both
-    as conffiles anymore
+    vifm.vim in /usr/share/vim/addons/plugin and use helpztags to update docs
+    (Closes: #443479), do not install both as conffiles anymore
   * look for DEB_BUILD_OPTIONS=nostrip (Closes: #438245)
 
  -- Edelhard Becker <edelhard@debian.org>  Mon, 21 Apr 2008 15:40:09 +0200

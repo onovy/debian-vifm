@@ -16,7 +16,6 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
  */
 
-#include<ncurses.h>
 #include<signal.h>  /* signal() */
 #include<stdlib.h> /* malloc */
 #include<sys/stat.h> /* stat */
@@ -44,7 +43,7 @@ finish(char *message)
 	endwin();
 	write_config_file();
 	system("clear");
-	printf(message);
+	printf("%s", message);
 	exit(0);
 }
 
@@ -65,7 +64,7 @@ void
 write_stat_win(char *message)
 {
 	werase(stat_win);
-	wprintw(stat_win, message);
+	wprintw(stat_win, "%s", message);
 	wnoutrefresh(stat_win);
 }
 
@@ -80,7 +79,7 @@ update_stat_window(FileView *view)
 	int x, y;
 
 	getmaxyx(stat_win, y, x);
-	snprintf(name_buf, sizeof(name_buf), get_current_file_name(view));
+	snprintf(name_buf, sizeof(name_buf), "%s", get_current_file_name(view));
 	describe_file_size(size_buf, sizeof(size_buf), view);
 	
 	if((pwd_buf = getpwuid(view->dir_entry[view->list_pos].uid)) == NULL)
@@ -115,7 +114,7 @@ void
 status_bar_message(char *message)
 {
 	werase(status_bar);
-	wprintw(status_bar, message);
+	wprintw(status_bar, "%s", message);
 	wnoutrefresh(status_bar);
 }
 
@@ -149,6 +148,7 @@ setup_ncurses_interface()
 		int i;
 
 		start_color();
+		// Changed for pdcurses
 		use_default_colors();
 
 		for (i = 0; i < MAXNUM_COLOR; ++i)
@@ -324,6 +324,7 @@ redraw_window(void)
 
 	ioctl(0, TIOCGWINSZ, &ws);
 	
+	// changed for pdcurses
 	resize_term(ws.ws_row, ws.ws_col);
 
 	getmaxyx(stdscr, screen_y, screen_x);
@@ -345,16 +346,17 @@ redraw_window(void)
 	wclear(rborder);
 	wclear(mborder);
 	wclear(lborder);
+
+	wclear(change_win);
+	wclear(sort_win);
 	
 	wresize(stdscr, screen_y, screen_x);
 	mvwin(sort_win, (screen_y - 14)/2, (screen_x -30)/2);
-	mvwin(change_win, (screen_y - 14)/2, (screen_x -30)/2);
+	mvwin(change_win, (screen_y - 10)/2, (screen_x -30)/2);
 	wresize(menu_win, screen_y - 1, screen_x);
 	wresize(error_win, (screen_y -10)/2, screen_x -2);
 	mvwin(error_win, (screen_y -10)/2, 1);
 	wresize(lborder, screen_y -2, 1);
-
-
 
 	if (curr_stats.number_of_windows == 1)
 	{

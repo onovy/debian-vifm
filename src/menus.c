@@ -18,7 +18,6 @@
 
 #include<sys/types.h>
 #include<regex.h>
-#include<ncurses.h>
 #include<ctype.h> /* isspace() */
 #include<string.h> /* strchr() */
 #include<unistd.h> /* access() */
@@ -55,7 +54,6 @@ typedef struct menu_info
 	char **data;
 	/* For user menus only */
 	char *get_info_script; /* program + args to fill in menu. */
-	char *action_program; /* program to run with selected item(s) as an argument. */
 }menu_info;
 
 enum {
@@ -339,7 +337,8 @@ redraw_menu(FileView *view, menu_info *m)
 	curr_stats.redraw_menu = 0;
 
 	ioctl(0, TIOCGWINSZ, &ws);
-	resizeterm(ws.ws_row, ws.ws_col);
+	//changed for pdcurses
+	//resizeterm(ws.ws_row, ws.ws_col);
 	getmaxyx(stdscr, screen_y, screen_x);
 
 	wclear(stdscr);
@@ -558,8 +557,6 @@ execute_user_cb(FileView *view, menu_info *m)
 	free_this = file = dir = strdup(m->data[m->pos]);
 	chomp(file);
 
-	if (m->action_program == NULL)
-	{
 		/* check if it really is a file */
 		/*
 		if (!access(file, R_OK))
@@ -598,13 +595,6 @@ execute_user_cb(FileView *view, menu_info *m)
 				moveto_list_pos(view, find_file_pos_in_list(view, file));
 		}
 		*/
-	}
-	else if (m->action_program != NULL)
-	{
-		char buf[strlen(free_this) + strlen(m->action_program) + 2];
-		snprintf(buf, sizeof(buf), "%s %s", m->action_program, free_this);
-		shellout(buf, 0);
-	}
 	my_free(free_this);
 }
 
@@ -770,8 +760,6 @@ execute_menu_cb(FileView *view, menu_info *m)
 		case LOCATE:
 				execute_locate_cb(view, m);
 			break;
-		case USER:
-				execute_user_cb(view, m);
 			break;
 		case VIFM:
 			break;
@@ -813,7 +801,7 @@ reload_bookmarks_menu_list(menu_info *m)
 
 		m->data = (char **)realloc(m->data, sizeof(char *) * (x + 1));
 		m->data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m->data[x], sizeof(buf), buf);
+		snprintf(m->data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}
@@ -1116,7 +1104,7 @@ show_apropos_menu(FileView *view, char *args)
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(len);
 
-		snprintf(m.data[x], len - 2, buf);
+		snprintf(m.data[x], len - 2, "%s", buf);
 
 		x++;
 	}
@@ -1174,7 +1162,7 @@ show_bookmarks_menu(FileView *view)
 
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m.data[x], sizeof(buf), buf);
+		snprintf(m.data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}
@@ -1301,7 +1289,7 @@ show_filetypes_menu(FileView *view)
 			}
 			m.data = (char **)realloc(m.data, sizeof(char *) * (m.len + 1));
 			m.data[x] = (char *)malloc((len + 1) * sizeof(char)); 
-			snprintf(m.data[x], len, prog_copy);
+			snprintf(m.data[x], len, "%s", prog_copy);
 			m.len++;
 
 			free(free_this);
@@ -1346,7 +1334,7 @@ show_history_menu(FileView *view)
 		/* Change the current dir to reflect the current file. */ 
 		if(!strcmp(view->history[x].dir, view->curr_dir))
 			snprintf(view->history[x].file, sizeof(view->history[x].file),
-						view->dir_entry[view->list_pos].name);
+						"%s", view->dir_entry[view->list_pos].name);
 
 		if(!strcmp(view->history[x].dir, "/"))
 		{
@@ -1354,7 +1342,7 @@ show_history_menu(FileView *view)
 			m.data[x] = (char *)malloc((strlen(view->history[x].file) + 1) 
 					* sizeof(char));
 			snprintf(m.data[x], strlen(view->history[x].file), 
-						view->history[x].file);
+						"%s", view->history[x].file);
 		}
 		else
 		{
@@ -1414,7 +1402,7 @@ show_locate_menu(FileView *view, char *args)
 	{
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m.data[x], sizeof(buf), buf);
+		snprintf(m.data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}
@@ -1462,7 +1450,16 @@ show_user_menu(FileView *view, char *command)
 	m.args = NULL;
 	m.data = NULL;
 	m.get_info_script = command;
-	m.action_program = NULL;
+
+
+	for ( x = 0; x < strlen(command); x++)
+	{
+		if (command[x] == ',')
+		{
+			command[x] = '\0';
+			break;
+		}
+	}
 
 	getmaxyx(menu_win, m.win_rows, x);
 
@@ -1485,7 +1482,7 @@ show_user_menu(FileView *view, char *command)
 		show_progress();
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m.data[x], sizeof(buf), buf);
+		snprintf(m.data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}

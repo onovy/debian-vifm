@@ -25,7 +25,6 @@
 #include<ncurses.h>
 #include<stdlib.h> /* off_t mode_t... */
 #include<sys/types.h>
-
 /* For Solaris */
 #ifndef NAME_MAX
 #	include<dirent.h>

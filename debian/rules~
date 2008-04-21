@@ -2,37 +2,42 @@
 # minimal debian/rules for vifm
 
 PACKAGE = vifm
-CC = cc
 CFLAGS = -O2
 ifneq (,$(findstring debug,$(DEB_BUILD_OPTIONS)))
   CFLAGS += -g
 endif
 DESTDIR = `pwd`/debian/tmp
 PREFIX = $(DESTDIR)/usr
-CNFDIR = $(DESTDIR)/etc/vim
+ADDDIR = $(DESTDIR)/usr/share/vim/addons
 BINDIR = $(PREFIX)/bin
 MANDIR = $(PREFIX)/share/man/man1
 DOCDIR = $(PREFIX)/share/doc/$(PACKAGE)
 INSTALL = install -p -o root -g root -m 644
-INSTALLSTRIP = install -p -o root -g root -m 755 -s
+INSTALLSTRIP = install -p -o root -g root -m 755
+ifeq (,$(findstring nostrip,$(DEB_BUILD_OPTIONS)))
+	INSTALLSTRIP += -s
+endif
+
 INSTALLSCRIPT = install -p -o root -g root -m 755
 MKDIR = install -d -o root -g root -m 755
 
 config.status: configure
+	./autogen.sh
 	./configure --host=$(DEB_HOST_GNU_TYPE) --build=$(DEB_BUILD_GNU_TYPE) \
 		--prefix=$(PREFIX) --mandir=$(MANDIR)
 
 build: config.status
-	$(MAKE) CC="$(CC)" CFLAGS="$(CFLAGS)"
+	$(MAKE) CFLAGS="$(CFLAGS)"
 
 clean distclean:
 	-test -f Makefile && $(MAKE) distclean
 	rm -f config.h TAGS ID Makefile config.cache config.log stamp-h \
+		depcomp install-sh missing mkinstalldirs \
 		stamp-h[0-9]* config.status src/*.tab.c src/TAGS src/ID \
 		src/.deps src/Makefile src/config.cache src/config.log \
 		src/stamp-h src/stamp-h[0-9]* src/vifm src/*.o src/core \
 		src/*.core debian/files
-	rm -rf $(DESTDIR)
+	rm -rf $(DESTDIR) autom4te.cache
 
 binary-indep:
 	# empty
@@ -40,8 +45,8 @@ binary-indep:
 binary-arch: build
 	@test root = "`whoami`" || (echo need root priviledges; exit 1)
 	rm -rf $(DESTDIR) $(DESTDIR).deb
-	$(MKDIR) $(CNFDIR)/doc
-	$(MKDIR) $(CNFDIR)/plugin
+	$(MKDIR) $(ADDDIR)/doc
+	$(MKDIR) $(ADDDIR)/plugin
 	$(MKDIR) $(DESTDIR)
 	$(MKDIR) $(DESTDIR)/DEBIAN
 	$(MKDIR) $(BINDIR)
@@ -58,14 +63,13 @@ binary-arch: build
 	gzip -9frq $(DOCDIR)/
 	$(INSTALL) debian/copyright debian/README.Debian $(DOCDIR)
 	$(INSTALL) src/vifm-0.2.help.txt src/vifmrc0.2 $(DOCDIR)/examples
-	$(INSTALL) src/vifm.txt $(CNFDIR)/doc
-	$(INSTALL) src/vifm.vim $(CNFDIR)/plugin
+	$(INSTALL) src/vifm.txt $(ADDDIR)/doc
+	$(INSTALL) src/vifm.vim $(ADDDIR)/plugin
 	$(INSTALL) vifm.1 $(MANDIR)
 	$(INSTALL) pauseme.1 $(MANDIR)/vifm-pauseme.1
 	gzip -9fqr $(MANDIR)/
 	#$(INSTALLSCRIPT) debian/prerm $(DESTDIR)/DEBIAN/prerm
 	$(INSTALLSCRIPT) debian/postinst $(DESTDIR)/DEBIAN/postinst
-	$(INSTALL) debian/conffiles $(DESTDIR)/DEBIAN/conffiles
 	dpkg-shlibdeps $(BINDIR)/$(PACKAGE)
 	dpkg-gencontrol -isp -P$(DESTDIR)
 	dpkg --build $(DESTDIR) ..

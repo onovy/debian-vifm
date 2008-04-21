@@ -2,12 +2,13 @@ Source: vifm
 Section: utils
 Priority: optional
 Maintainer: Edelhard Becker <edelhard@debian.org>
-Build-Depends: libncurses5-dev, automake1.7
-Standards-Version: 3.6.1
+Build-Depends: libncurses5-dev
+Standards-Version: 3.7.3
 
 Package: vifm
 Architecture: any
-Depends: ${shlibs:Depends}
+Depends: ${shlibs:Depends}, vim-tiny | vim
+Recommends: vim-addon-manager
 Description: a ncurses based file manager with vi like keybindings
  Vifm is a ncurses based file manager with vi like keybindings.  If
  you use vi, vifm gives you complete keyboard control over your files

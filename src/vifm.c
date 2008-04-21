@@ -160,8 +160,8 @@ main(int argc, char *argv[])
 		return -1;
 
 	/* Load the initial directory */
-	snprintf(rwin.curr_dir, sizeof(rwin.curr_dir), dir);
-	snprintf(lwin.curr_dir, sizeof(lwin.curr_dir), dir);
+	snprintf(rwin.curr_dir, sizeof(rwin.curr_dir), "%s", dir);
+	snprintf(lwin.curr_dir, sizeof(lwin.curr_dir), "%s", dir);
 	rwin.dir_entry = (dir_entry_t *)malloc(sizeof(dir_entry_t));
 	lwin.dir_entry = (dir_entry_t *)malloc(sizeof(dir_entry_t));
 	rwin.dir_entry[0].name = malloc(sizeof("../") +1);
@@ -198,10 +198,10 @@ main(int argc, char *argv[])
 				else if(is_dir(argv[x]))
 				{
 					if(side)
-						snprintf(rwin.curr_dir, sizeof(rwin.curr_dir), argv[x]);
+						snprintf(rwin.curr_dir, sizeof(rwin.curr_dir), "%s", argv[x]);
 					else
 					{
-						snprintf(lwin.curr_dir, sizeof(lwin.curr_dir), argv[x]);
+						snprintf(lwin.curr_dir, sizeof(lwin.curr_dir), "%s", argv[x]);
 						side++;
 					}
 				}
@@ -213,6 +213,7 @@ main(int argc, char *argv[])
 				}
 		}
 	}
+
 
 
 	load_dir_list(&rwin, 0);

@@ -1,6 +1,7 @@
 #!/bin/sh
 
-if [ -x /usr/bin/vim ]  
-then
-	/usr/bin/vim -esc ":helptags /etc/vim/doc/ | :quit"
+if which helpztags >/dev/null 2>&1; then
+	helpztags /usr/share/vim/addons/doc
 fi
+
+exit 0

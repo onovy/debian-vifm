@@ -133,7 +133,8 @@ sort_key_cb(FileView *view)
 	int col = 6;
 	char filename[NAME_MAX];
 
-	snprintf(filename, sizeof(filename), view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", 
+			view->dir_entry[view->list_pos].name);
 
 	curs_set(0);
 	wmove(sort_win, curr, col);

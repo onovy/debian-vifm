@@ -206,7 +206,7 @@ handle_file(FileView *view)
 				view->curr_dir,
 				view->dir_entry[view->list_pos].name);
 		endwin();
-		fprintf(fp, filename);
+		fprintf(fp, "%s", filename);
 		fclose(fp);
 		exit(0);
 	}
@@ -220,10 +220,9 @@ handle_file(FileView *view)
 			shellout(buf, 1);
 			return;
 		}
-		else
-			view_file(view);
 	}
-	if(REGULAR == view->dir_entry[view->list_pos].type)
+	if((REGULAR == view->dir_entry[view->list_pos].type) 
+				|| (EXECUTABLE == view->dir_entry[view->list_pos].type))
 	{
 		char *program = NULL;
 
@@ -525,7 +524,8 @@ permissions_key_cb(FileView *view, int *perms, int isdir)
 	if (isdir)
 		bottom = 17;
 
-	snprintf(filename, sizeof(filename), view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", 
+			view->dir_entry[view->list_pos].name);
 	snprintf(path, sizeof(path), "%s/%s", view->curr_dir, 
 			view->dir_entry[view->list_pos].name);
 
@@ -636,7 +636,8 @@ change_key_cb(FileView *view, int type)
 	int col = 6;
 	char filename[NAME_MAX];
 
-	snprintf(filename, sizeof(filename), view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", 
+			view->dir_entry[view->list_pos].name);
 
 	curs_set(0);
 	wmove(change_win, curr, col);
@@ -852,11 +853,14 @@ show_change_window(FileView *view, int type)
 	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 	curs_set(0);
 	doupdate();
-	werase(change_win);
+	wclear(change_win);
+
+	getmaxyx(stdscr, y, x);
+	mvwin(change_win, (y - 20)/2, (x - 30)/2);
 	box(change_win, ACS_VLINE, ACS_HLINE);
 
-	getmaxyx(change_win, y, x);
 	curs_set(1);
+	wrefresh(change_win);
 
 
 	switch(type)

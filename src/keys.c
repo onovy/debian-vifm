@@ -286,7 +286,7 @@ remove_filename_filter(FileView *view)
 	int found;
 	char file[NAME_MAX];
 
-	snprintf(file, sizeof(file),
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 	view->prev_filter = (char *)realloc(view->prev_filter,
 			strlen(view->filename_filter) +1);
@@ -312,13 +312,13 @@ restore_filename_filter(FileView *view)
 	int found;
 	char file[NAME_MAX];
 
-	snprintf(file, sizeof(file), 
+	snprintf(file, sizeof(file), "%s", 
 			view->dir_entry[view->list_pos].name);
 
 	view->filename_filter = (char *)realloc(view->filename_filter,
 			strlen(view->prev_filter) +1);
-	snprintf(view->filename_filter, 
-		sizeof(view->filename_filter), view->prev_filter);
+	snprintf(view->filename_filter, sizeof(view->filename_filter), 
+			"%s", view->prev_filter);
 	view->invert = view->prev_invert;
 	load_dir_list(view, 0);
 	found = find_file_pos_in_list(view, file); 
@@ -518,7 +518,7 @@ show_dot_files(FileView *view)
 	int found;
 	char file[256];
 
-	snprintf(file, sizeof(file),
+	snprintf(file, sizeof(file), "%s", 
 			view->dir_entry[view->list_pos].name);
 	view->hide_dot = 0;
 	load_dir_list(view, 1);
@@ -535,7 +535,8 @@ hide_dot_files(FileView *view)
 {
 	int found;
 	char file[NAME_MAX];
-	snprintf(file, sizeof(file),
+
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 	view->hide_dot = 1;
 	load_dir_list(view, 1);
@@ -552,7 +553,8 @@ toggle_dot_files(FileView *view)
 {
 	int found;
 	char file[NAME_MAX];
-	snprintf(file, sizeof(file),
+
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 	if(view->hide_dot)
 		view->hide_dot = 0;
@@ -580,13 +582,13 @@ change_window(FileView **view)
 		mvwaddstr(other_view->win, other_view->curr_line, 0, "*");
 		erase_current_line_bar(other_view);
 		werase(other_view->title);
-		wprintw(other_view->title, other_view->curr_dir);
+		wprintw(other_view->title, "%s", other_view->curr_dir);
 		wnoutrefresh(other_view->title);
 	}
 
 	wattron(curr_view->title, A_BOLD);
 	werase(curr_view->title);
-	wprintw(curr_view->title, curr_view->curr_dir);
+	wprintw(curr_view->title,  "%s", curr_view->curr_dir);
 	wnoutrefresh(curr_view->title);
 
 	wnoutrefresh(other_view->win);
@@ -808,8 +810,28 @@ main_key_press_cb(FileView *view)
 		/* This waits for 1 second then skips if no keypress. */
 		key = wgetch(view->win);
 
+
 		if (key == ERR)
 			continue;
+		else /* Puts the cursor at the start of the line for speakup */
+		{
+			/*
+			int x, y;
+			char buf[256];
+
+			getyx(view->win, y, x);
+			
+			snprintf(buf, sizeof(buf), "x is %d y is %d ", x, y);
+			show_error_msg("cursor curr_win", buf);
+
+			wmove(stdscr, y + 2, 0);
+			wrefresh(stdscr);
+
+			getyx(stdscr, y, x);
+			snprintf(buf, sizeof(buf), "x is %d y is %d ", x, y);
+			show_error_msg("stdscr win", buf);
+			*/
+		}
 
 		/* This point down gets called only when a key is actually pressed */
 

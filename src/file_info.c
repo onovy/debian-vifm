@@ -123,7 +123,9 @@ show_full_file_properties(FileView *view)
 	getmaxyx(menu_win, y, x);
 	werase(menu_win);
 
-	snprintf(name_buf, sizeof(name_buf), view->dir_entry[view->list_pos].name);
+	snprintf(name_buf, sizeof(name_buf), "%s", 
+			view->dir_entry[view->list_pos].name);
+
 	describe_file_size(size_buf, sizeof(size_buf), view);
 	
 	if((pwd_buf = getpwuid(view->dir_entry[view->list_pos].uid)) == NULL)

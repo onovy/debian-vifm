@@ -4,26 +4,12 @@
 
 
 When you start vifm for the first time, a subdirectory ~/.vifm is created
-with a personal config file vifmrc0.1 and a Trash folder. You should edit
+with a personal config file vifmrc0.2 and a Trash folder. You should edit
 the configuration file to match your preferences.
 
 
-   Vim Specific Options:
+   Vim configuration:
 
-If you use vim, copy the vifm.txt file in the vifm/src directory to your
-~/.vim/doc directory or the system vim/doc directory.  Then launch vim and
-give the command
-  :helptags ~/.vim/doc
-or
-  :helptags path/to/system/vim/doc 
-depending on where you installed the vifm.txt file.
-
-You will also need to change the USE_VIM_HELP in ~/.vifm/vifmrc as the
-default setting is to use the plain text file.
-
-If you want to use the vifm.vim plugin, copy the vifm.vim plugin script to
-either the system wide vim/plugin or to your personal ~/.vim/plugin/
-directory.  The vifm.vim script allows you to use vifm from vim to select
-files.  The vifm.vim script is not installed by default and must be
-manually copied to the plugin directory.
-
+This package automatically installs and compiles its helptags. Just start
+vim and try ":h vifm". The vifm.vim plugin is also installed, see the
+plugin section in the helpfile for commands.

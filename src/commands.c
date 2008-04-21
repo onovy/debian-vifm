@@ -79,6 +79,7 @@ enum
 	COM_UNMAP,
 	COM_VIFM,
 	COM_VMAP,
+	COM_YANK,	
 	COM_X
 };
 
@@ -121,10 +122,11 @@ char *reserved_commands[] = {
 	"unmap",
 	"vifm",
 	"vmap",
+	"yank",
 	"x"
 	};
 
-#define RESERVED 35
+#define RESERVED 36
 
 typedef struct current_command
 {
@@ -703,7 +705,7 @@ shellout(char *command, int pause)
 		else
 		{
 			if(pause)
-				snprintf(buf, sizeof(buf), "sh -c \"vifm-pauseme %s\"", command);
+				snprintf(buf, sizeof(buf), "sh -c \"pauseme %s\"", command);
 			else
 				snprintf(buf, sizeof(buf), "sh -c \"%s\"", command);
 		}
@@ -761,6 +763,80 @@ initialize_command_struct(cmd_t *cmd)
 	cmd->is_user = -1;
 	cmd->pos = 0;
 	cmd->pause = 0;
+}
+
+static int
+select_files_in_range(FileView *view, cmd_t * cmd)
+{
+
+				int x;
+				int y = 0;
+
+				/* Both a starting range and an ending range are given. */
+				if(cmd->start_range > -1)
+				{
+					if(cmd->end_range < cmd->start_range)
+					{
+						show_error_msg(" Command Error ", "Backward range given.");
+						//save_msg = 1;
+						//break;
+					}
+
+					for(x = 0; x < view->list_rows; x++)
+						view->dir_entry[x].selected = 0;
+
+					for(x = cmd->start_range; x <= cmd->end_range; x++)
+					{
+						view->dir_entry[x].selected = 1;
+						y++;
+					}
+					view->selected_files = y;
+				}
+				/* A count is given */
+				else if(cmd->count)
+				{
+					if(!cmd->count)
+						cmd->count = 1;
+
+					/* A one digit range with a count. :4y5 */
+					if(cmd->end_range)
+					{
+						y = 0;
+						for(x = 0; x < view->list_rows; x++)
+							view->dir_entry[x].selected = 0;
+
+						for(x = cmd->end_range; x < view->list_rows; x++)
+						{
+							if(cmd->count == y)
+								break;
+							view->dir_entry[x].selected = 1;
+							y++;
+
+						}
+						view->selected_files = y;
+					}
+					/* Just a count is given. */ 
+					else
+					{
+						y = 0;
+
+						for(x = 0; x < view->list_rows; x++)
+							view->dir_entry[x].selected = 0;
+
+						for(x = view->list_pos; x < view->list_rows; x++)
+						{
+							if(cmd->count == y )
+								break;
+
+							view->dir_entry[x].selected = 1;
+							y++;
+						}
+						view->selected_files = y;
+
+					}
+				}
+
+	return 0;
 }
 
 static int
@@ -970,14 +1046,14 @@ parse_command(FileView *view, char *command, cmd_t *cmd)
 		cmd->cmd_name = (char *)realloc(cmd->cmd_name, 
 				strlen(reserved_commands[cmd->builtin]) +1);
 		snprintf(cmd->cmd_name, sizeof(reserved_commands[cmd->builtin]),
-				reserved_commands[cmd->builtin]);
+				"%s", reserved_commands[cmd->builtin]);
 	}
 	else if((cmd->is_user = is_user_command(cmd->cmd_name)) > -1)
 	{
 		cmd->cmd_name =(char *)realloc(cmd->cmd_name,
 				strlen(command_list[cmd->is_user].name) + 1);
 		snprintf(cmd->cmd_name, sizeof(command_list[cmd->is_user].name),
-				command_list[cmd->is_user].name);
+				"%s", command_list[cmd->is_user].name);
 	}
 	else
 	{
@@ -1105,72 +1181,14 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 			break;
 		case COM_DELETE:
 			{
-				int x;
-				int y = 0;
+				/*
+				int selection_worked;
 
-				/* Both a starting range and an ending range are given. */
-				if(cmd->start_range > -1)
-				{
-					if(cmd->end_range < cmd->start_range)
-					{
-						show_error_msg(" Command Error ", "Backward range given.");
-						save_msg = 1;
-						break;
-					}
+				selection_worked = select_files_in_range(view, cmd);
 
-					for(x = 0; x < view->list_rows; x++)
-						view->dir_entry[x].selected = 0;
-
-					for(x = cmd->start_range; x <= cmd->end_range; x++)
-					{
-						view->dir_entry[x].selected = 1;
-						y++;
-					}
-					view->selected_files = y;
-				}
-				/* A count is given */
-				else if(cmd->count)
-				{
-					if(!cmd->count)
-						cmd->count = 1;
-
-					/* A one digit range with a count. :4d5 */
-					if(cmd->end_range)
-					{
-						y = 0;
-						for(x = 0; x < view->list_rows; x++)
-							view->dir_entry[x].selected = 0;
-
-						for(x = cmd->end_range; x < view->list_rows; x++)
-						{
-							if(cmd->count == y)
-								break;
-							view->dir_entry[x].selected = 1;
-							y++;
-
-						}
-						view->selected_files = y;
-					}
-					/* Just a count is given. */ 
-					else
-					{
-						y = 0;
-
-						for(x = 0; x < view->list_rows; x++)
-							view->dir_entry[x].selected = 0;
-
-						for(x = view->list_pos; x < view->list_rows; x++)
-						{
-							if(cmd->count == y )
-								break;
-
-							view->dir_entry[x].selected = 1;
-							y++;
-						}
-						view->selected_files = y;
-
-					}
-				}
+				if (selection_worked)
+				*/
+				select_files_in_range(view, cmd);
 				delete_file(view);
 			}
 			break;
@@ -1420,6 +1438,16 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 			show_error_msg(" I haven't gotten here yet ",
 						"Sorry this is not implemented");
 			break;
+		case COM_YANK:
+			{
+				int selection_worked = 0;
+
+				//selection_worked  = select_files_in_range(view);
+
+				if (selection_worked)
+					yank_selected_files(view);
+			}
+			break;
 		case COM_VMAP:
 			break;
 		default:
@@ -1467,6 +1495,7 @@ execute_user_command(FileView *view, cmd_t *cmd)
 
 	if (use_menu)
 	{
+
 		show_user_menu(view, expanded_com);
 
 		if(!cmd->background)

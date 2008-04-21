@@ -243,7 +243,7 @@ draw_dir_list(FileView *view, int top, int pos)
 
 	werase(view->win);
 	werase(view->title);
-	wprintw(view->title, view->curr_dir);
+	wprintw(view->title, "%s", view->curr_dir);
 	wnoutrefresh(view->title);
 
 		/* This is needed for reloading a list that has had files deleted */
@@ -306,7 +306,7 @@ draw_dir_list(FileView *view, int top, int pos)
 			{
 				wattrset(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
 				wattron(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-				wprintw(view->win, file_name);
+				wprintw(view->win, "%s", file_name);
 				wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
 
 				add_sort_type_info(view, y, x, 0);
@@ -315,8 +315,9 @@ draw_dir_list(FileView *view, int top, int pos)
 			{
 				wattrset(view->win, COLOR_PAIR(LINE_COLOR));
 				wattron(view->win, COLOR_PAIR(LINE_COLOR));
-				wprintw(view->win, file_name);
+				wprintw(view->win, "%s", file_name);
 				wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+
 				add_sort_type_info(view, y, x, 0);
 				bold = 1;
 			}
@@ -339,7 +340,7 @@ draw_dir_list(FileView *view, int top, int pos)
 			}
 			wmove(view->win, y, 1);
 
-			wprintw(view->win, file_name);
+			wprintw(view->win, "%s", file_name);
 			wattroff(view->win, A_BOLD);
 			wattroff(view->win, A_REVERSE);
 			add_sort_type_info(view, y, x, 0);
@@ -434,11 +435,10 @@ erase_current_line_bar(FileView *view)
 		{
 			wattrset(view->win, COLOR_PAIR(LINE_COLOR));
 			wattron(view->win, COLOR_PAIR(LINE_COLOR));
-
 			mvwaddnstr(view->win, old_cursor, 1, file_name, view->window_width -4);
 			wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-			add_sort_type_info(view, old_cursor, old_pos, 0);
 			bold = 1;
+			add_sort_type_info(view, old_cursor, old_pos, 0);
 		}
 	}
 	else
@@ -458,7 +458,7 @@ erase_current_line_bar(FileView *view)
 			wattron(view->win, A_BOLD);
 		}
 		wmove(view->win, view->curr_line, 1);
-		wprintw(view->win, file_name);
+		wprintw(view->win, "%s", file_name);
 		wattroff(view->win, A_BOLD);
 		wattroff(view->win, A_REVERSE);
 		add_sort_type_info(view, old_cursor, old_pos, 0);
@@ -625,7 +625,7 @@ save_view_history(FileView *view)
 	if(found)
 	{
 		snprintf(view->history[x].file, sizeof(view->history[x].file),
-				view->dir_entry[view->list_pos].name);
+				"%s", view->dir_entry[view->list_pos].name);
 		return;
 	}
 
@@ -635,23 +635,23 @@ save_view_history(FileView *view)
 		for(y = 0; y < cfg.history_len -1; y++)
 		{
 			snprintf(view->history[y].file, sizeof(view->history[y].file),
-						view->history[y +1].file);
+						"%s", view->history[y +1].file);
 			snprintf(view->history[y].dir, sizeof(view->history[y].dir),
-					view->history[y +1].dir);
+					"%s", view->history[y +1].dir);
 		}
 		snprintf(view->history[cfg.history_len -1].file, 
 				sizeof(view->history[cfg.history_len -1].file),
-				view->dir_entry[view->list_pos].name);
+				"%s", view->dir_entry[view->list_pos].name);
 		snprintf(view->history[cfg.history_len -1].dir, 
 				sizeof(view->history[cfg.history_len -1].dir),
-				view->curr_dir);
+				"%s", view->curr_dir);
 	}
 	else
 	{
 		snprintf(view->history[x].dir, sizeof(view->history[x].dir),
-			view->curr_dir);
+			"%s", view->curr_dir);
 		snprintf(view->history[x].file, sizeof(view->history[x].file),
-				view->dir_entry[view->list_pos].name);
+				"%s", view->dir_entry[view->list_pos].name);
 		view->history_num++;
 	}
 	return;
@@ -781,7 +781,7 @@ change_directory(FileView *view, char *directory)
 		return;
 	}
 
-	snprintf(view->last_dir, sizeof(view->last_dir), view->curr_dir);
+	snprintf(view->last_dir, sizeof(view->last_dir), "%s", view->curr_dir);
 
 	clean_selected_files(view);
 		
