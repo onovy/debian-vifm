@@ -9,6 +9,7 @@ endif
 DESTDIR = `pwd`/debian/tmp
 PREFIX = $(DESTDIR)/usr
 ADDDIR = $(DESTDIR)/usr/share/vim/addons
+REGDIR = $(DESTDIR)/usr/share/vim/registry
 BINDIR = $(PREFIX)/bin
 MANDIR = $(PREFIX)/share/man/man1
 DOCDIR = $(PREFIX)/share/doc/$(PACKAGE)
@@ -47,6 +48,7 @@ binary-arch: build
 	rm -rf $(DESTDIR) $(DESTDIR).deb
 	$(MKDIR) $(ADDDIR)/doc
 	$(MKDIR) $(ADDDIR)/plugin
+	$(MKDIR) $(REGDIR)
 	$(MKDIR) $(DESTDIR)
 	$(MKDIR) $(DESTDIR)/DEBIAN
 	$(MKDIR) $(BINDIR)
@@ -65,6 +67,7 @@ binary-arch: build
 	$(INSTALL) src/vifm-0.2.help.txt src/vifmrc0.2 $(DOCDIR)/examples
 	$(INSTALL) src/vifm.txt $(ADDDIR)/doc
 	$(INSTALL) src/vifm.vim $(ADDDIR)/plugin
+	$(INSTALL) debian/vim-vifm.yaml $(REGDIR)
 	$(INSTALL) vifm.1 $(MANDIR)
 	$(INSTALL) pauseme.1 $(MANDIR)/vifm-pauseme.1
 	gzip -9fqr $(MANDIR)/

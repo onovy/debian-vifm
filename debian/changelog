@@ -1,3 +1,10 @@
+vifm (0.3a-2) unstable; urgency=low
+
+  * okay, okay, with vim-addon-manager we don't need a postinst with helpztags
+    any more ...
+
+ -- Edelhard Becker <edelhard@debian.org>  Tue, 22 Apr 2008 17:35:55 +0200
+
 vifm (0.3a-1) unstable; urgency=low
 
   * new upstream release
