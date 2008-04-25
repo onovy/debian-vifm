@@ -1,3 +1,9 @@
+vifm (0.3a-3) unstable; urgency=low
+
+  * make vifm build-depend on automake and libtool (Closes: #477735)
+
+ -- Edelhard Becker <edelhard@debian.org>  Fri, 25 Apr 2008 21:55:56 +0200
+
 vifm (0.3a-2) unstable; urgency=low
 
   * okay, okay, with vim-addon-manager we don't need a postinst with helpztags

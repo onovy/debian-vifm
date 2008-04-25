@@ -7,7 +7,7 @@ Standards-Version: 3.7.3
 
 Package: vifm
 Architecture: any
-Depends: ${shlibs:Depends}, vim-tiny | vim
+Depends: ${shlibs:Depends}
 Recommends: vim-addon-manager
 Description: a ncurses based file manager with vi like keybindings
  Vifm is a ncurses based file manager with vi like keybindings.  If
