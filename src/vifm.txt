@@ -36,7 +36,7 @@ The builtin commands are:
 :apropos manpage - will create a menu of items returned by the apropos
   command.  Selecting an item in the menu will open the corresponding 
 	manpage.
-:c[hange] - 
+:ch[ange] - create a menu window to alter a files properties. 
 :cd - change to your home directory.
 	:cd /usr/local - change directory to /usr/local.
 :[range]d[elete][count] - delete selected file or files.
@@ -64,6 +64,7 @@ The builtin commands are:
 :s[ort] - menu of different sorting methods.
 :sp[lit] - switch to a two window view. 
 :sy[nc] - change the other panel to the current panels directory.
+:vi[ew] - toggle on and off the quick file view.
 :x - exit vifm.
 
 command macros:
@@ -174,7 +175,7 @@ The only other command line arguments are:
 --------------------------------------------------------------------------------
 *Configure*
 
-The ~/.vifm/vifmrcVERSION file contains all the configurable settings.  It is
+The ~/.vifm/vifmrc file contains all the configurable settings.  It is
 commented and you must edit it by hand to change the settings.
 
 The :screen command toggles whether to use the screen program or not. 
@@ -239,7 +240,9 @@ The following command names are reserved and cannot be used for user commands.
   ! - shellout and execute command.
 	apropos - run the apropos command in a menu window.
   cd - change directory
+  change - alter a files properties
   cmap - not used will be used for key mapping.
+  colorscheme - will be used to set a colorscheme for a directory.
   command - show user commands.
   delete - delete file.
   delcommand - delete command.
@@ -262,6 +265,7 @@ The following command names are reserved and cannot be used for user commands.
   shell - shellout.
   sort - show sort menu.
   unmap - not used will be used with key mapping.
+  view - toggle on and off the quick file view.
   vifm - not used saved for possible menu.
   vmap - not used will be used for key mapping.
   x - exit vifm.

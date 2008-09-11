@@ -1,19 +1,18 @@
 ## Process this file with automake to produce Makefile.in
 
-pkgdata_DATA = vifm-0.2.help.txt \
+pkgdata_DATA = vifm-help.txt \
 							 vifm.txt \
 							 vifm.vim 
 
 bin_PROGRAMS = vifm
 
-bin_SCRIPTS = pauseme \
-	screen-run-program-in-region \
-	screen-open-region-with-program
+bin_SCRIPTS = pauseme 
 
 vifm_SOURCES = \
 	vifm.c \
 	background.c background.h \
 	bookmarks.c bookmarks.h \
+	color_scheme.c colorscheme.h \
 	commands.c commands.h \
 	config.c config.h \
 	file_info.c file_info.h \

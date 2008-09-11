@@ -22,30 +22,6 @@
 #include<limits.h>
 #include<ncurses.h>
 
-#define MAXNUM_COLOR 12
-
-#define MENU_COLOR 0
-#define BORDER_COLOR 1
-#define WIN_COLOR 2
-#define	STATUS_BAR_COLOR 3
-#define CURR_LINE_COLOR 4
-#define DIRECTORY_COLOR 5
-#define LINK_COLOR 6
-#define SOCKET_COLOR 7
-#define DEVICE_COLOR 8
-#define EXECUTABLE_COLOR 9
-#define SELECTED_COLOR 10
-#define CURRENT_COLOR 11
-
-typedef struct _Col_attr {
-	int fg;
-	int bg;
-	/* future addition for color attribute[s]:
-	 * int attr;
-	 * int dim;
-	 */
-} Col_attr;
-
 
 typedef struct _Config {
 	char config_dir[PATH_MAX];
@@ -53,7 +29,6 @@ typedef struct _Config {
 	char *vi_command;
 	int num_bookmarks;
 	int use_trash;
-	int use_color;
 	int vim_filter;
 	int use_screen;
 	int use_vim_help;
@@ -70,8 +45,8 @@ typedef struct _Config {
 	int cmd_history_len;
 	int cmd_history_num;
 	int auto_execute;
-	Col_attr color[MAXNUM_COLOR];
-	int use_custom_colors;
+	int color_scheme_num;
+	int color_pairs_num;
 	int show_one_window;
 	long max_args;
 } Config;

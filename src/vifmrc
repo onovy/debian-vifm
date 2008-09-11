@@ -10,8 +10,8 @@
 # If you would like to use another vi clone such as Vim, Elvis, or Vile
 # you will need to change this setting.
 
-VI_COMMAND=vi
-# VI_COMMAND=vim
+VI_COMMAND=vim
+# VI_COMMAND=vi
 # VI_COMMAND=elvis -G termcap
 # VI_COMMAND=vile
 
@@ -29,34 +29,6 @@ USE_TRASH=1
 
 USE_SCREEN=0
 
-# 1 means use color if the terminal supports it
-# 0 means don't use color.
-
-USE_COLOR=1
-
-# The standard ncurses colors are:
-# BLACK 0
-# RED 1
-# GREEN 2
-# YELLOW 3
-# BLUE 4
-# MAGENTA 5
-# CYAN 6
-# WHITE 7
-# COLOR=color=foreground=background
-
-COLOR=MENU=6=0
-COLOR=BORDER=0=7
-COLOR=WIN=7=0
-COLOR=STATUS_BAR=7=0
-COLOR=CURR_LINE=7=4
-COLOR=DIRECTORY=6=0
-COLOR=LINK=3=0
-COLOR=SOCKET=4=0
-COLOR=DEVICE=1=0
-COLOR=EXECUTABLE=2=0
-COLOR=SELECTED=5=7
-COLOR=CURRENT=0=7
 
 # This is how many files to show in the directory history menu.
 

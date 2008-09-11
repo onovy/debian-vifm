@@ -1,3 +1,9 @@
+vifm (0.4-1) unstable; urgency=low
+
+  * new upstream release with UTF-8 support (Closes: #495805)
+
+ -- Edelhard Becker <edelhard@debian.org>  Thu, 11 Sep 2008 22:35:37 +0200
+
 vifm (0.3a-3) unstable; urgency=low
 
   * make vifm build-depend on automake and libtool (Closes: #477735)

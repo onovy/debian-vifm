@@ -19,7 +19,7 @@
 #ifndef __UI_H__
 #define __UI_H__
 
-#define VERSION 0.2
+#define VERSION 0.4
 
 #include<limits.h> /*  PATH_MAX */
 #include<ncurses.h>
@@ -95,6 +95,7 @@ typedef struct _FileView
 	int window_width;
 	int filtered;  /* number of files filtered out and not shown in list */
 	int selected_files;
+	int color_scheme; /* current color scheme being used */
 	dir_entry_t *dir_entry;
 	history_t history[15];
 	char ** selected_filelist;

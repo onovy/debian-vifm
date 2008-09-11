@@ -20,11 +20,12 @@ Terry Brown wrote part of the keybinding code.
 
 Gentoo package by Peter Johanson.
 
-Patch to allow % in file names by Karsten Schoelz
-
 Ralf Arens added the configurable color code and rewrote the bookmarks
 	code.
 
 Dmitry Suzdalev fixed the :!<Enter> bug.
 
 MacOSX Fink package by Damien Ferrand
+
+Karsten Schoelzel - submitted a patch to fix the handling of files with
+a % in the name.

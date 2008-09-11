@@ -16,7 +16,7 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
  */
 
-#define CP_HELP "cp /usr/share/doc/vifm/examples/vifm-help.txt ~/.vifm"
+#define CP_HELP "cp /usr/share/doc/vifm/examples/vifm.help.txt ~/.vifm"
 #define CP_RC "cp /usr/share/doc/vifm/examples/vifmrc ~/.vifm"
 
 #include<stdio.h> /* FILE */

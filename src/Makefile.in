@@ -49,12 +49,12 @@ am__installdirs = "$(DESTDIR)$(bindir)" "$(DESTDIR)$(bindir)" \
 binPROGRAMS_INSTALL = $(INSTALL_PROGRAM)
 PROGRAMS = $(bin_PROGRAMS)
 am_vifm_OBJECTS = vifm.$(OBJEXT) background.$(OBJEXT) \
-	bookmarks.$(OBJEXT) commands.$(OBJEXT) config.$(OBJEXT) \
-	file_info.$(OBJEXT) filelist.$(OBJEXT) fileops.$(OBJEXT) \
-	filetype.$(OBJEXT) keys.$(OBJEXT) menus.$(OBJEXT) \
-	registers.$(OBJEXT) rline.$(OBJEXT) search.$(OBJEXT) \
-	signals.$(OBJEXT) sort.$(OBJEXT) ui.$(OBJEXT) utils.$(OBJEXT) \
-	visual.$(OBJEXT)
+	bookmarks.$(OBJEXT) color_scheme.$(OBJEXT) commands.$(OBJEXT) \
+	config.$(OBJEXT) file_info.$(OBJEXT) filelist.$(OBJEXT) \
+	fileops.$(OBJEXT) filetype.$(OBJEXT) keys.$(OBJEXT) \
+	menus.$(OBJEXT) registers.$(OBJEXT) rline.$(OBJEXT) \
+	search.$(OBJEXT) signals.$(OBJEXT) sort.$(OBJEXT) ui.$(OBJEXT) \
+	utils.$(OBJEXT) visual.$(OBJEXT)
 vifm_OBJECTS = $(am_vifm_OBJECTS)
 vifm_LDADD = $(LDADD)
 binSCRIPT_INSTALL = $(INSTALL_SCRIPT)
@@ -192,18 +192,16 @@ sysconfdir = @sysconfdir@
 target_alias = @target_alias@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-pkgdata_DATA = vifm-0.2.help.txt \
+pkgdata_DATA = vifm-help.txt \
 							 vifm.txt \
 							 vifm.vim 
 
-bin_SCRIPTS = pauseme \
-	screen-run-program-in-region \
-	screen-open-region-with-program
-
+bin_SCRIPTS = pauseme 
 vifm_SOURCES = \
 	vifm.c \
 	background.c background.h \
 	bookmarks.c bookmarks.h \
+	color_scheme.c colorscheme.h \
 	commands.c commands.h \
 	config.c config.h \
 	file_info.c file_info.h \
@@ -313,6 +311,7 @@ distclean-compile:
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/background.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/bookmarks.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/color_scheme.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/commands.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/config.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/file_info.Po@am__quote@

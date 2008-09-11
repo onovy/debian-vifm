@@ -1,7 +1,25 @@
+0.3a to 0.4
+	Color schemes added - required a change to the vifmrc file.
+
+	UTF-8 support
+
+	Quick view of current file with :view command.
+
+	Hopefully fixed bug when starting vifm with a directory on the command 
+	line.
+
+	Changed executable file to check for filetypes.  If you have vifm set to 
+	not run executable files, it will now first check for a filetype setting
+	and if present will use the program you set to open the file.  If no 
+	filetype is set it will open the file in vi.
+
+	Fixed delete command when dd in :com window.
+
 0.3 to 0.3a
 
-	Patch by Karsten Schoelz to allow % to be use in file names.
-	Removed symlinks from tarball.
+	Files with % in the name should work now.
+
+	The symlinks in the tarball were replaced with the actual scripts.
 
 0.2 to 0.3
 	

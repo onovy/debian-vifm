@@ -27,6 +27,7 @@
 
 #include "background.h"
 #include "bookmarks.h"
+#include "color_scheme.h"
 #include "commands.h"
 #include "config.h"
 #include "filelist.h"
@@ -146,13 +147,11 @@ clean_menu_position(menu_info *m)
 	buf[x] = ' ';
 	buf[x + 1] = '\0';
 
-	if (cfg.use_color)
-		wattron(menu_win, COLOR_PAIR(WIN_COLOR));
+	wattron(menu_win, COLOR_PAIR(WIN_COLOR));
 
 	mvwaddnstr(menu_win, m->current, 1, buf, x - 2);
 
-	if (cfg.use_color)
-		wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
+	wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 
 	my_free(buf);
 }
@@ -310,17 +309,11 @@ moveto_menu_pos(FileView *view, int pos,  menu_info *m)
 	buf[x] = ' ';
 	buf[x + 1] = '\0';
 
-	if (cfg.use_color)
-		wattron(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	else
-		wattron(menu_win, A_REVERSE);
+	wattron(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 	
 	mvwaddnstr(menu_win, m->current, 1, buf, x - 2);
 
-	if (cfg.use_color)
-		wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	else
-		wattroff(menu_win, A_REVERSE);
+	wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 
 	m->pos = pos;
 	my_free(buf);
@@ -546,57 +539,6 @@ execute_apropos_cb(FileView *view, menu_info *m)
 		my_free(free_this);
 }
 
-static void
-execute_user_cb(FileView *view, menu_info *m)
-{
-	char *dir = NULL;
-	char *file = NULL;
-	char *free_this = NULL;
-	//int isdir = 0;
-
-	free_this = file = dir = strdup(m->data[m->pos]);
-	chomp(file);
-
-		/* check if it really is a file */
-		/*
-		if (!access(file, R_OK))
-		{
-			if (is_dir(file))
-				isdir = 1;
-
-			file = strrchr(dir, '/');
-			*file = '\0';
-			file++;
-			
-			change_directory(view, dir);
-
-			status_bar_message("Finding the correct directory.");
-
-			wrefresh(status_bar);
-			load_dir_list(view, 1);
-
-
-			if (find_file_pos_in_list(view, file) < 0)
-			{
-				if (isdir)
-				{
-					strcat(file, "/");
-				}
-
-				if (file[0] == '.')
-					show_dot_files(view);
-
-				if (find_file_pos_in_list(view, file) < 0)
-					remove_filename_filter(view);
-
-				moveto_list_pos(view, find_file_pos_in_list(view, file));
-			}
-			else
-				moveto_list_pos(view, find_file_pos_in_list(view, file));
-		}
-		*/
-	my_free(free_this);
-}
 
 static void
 execute_locate_cb(FileView *view, menu_info *m)

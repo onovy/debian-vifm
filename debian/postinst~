@@ -1,7 +1,0 @@
-#!/bin/sh
-
-if which helpztags >/dev/null 2>&1; then
-  helpztags /usr/share/vim/vimcurrent/doc
-fi
-
-exit 0

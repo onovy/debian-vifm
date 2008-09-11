@@ -10,6 +10,14 @@ the configuration file to match your preferences.
 
    Vim configuration:
 
-This package automatically installs and compiles its helptags. Just start
-vim and try ":h vifm". The vifm.vim plugin is also installed, see the
-plugin section in the helpfile for commands.
+From 0.3a-1 on this package provides the vim addon vifm, but it is not enabled
+per default. If you want to enable it for your user account just execute
+
+  vim-addons install vifm
+
+Similarly, to enable it for all users of this system just execute (as root)
+
+  vim-addons -w install vifm
+
+vim-addons is provided by the vim-addon-manager package, have a look at its
+manpage for more information.

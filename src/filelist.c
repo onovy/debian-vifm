@@ -32,6 +32,7 @@
 #include<pwd.h>
 #include<grp.h>
 
+#include "color_scheme.h"
 #include "config.h" /* menu colors */
 #include "filelist.h"
 #include "keys.h"
@@ -40,7 +41,6 @@
 #include "status.h"
 #include "ui.h"
 #include "utils.h" /* update_term_title() */
-
 
 
 static void
@@ -120,27 +120,70 @@ add_sort_type_info(FileView *view, int y, int x, int current_line)
 				snprintf(buf, sizeof(buf), " %d", view->dir_entry[x].size);
 			break;
     }
-	if (cfg.use_color)
+
+	if (current_line)
+		wattron(view->win, COLOR_PAIR(CURR_LINE_COLOR + view->color_scheme)
+			   	| A_BOLD);
+
+	mvwaddstr(view->win, y, 
+				view->window_width - strlen(buf), buf); 
+
+	if (current_line)
+		wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR + view->color_scheme)
+			   	| A_BOLD);
+}
+
+void
+quick_view_file(FileView *view)
+{
+	FILE *fp;
+	char line[1024];
+	char buf[NAME_MAX];
+	int x = 1;
+	int y = 1;
+
+	snprintf(buf, view->window_width, "File: %s",
+		   	view->dir_entry[view->list_pos].name);
+
+	wbkgdset(other_view->title, COLOR_PAIR(BORDER_COLOR + view->color_scheme));
+	wbkgdset(other_view->win, COLOR_PAIR(WIN_COLOR + view->color_scheme));
+	wclear(other_view->win);
+	wclear(other_view->title);
+	wattron(other_view->win,  A_BOLD);
+	mvwaddstr(other_view->win, x, y,  buf);
+	wattroff(other_view->win, A_BOLD);
+	x++;
+
+	switch (view->dir_entry[view->list_pos].type)
 	{
-		if (current_line)
-			wattron(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
+		case DIRECTORY:
+				mvwaddstr(other_view->win, ++x, y, "File is a Directory");
+			break;
+		case DEVICE:
+				mvwaddstr(other_view->win, ++x, y, "File is a Device");
+			break;
+		case SOCKET:
+				mvwaddstr(other_view->win, ++x, y, "File is a Socket");
+			break;
+		default:
+			{
+				if((fp = fopen(view->dir_entry[view->list_pos].name, "r"))
+						== NULL)
+				{
+					mvwaddstr(other_view->win, ++x, y,  "Cannot open file");
+					return;
+				}
 
-		mvwaddstr(view->win, y, 
-					view->window_width - strlen(buf), buf); 
+				while(fgets(line, other_view->window_width, fp)
+						&& 	(x < other_view->window_rows - 2))
+				{
+					mvwaddstr(other_view->win, ++x, y,  line);
+				}
 
-		if (current_line)
-			wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	}
-	else
-	{
-		if (current_line)
-			wattron(view->win, A_REVERSE);
 
-		mvwaddstr(view->win, y, 
-					view->window_width - strlen(buf), buf); 
-
-	 	if (current_line)
-			wattroff(view->win, A_REVERSE);
+				fclose(fp);
+			}
+			break;
 	}
 }
 
@@ -240,13 +283,29 @@ draw_dir_list(FileView *view, int top, int pos)
 	char file_name[view->window_width -2];
 	int LINE_COLOR;
 	int bold = 1;
+	int color_scheme = 0;
+
+	color_scheme = check_directory_for_color_scheme(view->curr_dir);
+
+	/*
+	wattrset(view->title, COLOR_PAIR(BORDER_COLOR + color_scheme));
+	wattron(view->title, COLOR_PAIR(BORDER_COLOR + color_scheme));
+	*/
+	if(view->color_scheme != color_scheme)
+	{
+		view->color_scheme = color_scheme;
+		wbkgdset(view->title, COLOR_PAIR(BORDER_COLOR + color_scheme));
+		wbkgdset(view->win, COLOR_PAIR(WIN_COLOR + color_scheme));
+	}
 
 	werase(view->win);
 	werase(view->title);
+	/* FIXME change to truncate directory names */
+
 	wprintw(view->title, "%s", view->curr_dir);
 	wnoutrefresh(view->title);
 
-		/* This is needed for reloading a list that has had files deleted */
+	/* This is needed for reloading a list that has had files deleted */
 	while((view->list_rows - view->list_pos) <= 0)
 	{
 		view->list_pos--;
@@ -262,93 +321,70 @@ draw_dir_list(FileView *view, int top, int pos)
 		view->curr_line++;
 	}
 
+	/* Colorize the files */
+	
 
-	if(cfg.use_color)
+	for(x = top; x < view->list_rows; x++)
 	{
-		/* Colorize the files */
-		for(x = top; x < view->list_rows; x++)
+		/* Extra long file names are truncated to fit */
+
+		snprintf(file_name, view->window_width - 2, "%s", 
+				view->dir_entry[x].name);
+
+		wmove(view->win, y, 1);
+		if(view->dir_entry[x].selected)
 		{
-			/* Extra long file names are truncated to fit */
-			strncpy(file_name,  view->dir_entry[x].name, sizeof(file_name) -1);
-			file_name[view->window_width -2] = '\0';
-
-			wmove(view->win, y, 1);
-			if(view->dir_entry[x].selected)
-			{
-				LINE_COLOR = SELECTED_COLOR;
-			}
-			else
-			{
-				switch(view->dir_entry[x].type)
-				{
-					case DIRECTORY:
-						LINE_COLOR = DIRECTORY_COLOR;
-						break;
-					case LINK:
-						LINE_COLOR = LINK_COLOR;
-						break;
-					case SOCKET:
-						LINE_COLOR = SOCKET_COLOR;
-						break;
-					case DEVICE:
-						LINE_COLOR = DEVICE_COLOR;
-						break;
-					case EXECUTABLE:
-						LINE_COLOR = EXECUTABLE_COLOR;
-						break;
-					default:
-						LINE_COLOR = WIN_COLOR;
-						bold = 0;
-						break;
-				}
-			}
-			if(bold)
-			{
-				wattrset(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-				wattron(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-				wprintw(view->win, "%s", file_name);
-				wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-
-				add_sort_type_info(view, y, x, 0);
-			}
-			else
-			{
-				wattrset(view->win, COLOR_PAIR(LINE_COLOR));
-				wattron(view->win, COLOR_PAIR(LINE_COLOR));
-				wprintw(view->win, "%s", file_name);
-				wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-
-				add_sort_type_info(view, y, x, 0);
-				bold = 1;
-			}
-			y++;
-			if(y > view->window_rows)
-				break;
+			LINE_COLOR = SELECTED_COLOR + color_scheme;
 		}
-	}
-	else /* Not using color */
-	{
-		wattroff(view->win, A_BOLD);
-		for(x = top; x < view->list_rows; x++)
+		else
 		{
-			strncpy(file_name,  view->dir_entry[x].name, sizeof(file_name) -1);
-			file_name[view->window_width -2] = '\0';
-			if(view->dir_entry[x].selected)
+			switch(view->dir_entry[x].type)
 			{
-				wattrset(view->win, A_REVERSE);
-				wattron(view->win, A_REVERSE);
+				case DIRECTORY:
+					LINE_COLOR = DIRECTORY_COLOR + color_scheme;
+					break;
+				case LINK:
+					LINE_COLOR = LINK_COLOR + color_scheme;
+					break;
+				case SOCKET:
+					LINE_COLOR = SOCKET_COLOR + color_scheme;
+					break;
+				case DEVICE:
+					LINE_COLOR = DEVICE_COLOR + color_scheme;
+					break;
+				case EXECUTABLE:
+					LINE_COLOR = EXECUTABLE_COLOR + color_scheme;
+					break;
+				default:
+					LINE_COLOR = WIN_COLOR + color_scheme;
+					bold = 0;
+					break;
 			}
-			wmove(view->win, y, 1);
-
+		}
+		if(bold)
+		{
+			wattrset(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+			wattron(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
 			wprintw(view->win, "%s", file_name);
-			wattroff(view->win, A_BOLD);
-			wattroff(view->win, A_REVERSE);
+			wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+
 			add_sort_type_info(view, y, x, 0);
-			y++;
-			if(y > view->window_rows)
-				break;
 		}
+		else
+		{
+			wattrset(view->win, COLOR_PAIR(LINE_COLOR));
+			wattron(view->win, COLOR_PAIR(LINE_COLOR));
+			wprintw(view->win, "%s", file_name);
+			wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+
+			add_sort_type_info(view, y, x, 0);
+			bold = 1;
+		}
+		y++;
+		if(y > view->window_rows)
+			break;
 	}
+
 	if(view != curr_view)
 		mvwaddstr(view->win, view->curr_line, 0, "*");
 
@@ -371,96 +407,70 @@ erase_current_line_bar(FileView *view)
 	int old_pos = view->top_line + old_cursor;
 	char file_name[view->window_width -2];
 	int bold = 1;
+	int LINE_COLOR;
 
-	if(cfg.use_color)
+	/* Extra long file names are truncated to fit */
+
+	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR + view->color_scheme) | A_BOLD);
+	if((old_pos > -1)  && (old_pos < view->list_rows))
 	{
-		int LINE_COLOR;
-
-		/* Extra long file names are truncated to fit */
-
-		wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-		if((old_pos > -1)  && (old_pos < view->list_rows))
-		{
-			strncpy(file_name,  view->dir_entry[old_pos].name, 
-					sizeof(file_name) -2);
-		}
-		else /* The entire list is going to be redrawn so just return. */
-			return;
+		snprintf(file_name, view->window_width - 2, "%s", 
+				view->dir_entry[old_pos].name);
+	}
+	else /* The entire list is going to be redrawn so just return. */
+		return;
 
 
+	wmove(view->win, old_cursor, 1);
 
-		wmove(view->win, old_cursor, 1);
+	wclrtoeol(view->win);
 
-		wclrtoeol(view->win);
-
-		if(view->dir_entry[old_pos].selected)
-		{
-			LINE_COLOR = SELECTED_COLOR;
-		}
-		else
-		{
-			switch(view->dir_entry[old_pos].type)
-			{
-				case DIRECTORY:
-					LINE_COLOR = DIRECTORY_COLOR;
-					break;
-				case LINK:
-					LINE_COLOR = LINK_COLOR;
-					break;
-				case SOCKET:
-					LINE_COLOR = SOCKET_COLOR;
-					break;
-				case DEVICE:
-					LINE_COLOR = DEVICE_COLOR;
-					break;
-				case EXECUTABLE:
-					LINE_COLOR = EXECUTABLE_COLOR;
-					break;
-				default:
-					LINE_COLOR = WIN_COLOR;
-					bold = 0;
-					break;
-			}
-		}
-		if(bold)
-		{
-			wattrset(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-			wattron(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-			mvwaddnstr(view->win, old_cursor, 1, file_name, view->window_width -4);
-			wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-
-			add_sort_type_info(view, old_cursor, old_pos, 0);
-		}
-		else
-		{
-			wattrset(view->win, COLOR_PAIR(LINE_COLOR));
-			wattron(view->win, COLOR_PAIR(LINE_COLOR));
-			mvwaddnstr(view->win, old_cursor, 1, file_name, view->window_width -4);
-			wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
-			bold = 1;
-			add_sort_type_info(view, old_cursor, old_pos, 0);
-		}
+	if(view->dir_entry[old_pos].selected)
+	{
+		LINE_COLOR = SELECTED_COLOR + view->color_scheme;
 	}
 	else
 	{
-		wattroff(view->win, A_BOLD);
-		wattroff(view->win, A_REVERSE);
-
-		strncpy(file_name,  view->dir_entry[old_pos].name, 
-					sizeof(file_name) -2);
-
-		wmove(view->win, old_cursor, 1);
-		wclrtoeol(view->win);
-
-		if(view->dir_entry[old_pos].selected)
+		switch(view->dir_entry[old_pos].type)
 		{
-			wattrset(view->win, A_BOLD);
-			wattron(view->win, A_BOLD);
+			case DIRECTORY:
+				LINE_COLOR = DIRECTORY_COLOR + view->color_scheme;
+				break;
+			case LINK:
+				LINE_COLOR = LINK_COLOR + view->color_scheme;
+				break;
+			case SOCKET:
+				LINE_COLOR = SOCKET_COLOR + view->color_scheme;
+				break;
+			case DEVICE:
+				LINE_COLOR = DEVICE_COLOR + view->color_scheme;
+				break;
+			case EXECUTABLE:
+				LINE_COLOR = EXECUTABLE_COLOR + view->color_scheme;
+				break;
+			default:
+				LINE_COLOR = WIN_COLOR + view->color_scheme;
+				bold = 0;
+				break;
 		}
-		wmove(view->win, view->curr_line, 1);
-		wprintw(view->win, "%s", file_name);
-		wattroff(view->win, A_BOLD);
-		wattroff(view->win, A_REVERSE);
+	}
+	if(bold)
+	{
+		wattrset(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+		wattron(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+		mvwaddnstr(view->win, old_cursor, 1, file_name, view->window_width -2);
+		wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+
+		add_sort_type_info(view, old_cursor, old_pos, 0);
+	}
+	else
+	{
+		wattrset(view->win, COLOR_PAIR(LINE_COLOR));
+		wattron(view->win, COLOR_PAIR(LINE_COLOR));
+		mvwaddnstr(view->win, old_cursor, 1, file_name, view->window_width -2);
+		wattroff(view->win, COLOR_PAIR(LINE_COLOR) | A_BOLD);
+		bold = 1;
+			add_sort_type_info(view, old_cursor, old_pos, 0);
 		add_sort_type_info(view, old_cursor, old_pos, 0);
 	}
 }
@@ -470,7 +480,7 @@ moveto_list_pos(FileView *view, int pos)
 {
 	int redraw = 0;
 	int old_cursor = view->curr_line;
-	char file_name[view->window_width +2];
+	char file_name[view->window_width -2];
 	int x;
 
 	if(pos < 1)
@@ -513,77 +523,34 @@ moveto_list_pos(FileView *view, int pos)
 	if(redraw)
 		draw_dir_list(view, view->top_line, view->curr_line);
 
-	if(old_cursor != view->curr_line)
-	{
-		wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR));
-		mvwaddstr(view->win, old_cursor, 0, " ");
 
-		if(cfg.use_color)
-		{
+	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR + view->color_scheme));
+	mvwaddstr(view->win, old_cursor, 0, " ");
 
-			snprintf(file_name, sizeof(file_name) -1, " %s", 
-					view->dir_entry[pos].name);
-			wattron(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
+	wattron(view->win, COLOR_PAIR(CURR_LINE_COLOR + view->color_scheme) | A_BOLD);
 
-			for (x = strlen(file_name); x < view->window_width ; x++)
-				file_name[x] = ' ';
+	/* Blank the current line and
+	 * print out the current line bar
+	 */
 
-			file_name[view->window_width] = ' ';
-			file_name[view->window_width +1 ] = '\0';
-			mvwaddstr(view->win, view->curr_line, 0, file_name);
+	for (x = 0; x < view->window_width ; x++)
+		file_name[x] = ' ';
 
-			add_sort_type_info(view, view->curr_line, pos, 1);
-		}
-		else /* Not using color */
-		{
-			wattroff(view->win, A_BOLD);
+	file_name[view->window_width] = ' ';
+	file_name[view->window_width +1 ] = '\0';
 
-			snprintf(file_name, sizeof(file_name) -1, " %s", 
-					view->dir_entry[pos].name);
 
-			wattron(view->win,  A_REVERSE);
+	mvwaddstr(view->win, view->curr_line, 0, file_name);
 
-			for (x = strlen(file_name); x < view->window_width ; x++)
-				file_name[x] = ' ';
-			file_name[view->window_width] = ' ';
-			file_name[view->window_width +1 ] = '\0';
-			mvwaddstr(view->win, view->curr_line, 0, file_name);
-			add_sort_type_info(view, view->curr_line, pos, 1);
-		}
-	}
-	else
-	{
-		if (cfg.use_color)
-		{
-			int x;
-			snprintf(file_name, sizeof(file_name), " %s", 
-						view->dir_entry[pos].name);
-			wattron(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-			for (x = strlen(file_name); x < view->window_width; x++)
-				file_name[x] = ' ';
-			file_name[view->window_width] = ' ';
-			file_name[view->window_width +1] = '\0';
-			mvwaddstr(view->win, view->curr_line, 0, file_name);
+	snprintf(file_name, view->window_width - 2, "%s", 
+			view->dir_entry[pos].name);
 
-			add_sort_type_info(view, view->curr_line, pos, 1);
-		}
-		else
-		{
-			int x;
-			snprintf(file_name, sizeof(file_name), " %s", 
-						view->dir_entry[pos].name);
-			wattrset(view->win, A_REVERSE);
-			wattron(view->win,  A_REVERSE);
-			for (x = strlen(file_name); x < view->window_width; x++)
-				file_name[x] = ' ';
-			file_name[view->window_width] = ' ';
-			file_name[view->window_width +1] = '\0';
-			mvwaddstr(view->win, view->curr_line, 0, file_name);
-			wattroff(view->win, A_REVERSE);
+	mvwaddstr(view->win, view->curr_line, 1, file_name);
+	add_sort_type_info(view, view->curr_line, pos, 1);
 
-			add_sort_type_info(view, view->curr_line, pos, 1);
-		}
-	}
+	if(curr_stats.view)
+		quick_view_file(view);
+
 }
 
 

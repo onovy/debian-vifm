@@ -1,8 +1,0 @@
-#!/bin/sh
-
-screen -X eval \
-"focus bottom" \
-split \
-"focus bottom" \
-"screen -t $* screen-run-program-in-region $*"
-

@@ -71,8 +71,6 @@ binary-arch: build
 	$(INSTALL) vifm.1 $(MANDIR)
 	$(INSTALL) pauseme.1 $(MANDIR)/vifm-pauseme.1
 	gzip -9fqr $(MANDIR)/
-	#$(INSTALLSCRIPT) debian/prerm $(DESTDIR)/DEBIAN/prerm
-	$(INSTALLSCRIPT) debian/postinst $(DESTDIR)/DEBIAN/postinst
 	dpkg-shlibdeps $(BINDIR)/$(PACKAGE)
 	dpkg-gencontrol -isp -P$(DESTDIR)
 	dpkg --build $(DESTDIR) ..

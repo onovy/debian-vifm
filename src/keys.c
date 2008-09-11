@@ -26,6 +26,7 @@
 
 #include "background.h"
 #include "bookmarks.h"
+#include "color_scheme.h"
 #include "commands.h"
 #include "config.h"
 #include "file_info.h"
@@ -106,7 +107,7 @@ check_if_filelists_have_changed(FileView *view)
 	if(s.st_mtime  != view->dir_mtime)
 		reload_window(view);
 
-	if (curr_stats.number_of_windows != 1)
+	if (curr_stats.number_of_windows != 1 && curr_stats.view != 1)
 	{
 		stat(other_view->curr_dir, &s);
 		if(s.st_mtime != other_view->dir_mtime)
@@ -149,7 +150,6 @@ rename_file(FileView *view)
 	len = strlen(filename);
 	wmove(view->win, view->curr_line, strlen(filename) + 1);
 
-//	wmove(view->win, view->curr_line, 1);
 	curs_set(1);
 
   while(!done)
@@ -586,6 +586,20 @@ change_window(FileView **view)
 		wnoutrefresh(other_view->title);
 	}
 
+	if (curr_stats.view)
+	{
+
+		wbkgdset(curr_view->title,
+			   	COLOR_PAIR(BORDER_COLOR + curr_view->color_scheme));
+		wbkgdset(curr_view->win,
+			   	COLOR_PAIR(WIN_COLOR + curr_view->color_scheme));
+		change_directory(other_view, other_view->curr_dir);
+		load_dir_list(other_view, 0);
+		change_directory(curr_view, curr_view->curr_dir);
+		load_dir_list(curr_view, 0);
+
+	}
+
 	wattron(curr_view->title, A_BOLD);
 	werase(curr_view->title);
 	wprintw(curr_view->title,  "%s", curr_view->curr_dir);
@@ -605,6 +619,8 @@ change_window(FileView **view)
 	
 	if (curr_stats.number_of_windows == 1)
 		update_all_windows();
+
+
 }
 
 static void

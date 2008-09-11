@@ -64,7 +64,7 @@ binary-arch: build
 	$(INSTALL) debian/changelog $(DOCDIR)/changelog.Debian
 	gzip -9frq $(DOCDIR)/
 	$(INSTALL) debian/copyright debian/README.Debian $(DOCDIR)
-	$(INSTALL) src/vifm-0.2.help.txt src/vifmrc0.2 $(DOCDIR)/examples
+	$(INSTALL) src/vifm-help.txt src/vifmrc $(DOCDIR)/examples
 	$(INSTALL) src/vifm.txt $(ADDDIR)/doc
 	$(INSTALL) src/vifm.vim $(ADDDIR)/plugin
 	$(INSTALL) debian/vim-vifm.yaml $(REGDIR)
