@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,63 +14,81 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
 #ifndef __UI_H__
 #define __UI_H__
 
-#define VERSION 0.4
-
-#include<limits.h> /*  PATH_MAX */
-#include<ncurses.h>
-#include<stdlib.h> /* off_t mode_t... */
-#include<sys/types.h>
-/* For Solaris */
-#ifndef NAME_MAX
-#	include<dirent.h>
-#	define NAME_MAX MAXNAMLEN
+#ifdef _WIN32
+#include <windows.h>
 #endif
 
-enum {
-	SORT_BY_EXTENSION,
+#include <regex.h>
+
+#include <limits.h> /* PATH_MAX */
+#include <curses.h>
+#include <stdint.h> /* uint64_t */
+#include <stdlib.h> /* off_t mode_t... */
+#include <inttypes.h> /* uintmax_t */
+#include <sys/types.h>
+#include <unistd.h>
+
+#include "color_scheme.h"
+#include "column_view.h"
+#include "status.h"
+#include "types.h"
+
+#define MIN_TERM_HEIGHT 10
+#define MIN_TERM_WIDTH 30
+
+#define SORT_WIN_WIDTH 32
+
+enum
+{
+	SORT_BY_EXTENSION = 1,
 	SORT_BY_NAME,
+#ifndef _WIN32
 	SORT_BY_GROUP_ID,
 	SORT_BY_GROUP_NAME,
 	SORT_BY_MODE,
 	SORT_BY_OWNER_ID,
 	SORT_BY_OWNER_NAME,
+#endif
 	SORT_BY_SIZE,
 	SORT_BY_TIME_ACCESSED,
 	SORT_BY_TIME_CHANGED,
-	SORT_BY_TIME_MODIFIED
+	SORT_BY_TIME_MODIFIED,
+	SORT_BY_INAME,
+	NUM_SORT_OPTIONS = SORT_BY_INAME
 };
 
 typedef struct
 {
-	char dir[PATH_MAX];
-	char file[NAME_MAX];;
+	int rel_pos;
+	char *dir;
+	char *file;
 }history_t;
 
-
-typedef struct 
+typedef struct
 {
 	char *name;
-	int size;
-	mode_t mode;
+	uint64_t size;
+#ifndef _WIN32
 	uid_t uid;
 	gid_t gid;
+	mode_t mode;
+#else
+	DWORD attrs;
+#endif
 	time_t mtime;
 	time_t atime;
 	time_t ctime;
-	char *owner;
-	char *group;
 	char date[16];
-	char type;
+	FileType type;
 	int selected;
-	char executable;
-	int list_num;
-	char ext[24];
+	int search_match;
+	int list_num; /* to be used by sorting comparer to perform stable sort */
 }dir_entry_t;
 
 typedef struct _FileView
@@ -77,30 +96,63 @@ typedef struct _FileView
 	WINDOW *win;
 	WINDOW *title;
 	char curr_dir[PATH_MAX];
+#ifndef _WIN32
+#ifdef HAVE_STRUCT_STAT_ST_MTIM
+	struct timespec dir_mtime;
+#else
 	time_t dir_mtime;
+#endif
+#else
+	FILETIME dir_mtime;
+	HANDLE dir_watcher;
+	char watched_dir[PATH_MAX];
+#endif
 	char last_dir[PATH_MAX];
-	char regexp[256]; /* regular expression pattern for / searching */
-	char * prev_filter;
-	char * filename_filter; /* regexp for filtering files in dir list */ 
-	char sort_type;
+
+	char regexp[256]; /* regular expression pattern for / and ? searching */
+	int matches;
+
 	int hide_dot;
 	int prev_invert;
-	int history_num;
-	bool invert; /* whether to invert the filename pattern */
+	int invert; /* whether to invert the filename pattern */
 	int curr_line; /* current line # of the window  */
 	int top_line; /* # of the list position that is the top line in window */
 	int list_pos; /* actual position in the file list */
 	int list_rows; /* size of the file list */
 	int window_rows; /* number of rows shown in window */
-	int window_width;
+	unsigned int window_width;
 	int filtered;  /* number of files filtered out and not shown in list */
 	int selected_files;
 	int color_scheme; /* current color scheme being used */
 	dir_entry_t *dir_entry;
-	history_t history[15];
 	char ** selected_filelist;
-}FileView;
+	int nsaved_selection;
+	char ** saved_selection;
+	int user_selection;
+	int explore_mode; /* shows whether this view is used for file exploring */
 
+	char *filename_filter; /* regexp for filtering files in dir list, not NULL */
+	char *prev_filter; /* for remove/restore with filename_filter, not NULL */
+	int filter_is_valid;
+	regex_t filter_regex;
+
+	char sort[NUM_SORT_OPTIONS];
+
+	int history_num;
+	int history_pos;
+	history_t *history;
+
+	col_scheme_t cs;
+
+	columns_t columns; /* handle for column_view unit */
+	char *view_columns; /* format string of columns */
+
+	/* ls-like view related fields */
+	int ls_view; /* non-zero if ls-like view is enabled */
+	size_t max_filename_len; /* max length of filename in current directory */
+	size_t column_count; /* number of columns in the view, used for list view */
+	size_t window_cells; /* max number of files that can be displayed */
+}FileView;
 
 FileView lwin;
 FileView rwin;
@@ -110,19 +162,48 @@ FileView *curr_view;
 WINDOW *status_bar;
 WINDOW *stat_win;
 WINDOW *pos_win;
-WINDOW *num_win;
+WINDOW *input_win;
 WINDOW *menu_win;
 WINDOW *sort_win;
 WINDOW *change_win;
 WINDOW *error_win;
+WINDOW *top_line;
+
 WINDOW *lborder;
 WINDOW *mborder;
 WINDOW *rborder;
 
-int setup_ncurses_interface();
-void status_bar_message(char *message);
+void is_term_working(void);
+int setup_ncurses_interface(void);
 void update_stat_window(FileView *view);
-void redraw_window();
-void write_stat_win(char *message);
+float get_splitter_pos(int max);
+/* Redraws whole screen with possible reloading of file lists (depends on
+ * argument). */
+void update_screen(UpdateType update_kind);
 void update_pos_window(FileView *view);
+void status_bar_messagef(const char *format, ...);
+void status_bar_message(const char *message);
+void status_bar_error(const char *message);
+void status_bar_errorf(const char *message, ...);
+int is_status_bar_multiline(void);
+void clean_status_bar(void);
+void change_window(void);
+void update_all_windows(void);
+void update_input_bar(const wchar_t *str);
+void clear_num_window(void);
+void show_progress(const char *msg, int period);
+void redraw_lists(void);
+int load_color_scheme(const char *name);
+void wprint(WINDOW *win, const char *str);
+/* Sets inner flag or signals about needed view update in some other way.
+ * It doesn't perform any update, just request one to happen in the future. */
+void request_view_update(FileView *view);
+/* Performs resizing of some of TUI elements for menu like modes. */
+void resize_for_menu_like(void);
+/* Performs real pane redraw in the TUI and maybe some related operations. */
+void refresh_view_win(FileView *view);
+
 #endif
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

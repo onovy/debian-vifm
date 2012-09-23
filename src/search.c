@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,20 +14,25 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#if(defined(BSD) && (BSD>=199103)) 
-	#include<sys/types.h> /* required for regex.h on FreeBSD 4.2 */
-#endif
-#include<sys/types.h>
+#include <sys/types.h>
 
-#include<ncurses.h>
-#include<regex.h>
+#include <curses.h>
+#include <regex.h>
 
-#include"filelist.h"
-#include"keys.h"
-#include"ui.h"
+#include <string.h>
+
+#include "cfg/config.h"
+#include "utils/fs_limits.h"
+#include "utils/path.h"
+#include "utils/str.h"
+#include "utils/utils.h"
+#include "filelist.h"
+#include "ui.h"
+
+#include "search.h"
 
 enum
 {
@@ -40,11 +46,11 @@ find_next_pattern_match(FileView *view, int start, int direction)
 	int found = 0;
 	int x;
 
-	if(direction == 	PREVIOUS)
+	if(direction == PREVIOUS)
 	{
-		for(x = start -1; x > 0; x--)
+		for(x = start - 1; x > 0; x--)
 		{
-			if(view->dir_entry[x].selected)
+			if(view->dir_entry[x].search_match)
 			{
 				found = 1;
 				view->list_pos = x;
@@ -54,9 +60,9 @@ find_next_pattern_match(FileView *view, int start, int direction)
 	}
 	else if(direction == NEXT)
 	{
-		for(x = start +1; x < view->list_rows; x++)
+		for(x = start + 1; x < view->list_rows; x++)
 		{
-			if(view->dir_entry[x].selected)
+			if(view->dir_entry[x].search_match)
 			{
 				found = 1;
 				view->list_pos = x;
@@ -67,75 +73,137 @@ find_next_pattern_match(FileView *view, int start, int direction)
 	return found;
 }
 
-void
-find_previous_pattern(FileView *view)
+/* returns non-zero if pattern was found */
+int
+find_previous_pattern(FileView *view, int wrap)
 {
 	if(find_next_pattern_match(view, view->list_pos, PREVIOUS))
-		moveto_list_pos(view, view->list_pos);
-	else if(find_next_pattern_match(view, view->list_rows, PREVIOUS))
-		moveto_list_pos(view, view->list_pos);
-
+		move_to_list_pos(view, view->list_pos);
+	else if(wrap && find_next_pattern_match(view, view->list_rows, PREVIOUS))
+		move_to_list_pos(view, view->list_pos);
+	else
+		return 0;
+	return 1;
 }
 
-void
-find_next_pattern(FileView *view)
+/* returns non-zero if pattern was found */
+int
+find_next_pattern(FileView *view, int wrap)
 {
 	if(find_next_pattern_match(view, view->list_pos, NEXT))
-		moveto_list_pos(view, view->list_pos);
-	else if(find_next_pattern_match(view, 0, NEXT))
-		moveto_list_pos(view, view->list_pos);
+		move_to_list_pos(view, view->list_pos);
+	else if(wrap && find_next_pattern_match(view, 0, NEXT))
+		move_to_list_pos(view, view->list_pos);
+	else
+		return 0;
+	return 1;
 }
 
 int
-find_pattern(FileView *view, char *pattern)
+find_pattern(FileView *view, const char *pattern, int backward, int move)
 {
+	int cflags;
 	int found = 0;
 	regex_t re;
 	int x;
-	int first_match = 0;
-	int first_match_pos = 0;
+	int err;
 
-	view->selected_files = 0;
-
+	if(move)
+		clean_selected_files(view);
 	for(x = 0; x < view->list_rows; x++)
+		view->dir_entry[x].search_match = 0;
+
+	if(pattern[0] == '\0')
+		return 0;
+
+	cflags = get_regexp_cflags(pattern);
+	if((err = regcomp(&re, pattern, cflags)) == 0)
 	{
-		if(regcomp(&re, pattern, REG_EXTENDED) == 0)
+		if(pattern != view->regexp)
+			snprintf(view->regexp, sizeof(view->regexp), "%s", pattern);
+
+		for(x = 0; x < view->list_rows; x++)
 		{
-			if(regexec(&re, view->dir_entry[x].name, 0, NULL, 0) == 0)
+			char buf[NAME_MAX];
+
+			if(stroscmp(view->dir_entry[x].name, "../") == 0)
+				continue;
+
+			strncpy(buf, view->dir_entry[x].name, sizeof(buf));
+			chosp(buf);
+			if(regexec(&re, buf, 0, NULL, 0) != 0)
+				continue;
+
+			view->dir_entry[x].search_match = 1;
+			if(cfg.hl_search)
 			{
-				if(!first_match)
-				{
-					first_match++;
-					first_match_pos = x;
-				}
 				view->dir_entry[x].selected = 1;
 				view->selected_files++;
-				found++;
 			}
-			else
-				view->dir_entry[x].selected = 0;
+			found++;
 		}
 		regfree(&re);
 	}
-
+	else
+	{
+		status_bar_errorf("Regexp error: %s", get_regexp_error(err, &re));
+		regfree(&re);
+		return 1;
+	}
 
 	/* Need to redraw the list so that the matching files are highlighted */
-	draw_dir_list(view, view->top_line, view->curr_line);
+	draw_dir_list(view);
 
-	if(found)
+	if(found > 0)
 	{
-		draw_dir_list(view, view->top_line, view->curr_line);
-		moveto_list_pos(view, first_match_pos);
+		int was_found = 1;
+		if(move)
+		{
+			if(backward)
+				was_found = find_previous_pattern(view, cfg.wrap_scan);
+			else
+				was_found = find_next_pattern(view, cfg.wrap_scan);
+		}
+		if(!cfg.hl_search)
+		{
+			view->matches = found;
+
+			if(!was_found)
+			{
+				print_search_fail_msg(view, backward);
+				return 1;
+			}
+
+			status_bar_messagef("%d matching file%s for: %s", found,
+					(found == 1) ? "" : "s", view->regexp);
+			return 1;
+		}
 		return 0;
 	}
 	else
 	{
-		char buf[48];
-		moveto_list_pos(view, view->list_pos);
-		snprintf(buf, sizeof(buf), "No matching files for %s", view->regexp);
-		status_bar_message(buf);
+		move_to_list_pos(view, view->list_pos);
+		print_search_fail_msg(view, backward);
 		return 1;
 	}
 }
 
+void
+print_search_fail_msg(FileView *view, int backward)
+{
+	if(!cfg.wrap_scan)
+	{
+		if(backward)
+			status_bar_errorf("Search hit TOP without match for: %s", view->regexp);
+		else
+			status_bar_errorf("Search hit BOTTOM without match for: %s",
+					view->regexp);
+	}
+	else
+	{
+		status_bar_errorf("No matching files for: %s", view->regexp);
+	}
+}
 
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

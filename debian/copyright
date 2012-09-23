@@ -1,20 +1,32 @@
-This package was debianized by Edelhard Becker <becker@edelhard.de> on
-Tue, 27 Aug 2002 19:19:28 +0200.
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: vifm
+Upstream-Contact: <xaizek@lavabit.com>
+Source: http://vifm.sourceforge.net/
 
-It was downloaded from http://vifm.sourceforge.net/
+Files: *
+Copyright: Ken Steen <ksteen@users.sourceforge.net>
+License: GPL-2+
+Comment: Some code has been taken from external sources, see AUTHORS file.
 
-Upstream Author: ksteen@users.sourceforge.net.
-  The pauseme script is from the tkdesk program.
-  Some of the code is from emelfm by Michael Clark.
-  The file sorting function is from the git program by Tudor Hulubei 
-      and Andrei Pitis.  
-  A patch for filetypes detection was written by Stefan Walter.
+Files: debian/*
+Copyright:  2012 Hendrik Jaeger <deb@henk.geekmail.org>
+            2002-2011 Edelhard Becker <becker@edelhard.de>
+License: GPL-2+
 
-Copyright:
-  This software is copyright (c) by Ken Steen.
-
-  You are free to distribute this software under the terms of
-  the GNU General Public License.
-  On Debian systems, the complete text of the GNU General Public
-  License can be found in the file `/usr/share/common-licenses/GPL'.
+License: GPL-2+
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
 

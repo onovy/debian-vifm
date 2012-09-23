@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,46 +14,85 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
 #ifndef __COLOR_SCHEME_H__
 #define __COLOR_SCHEME_H__
 
-#include<limits.h>
-#define MAXNUM_COLOR 12
+#include <limits.h> /* NAME_MAX PATH_MAX */
 
-#define MENU_COLOR 0
-#define BORDER_COLOR 1
-#define WIN_COLOR 2
-#define	STATUS_BAR_COLOR 3
-#define CURR_LINE_COLOR 4
-#define DIRECTORY_COLOR 5
-#define LINK_COLOR 6
-#define SOCKET_COLOR 7
-#define DEVICE_COLOR 8
-#define EXECUTABLE_COLOR 9
-#define SELECTED_COLOR 10
-#define CURRENT_COLOR 11
+#ifdef _WIN32
+#include "utils/utils.h"
+#endif
+#include "utils/fs_limits.h"
 
-typedef struct _Col_attr {
-	int name;
+#define MAX_COLOR_SCHEMES 8
+
+enum
+{
+	WIN_COLOR,
+	DIRECTORY_COLOR,
+	LINK_COLOR,
+	BROKEN_LINK_COLOR,
+	SOCKET_COLOR,
+	DEVICE_COLOR,
+	FIFO_COLOR,
+	EXECUTABLE_COLOR,
+	SELECTED_COLOR,
+	CURR_LINE_COLOR,
+	TOP_LINE_COLOR,
+	TOP_LINE_SEL_COLOR,
+	STATUS_LINE_COLOR,
+	MENU_COLOR,
+	CMD_LINE_COLOR,
+	ERROR_MSG_COLOR,
+	BORDER_COLOR,
+	CURRENT_COLOR,      /* for internal use only */
+	MENU_CURRENT_COLOR, /* for internal use only */
+	MAXNUM_COLOR
+};
+
+enum
+{
+	DCOLOR_BASE = 1,
+	LCOLOR_BASE = DCOLOR_BASE + MAXNUM_COLOR,
+	RCOLOR_BASE = LCOLOR_BASE + MAXNUM_COLOR,
+};
+
+typedef struct
+{
 	int fg;
 	int bg;
-} Col_attr;
+	int attr;
+}col_attr_t;
 
-
-typedef struct _Col_Scheme {
+typedef struct
+{
 	char name[NAME_MAX];
 	char dir[PATH_MAX];
-	Col_attr color[12];
-} Col_scheme;
+	int defaulted;
+	col_attr_t color[MAXNUM_COLOR];
+}col_scheme_t;
 
-extern Col_scheme col_schemes[8];;
+extern char *HI_GROUPS[];
+extern char *COLOR_NAMES[8];
+extern char *LIGHT_COLOR_NAMES[8];
 
-void read_color_scheme_file();
-void write_color_scheme_file();
-int check_directory_for_color_scheme(const char *);
-void load_color_scheme(char  *name, char *dir);
+/* directory should be NULL if you want to set default directory */
+void load_color_scheme_colors(void);
+void load_def_scheme(void);
+int check_directory_for_color_scheme(int left, const char *dir);
+/* Returns value lower than zero when nothing is found */
+int find_color_scheme(const char *name);
+void complete_colorschemes(const char *name);
+const char * attrs_to_str(int attrs);
+void check_color_scheme(col_scheme_t *cs);
+void assoc_dir(const char *name, const char *dir);
+void write_color_scheme_file(void);
+void mix_colors(col_attr_t *base, const col_attr_t *mixup);
 
 #endif
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

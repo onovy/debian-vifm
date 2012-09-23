@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,485 +14,447 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include<stdio.h>
-#include<string.h>
-#include<limits.h>
-#include<ctype.h>
+#include <curses.h>
 
+#include <dirent.h> /* DIR */
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <ctype.h>
+#include <limits.h> /* PATH_MAX */
+#include <stdio.h>
+#include <string.h>
+
+#include "cfg/config.h"
+#include "engine/completion.h"
+#include "menus/menus.h"
+#include "utils/fs.h"
+#include "utils/macros.h"
+#include "utils/str.h"
+#include "utils/tree.h"
 #include "color_scheme.h"
-#include "config.h"
-#include "utils.h"
+#include "filelist.h"
+#include "status.h"
 
-#define MAX_LEN 1024
+char *HI_GROUPS[] = {
+	[WIN_COLOR]          = "Win",
+	[DIRECTORY_COLOR]    = "Directory",
+	[LINK_COLOR]         = "Link",
+	[BROKEN_LINK_COLOR]  = "BrokenLink",
+	[SOCKET_COLOR]       = "Socket",
+	[DEVICE_COLOR]       = "Device",
+	[FIFO_COLOR]         = "Fifo",
+	[EXECUTABLE_COLOR]   = "Executable",
+	[SELECTED_COLOR]     = "Selected",
+	[CURR_LINE_COLOR]    = "CurrLine",
+	[TOP_LINE_COLOR]     = "TopLine",
+	[TOP_LINE_SEL_COLOR] = "TopLineSel",
+	[STATUS_LINE_COLOR]  = "StatusLine",
+	[MENU_COLOR]         = "WildMenu",
+	[CMD_LINE_COLOR]     = "CmdLine",
+	[ERROR_MSG_COLOR]    = "ErrorMsg",
+	[BORDER_COLOR]       = "Border",
+};
+ARRAY_GUARD(HI_GROUPS, MAXNUM_COLOR - 2);
+
+char *COLOR_NAMES[8] = {
+	[COLOR_BLACK]   = "black",
+	[COLOR_RED]     = "red",
+	[COLOR_GREEN]   = "green",
+	[COLOR_YELLOW]  = "yellow",
+	[COLOR_BLUE]    = "blue",
+	[COLOR_MAGENTA] = "magenta",
+	[COLOR_CYAN]    = "cyan",
+	[COLOR_WHITE]   = "white",
+};
+
+char *LIGHT_COLOR_NAMES[8] = {
+	[COLOR_BLACK]   = "lightblack",
+	[COLOR_RED]     = "lightred",
+	[COLOR_GREEN]   = "lightgreen",
+	[COLOR_YELLOW]  = "lightyellow",
+	[COLOR_BLUE]    = "lightblue",
+	[COLOR_MAGENTA] = "lightmagenta",
+	[COLOR_CYAN]    = "lightcyan",
+	[COLOR_WHITE]   = "lightwhite",
+};
+
+static const int default_colors[][3] = {
+	                      /* fg             bg           attr */
+	[WIN_COLOR]          = { COLOR_WHITE,   COLOR_BLACK, 0                       },
+	[DIRECTORY_COLOR]    = { COLOR_CYAN,    -1,          A_BOLD                  },
+	[LINK_COLOR]         = { COLOR_YELLOW,  -1,          A_BOLD                  },
+	[BROKEN_LINK_COLOR]  = { COLOR_RED,     -1,          A_BOLD                  },
+	[SOCKET_COLOR]       = { COLOR_MAGENTA, -1,          A_BOLD                  },
+	[DEVICE_COLOR]       = { COLOR_RED,     -1,          A_BOLD                  },
+	[FIFO_COLOR]         = { COLOR_CYAN,    -1,          A_BOLD                  },
+	[EXECUTABLE_COLOR]   = { COLOR_GREEN,   -1,          A_BOLD                  },
+	[SELECTED_COLOR]     = { COLOR_MAGENTA, -1,          A_BOLD                  },
+	[CURR_LINE_COLOR]    = { -1,            COLOR_BLUE,  A_BOLD                  },
+	[TOP_LINE_COLOR]     = { COLOR_BLACK,   COLOR_WHITE, 0                       },
+	[TOP_LINE_SEL_COLOR] = { COLOR_BLACK,   -1,          A_BOLD                  },
+	[STATUS_LINE_COLOR]  = { COLOR_BLACK,   COLOR_WHITE, A_BOLD                  },
+	[MENU_COLOR]         = { COLOR_WHITE,   COLOR_BLACK, A_UNDERLINE | A_REVERSE },
+	[CMD_LINE_COLOR]     = { COLOR_WHITE,   COLOR_BLACK, 0                       },
+	[ERROR_MSG_COLOR]    = { COLOR_RED,     COLOR_BLACK, 0                       },
+	[BORDER_COLOR]       = { COLOR_BLACK,   COLOR_WHITE, 0                       },
+};
+ARRAY_GUARD(default_colors, MAXNUM_COLOR - 2);
+
+static void init_color_scheme(col_scheme_t *cs);
+static void load_color_pairs(int base, const col_scheme_t *cs);
+static void ensure_dirs_tree_exists(void);
+
+static tree_t dirs = NULL_TREE;
 
 void
-verify_color_schemes()
+check_color_scheme(col_scheme_t *cs)
 {
+	int i;
 
+	if(cs->defaulted >= 0)
+		return;
+
+	cs->defaulted = 1;
+	for(i = 0; i < ARRAY_LEN(default_colors); i++)
+	{
+		cs->color[i].fg = default_colors[i][0];
+		cs->color[i].bg = default_colors[i][1];
+		cs->color[i].attr = default_colors[i][2];
+	}
+}
+
+int
+find_color_scheme(const char *name)
+{
+	char colors_dir[PATH_MAX];
+	DIR *dir;
+	struct dirent *d;
+
+	if(name[0] == '\0')
+		return 0;
+
+	snprintf(colors_dir, sizeof(colors_dir), "%s/colors", cfg.config_dir);
+
+	dir = opendir(colors_dir);
+	if(dir == NULL)
+		return 0;
+
+	while((d = readdir(dir)) != NULL)
+	{
+#ifndef _WIN32
+		if(d->d_type != DT_REG && d->d_type != DT_LNK)
+			continue;
+#endif
+
+		if(d->d_name[0] == '.')
+			continue;
+
+		if(stroscmp(d->d_name, name) == 0)
+		{
+			closedir(dir);
+			return 1;
+		}
+	}
+	closedir(dir);
+
+	return 0;
+}
+
+/* This function is called only when colorschemes file doesn't exist */
+void
+write_color_scheme_file(void)
+{
+	FILE *fp;
+	char colors_dir[PATH_MAX];
+	int y;
+
+	snprintf(colors_dir, sizeof(colors_dir), "%s/colors", cfg.config_dir);
+	if(make_dir(colors_dir, 0777) != 0)
+		return;
+
+	strncat(colors_dir, "/Default", sizeof(colors_dir) - strlen(colors_dir) - 1);
+	if((fp = fopen(colors_dir, "w")) == NULL)
+		return;
+
+	fprintf(fp, "\" You can edit this file by hand.\n");
+	fprintf(fp, "\" The \" character at the beginning of a line comments out the line.\n");
+	fprintf(fp, "\" Blank lines are ignored.\n\n");
+
+	fprintf(fp, "\" The Default color scheme is used for any directory that does not have\n");
+	fprintf(fp, "\" a specified scheme and for parts of user interface like menus. A\n");
+	fprintf(fp, "\" color scheme set for a base directory will also\n");
+	fprintf(fp, "\" be used for the sub directories.\n\n");
+
+	fprintf(fp, "\" The standard ncurses colors are:\n");
+	fprintf(fp, "\" Default = -1 = None, can be used for transparency or default color\n");
+	fprintf(fp, "\" Black = 0\n");
+	fprintf(fp, "\" Red = 1\n");
+	fprintf(fp, "\" Green = 2\n");
+	fprintf(fp, "\" Yellow = 3\n");
+	fprintf(fp, "\" Blue = 4\n");
+	fprintf(fp, "\" Magenta = 5\n");
+	fprintf(fp, "\" Cyan = 6\n");
+	fprintf(fp, "\" White = 7\n\n");
+
+	fprintf(fp, "\" Light versions of colors are also available (set bold attribute):\n");
+	fprintf(fp, "\" LightBlack\n");
+	fprintf(fp, "\" LightRed\n");
+	fprintf(fp, "\" LightGreen\n");
+	fprintf(fp, "\" LightYellow\n");
+	fprintf(fp, "\" LightBlue\n");
+	fprintf(fp, "\" LightMagenta\n");
+	fprintf(fp, "\" LightCyan\n");
+	fprintf(fp, "\" LightWhite\n\n");
+
+	fprintf(fp, "\" Available attributes (some of them can be combined):\n");
+	fprintf(fp, "\" bold\n");
+	fprintf(fp, "\" underline\n");
+	fprintf(fp, "\" reverse or inverse\n");
+	fprintf(fp, "\" standout\n");
+	fprintf(fp, "\" none\n\n");
+
+	fprintf(fp, "\" Vifm supports 256 colors you can use color numbers 0-255\n");
+	fprintf(fp, "\" (requires properly set up terminal: set your TERM environment variable\n");
+	fprintf(fp, "\" (directly or using resources) to some color terminal name (e.g.\n");
+	fprintf(fp, "\" xterm-256color) from /usr/lib/terminfo/; you can check current number\n");
+	fprintf(fp, "\" of colors in your terminal with tput colors command)\n\n");
+
+	fprintf(fp, "\" highlight group cterm=attrs ctermfg=foreground_color ctermbg=background_color\n\n");
+
+	for(y = 0; y < MAXNUM_COLOR - 2; y++)
+	{
+		char fg_buf[16], bg_buf[16];
+		int fg = cfg.cs.color[y].fg;
+		int bg = cfg.cs.color[y].bg;
+
+		if(fg == -1)
+			strcpy(fg_buf, "default");
+		else if(fg < ARRAY_LEN(COLOR_NAMES))
+			strcpy(fg_buf, COLOR_NAMES[fg]);
+		else
+			snprintf(fg_buf, sizeof(fg_buf), "%d", fg);
+
+		if(bg == -1)
+			strcpy(bg_buf, "default");
+		else if(bg < ARRAY_LEN(COLOR_NAMES))
+			strcpy(bg_buf, COLOR_NAMES[bg]);
+		else
+			snprintf(bg_buf, sizeof(bg_buf), "%d", bg);
+
+		fprintf(fp, "highlight %s cterm=%s ctermfg=%s ctermbg=%s\n", HI_GROUPS[y],
+				attrs_to_str(cfg.cs.color[y].attr), fg_buf, bg_buf);
+	}
+
+	fclose(fp);
 }
 
 void
-load_color_scheme(char *name, char *dir)
+load_color_scheme_colors(void)
 {
+	ensure_dirs_tree_exists();
 
+	load_color_pairs(DCOLOR_BASE, &cfg.cs);
+	load_color_pairs(LCOLOR_BASE, &lwin.cs);
+	load_color_pairs(RCOLOR_BASE, &rwin.cs);
+}
 
+void
+load_def_scheme(void)
+{
+	tree_free(dirs);
+	dirs = NULL_TREE;
+
+	init_color_scheme(&cfg.cs);
+	init_color_scheme(&lwin.cs);
+	lwin.color_scheme = LCOLOR_BASE;
+	init_color_scheme(&rwin.cs);
+	rwin.color_scheme = RCOLOR_BASE;
+
+	load_color_pairs(DCOLOR_BASE, &cfg.cs);
+	load_color_pairs(LCOLOR_BASE, &lwin.cs);
+	load_color_pairs(RCOLOR_BASE, &rwin.cs);
 }
 
 static void
-load_default_colors()
+init_color_scheme(col_scheme_t *cs)
 {
+	int i;
+	snprintf(cs->name, sizeof(cs->name), "%s", "built-in default");
+	snprintf(cs->dir, sizeof(cs->dir), "%s", "/");
+	cs->defaulted = 0;
 
-	snprintf(col_schemes[0].name, PATH_MAX, "Default");
-	snprintf(col_schemes[0].dir, PATH_MAX, "/");
-
-	col_schemes[0].color[0].name = MENU_COLOR;
-	col_schemes[0].color[0].fg = 7;
-	col_schemes[0].color[0].bg = 0;
-
-	col_schemes[0].color[1].name = BORDER_COLOR;
-	col_schemes[0].color[1].fg = 0;
-	col_schemes[0].color[1].bg = 7;
-
-	col_schemes[0].color[2].name = WIN_COLOR;
-	col_schemes[0].color[2].fg = 7;
-	col_schemes[0].color[2].bg = 0;
-
-	col_schemes[0].color[3].name = STATUS_BAR_COLOR;
-	col_schemes[0].color[3].fg = 7;
-	col_schemes[0].color[3].bg = 0;
-
-	col_schemes[0].color[4].name = CURR_LINE_COLOR;
-	col_schemes[0].color[4].fg = 7;
-	col_schemes[0].color[4].bg = 4;
-
-	col_schemes[0].color[5].name = DIRECTORY_COLOR;
-	col_schemes[0].color[5].fg = 6;
-	col_schemes[0].color[5].bg = 0;
-
-	col_schemes[0].color[6].name = LINK_COLOR;
-	col_schemes[0].color[6].fg = 3;
-	col_schemes[0].color[6].bg = 0;
-
-	col_schemes[0].color[7].name = SOCKET_COLOR;
-	col_schemes[0].color[7].fg = 5;
-	col_schemes[0].color[7].bg = 0;
-
-	col_schemes[0].color[8].name = DEVICE_COLOR;
-	col_schemes[0].color[8].fg = 1;
-	col_schemes[0].color[8].bg = 0;
-
-	col_schemes[0].color[9].name = EXECUTABLE_COLOR;
-	col_schemes[0].color[9].fg = 2;
-	col_schemes[0].color[9].bg = 0;
-
-	col_schemes[0].color[10].name = SELECTED_COLOR;
-	col_schemes[0].color[10].fg = 5;
-	col_schemes[0].color[10].bg = 0;
-
-	col_schemes[0].color[11].name = CURRENT_COLOR;
-	col_schemes[0].color[11].fg = 4;
-	col_schemes[0].color[11].bg = 0;
-
-
-}
-
-
-/*
- * convert possible <color_name> to <int>
- */
-static int
-colname2int(char col[])
-{
- /* test if col[] is a number... */
-	 if (isdigit(col[0]))
-	   return atoi(col);
-
- /* otherwise convert */
- if(!strcmp(col, "black"))
-   return 0;
- if(!strcmp(col, "red"))
-   return 1;
- if(!strcmp(col, "green"))
-   return 2;
- if(!strcmp(col, "yellow"))
-   return 3;
- if(!strcmp(col, "blue"))
-   return 4;
- if(!strcmp(col, "magenta"))
-   return 5;
- if(!strcmp(col, "cyan"))
-   return 6;
- if(!strcmp(col, "white"))
-   return 7;
- /* return default color */
- return -1;
-}
-
-/*
- * add color
- */
-void
-add_color(char s1[], char s2[], char s3[])
-{
- 	int fg, bg;
-	int scheme = 0;
-	int x = cfg.color_scheme_num -1;
-	int y = cfg.color_pairs_num;
-
-	fg = colname2int(s2);
-	bg = colname2int(s3);
-
-	if(y > 11)
-		y =  (y % 12);
-
-	scheme = ((cfg.color_scheme_num - 1) * 12);
-
-
-	if(!strcmp(s1, "MENU"))
-		col_schemes[x].color[y].name = 0 + scheme;
-
-	if(!strcmp(s1, "BORDER"))
-		col_schemes[x].color[y].name = 1 + scheme;
-
-	if(!strcmp(s1, "WIN"))
-		col_schemes[x].color[y].name = 2 + scheme;
-
-	if(!strcmp(s1, "STATUS_BAR"))
-		col_schemes[x].color[y].name = 3 + scheme;
-
-	if(!strcmp(s1, "CURR_LINE"))
-		col_schemes[x].color[y].name = 4 + scheme;
-
-	if(!strcmp(s1, "DIRECTORY"))
-		col_schemes[x].color[y].name = 5 + scheme;
-
-	if(!strcmp(s1, "LINK"))
-		col_schemes[x].color[y].name = 6 + scheme;
-
-	if(!strcmp(s1, "SOCKET"))
-		col_schemes[x].color[y].name = 7 + scheme;
-
-	if(!strcmp(s1, "DEVICE"))
-		col_schemes[x].color[y].name = 8 + scheme;
-
-	if(!strcmp(s1, "EXECUTABLE"))
-		col_schemes[x].color[y].name = 9 + scheme;
-
-	if(!strcmp(s1, "SELECTED"))
-		col_schemes[x].color[y].name = 10 + scheme;
-
-	if(!strcmp(s1, "CURRENT"))
-		col_schemes[x].color[y].name = 11 + scheme;
-
-	col_schemes[x].color[y].fg = fg;
-	col_schemes[x].color[y].bg = bg;
-
-	cfg.color_pairs_num++;
-}
-
-
-void
-read_color_scheme_file()
-{
-
-	FILE *fp;
-	char config_file[PATH_MAX];
-	char line[MAX_LEN];
-	char *s1 = NULL;
-	char *s2 = NULL;
-	char *s3 = NULL;
-	char *sx = NULL;
-	int args;
-
-	snprintf(config_file, sizeof(config_file), "%s/colorschemes",
-				  cfg.config_dir);
-
-	if((fp = fopen(config_file, "r")) == NULL)
+	for(i = 0; i < ARRAY_LEN(default_colors); i++)
 	{
-		load_default_colors();
-
-		cfg.color_scheme_num++;
-		cfg.color_pairs_num = 12;
-		return;
+		cs->color[i].fg = default_colors[i][0];
+		cs->color[i].bg = default_colors[i][1];
+		cs->color[i].attr = default_colors[i][2];
 	}
-
-	while(fgets(line, MAX_LEN, fp))
+	for(i = ARRAY_LEN(default_colors); i < MAXNUM_COLOR; i++)
 	{
-		args = 0;
-
-		if(line[0] == '#')
-			continue;
-
-		if((sx = s1 = strchr(line, '=')) != NULL)
-		{
-			s1++;
-			chomp(s1);
-			*sx = '\0';
-			args = 1;
-		}
-		else
-			continue;
-		if((sx = s2 = strchr(s1, '=')) != NULL)
-		{
-			s2++;
-			chomp(s2);
-			*sx = '\0';
-			args = 2;
-		}
-		if((args == 2) && ((sx = s3 = strchr(s2, '=')) != NULL))
-		{
-			s3++;
-			chomp(s3);
-			*sx = '\0';
-			args = 3;
-		}
-
-		if(args == 1)
-		{
-			if(!strcmp(line, "COLORSCHEME"))
-			{
-
-				//check if last colorscheme is complete and pad it before starting
-				// a new scheme
-				// verify_scheme();
-
-					//col_schemes = (Col_scheme *)realloc(col_schemes,
-					//		sizeof(Col_scheme *) +1);
-
-				snprintf(col_schemes[cfg.color_scheme_num].name,
-						PATH_MAX, "%s", s1);
-
-				cfg.color_scheme_num++;
-
-				if (cfg.color_scheme_num > 8)
-					break;
-
-				continue;
-
-			}
-			if(!strcmp(line, "DIRECTORY"))
-			{
-				snprintf(col_schemes[cfg.color_scheme_num - 1].dir,
-							PATH_MAX, "%s", s1);
-
-				continue;
-			}
-		}
-		if(!strcmp(line, "COLOR") && args == 3)
-		{
-			add_color(s1, s2, s3);
-		}
-
+		cs->color[i].fg = -1;
+		cs->color[i].bg = -1;
+		cs->color[i].attr = 0;
 	}
-
-	fclose(fp);
-
-	//verify_color_schemes();
-	return;
-}
-
-void
-write_color_scheme_file()
-{
-	FILE *fp;
-	char config_file[PATH_MAX];
-	int x, y;
-	char buf[128];
-	char fg_buf[64];
-	char bg_buf[64];
-
-	snprintf(config_file, sizeof(config_file), "%s/colorschemes",
-		   	cfg.config_dir);
-
-	if((fp = fopen(config_file, "w")) == NULL)
-		return;
-
-	fprintf(fp, "# You can edit this file by hand.\n");
-	fprintf(fp, "# The # character at the beginning of a line comments out the line.\n");
-	fprintf(fp, "# Blank lines are ignored.\n\n");
-
-	fprintf(fp, "# The Default color scheme is used for any directory that does not have\n");
-	fprintf(fp, "# a specified scheme.  A color scheme set for a base directory will also\n");
-	fprintf(fp, "# be used for the sub directories.\n\n");
-
-	fprintf(fp, "# The standard ncurses colors are: \n");
-	fprintf(fp, "# Black = 0\n");
-	fprintf(fp, "# Red = 1\n");
-	fprintf(fp, "# Green = 2\n");
-	fprintf(fp, "# Yellow = 3\n");
-	fprintf(fp, "# Blue = 4\n");
-	fprintf(fp, "# Magenta = 5\n");
-	fprintf(fp, "# Cyan = 6\n");
-	fprintf(fp, "# White = 7\n\n");
-
-	fprintf(fp, "# COLORSCHEME=OneWordDescription\n");
-	fprintf(fp, "# DIRECTORY=/Full/Path/To/Base/Directory\n");
-	fprintf(fp, "# COLOR=Window_name=foreground_color_number=background_color_number\n\n");
-
-
-	for(x = 0; x < cfg.color_scheme_num; x++)
-	{
-		fprintf(fp, "\nCOLORSCHEME=%s\n", col_schemes[x].name);
-		fprintf(fp, "DIRECTORY=%s\n", col_schemes[x].dir);
-
-		for(y = 0; y < 12; y++)
-		{
-
-			while(col_schemes[x].color[y].name > 11)
-			{
-				col_schemes[x].color[y].name =
-				   	col_schemes[x].color[y].name - 12;
-			}
-
-			switch(col_schemes[x].color[y].name)
-			{
-				case 0:
-					snprintf(buf, sizeof(buf), "MENU");
-					break;
-				case 1:
-					snprintf(buf, sizeof(buf), "BORDER");
-					break;
-				case 2:
-					snprintf(buf, sizeof(buf), "WIN");
-					break;
-				case 3:
-					snprintf(buf, sizeof(buf), "STATUS_BAR");
-					break;
-				case 4:
-					snprintf(buf, sizeof(buf), "CURR_LINE");
-					break;
-				case 5:
-					snprintf(buf, sizeof(buf), "DIRECTORY");
-					break;
-				case 6:
-					snprintf(buf, sizeof(buf), "LINK");
-					break;
-				case 7:
-					snprintf(buf, sizeof(buf), "SOCKET");
-					break;
-				case 8:
-					snprintf(buf, sizeof(buf), "DEVICE");
-					break;
-				case 9:
-					snprintf(buf, sizeof(buf), "EXECUTABLE");
-					break;
-				case 10:
-					snprintf(buf, sizeof(buf), "SELECTED");
-					break;
-				case 11:
-					snprintf(buf, sizeof(buf), "CURRENT");
-					break;
-				default:
-					snprintf(buf, sizeof(buf), "# Unknown");
-					break;
-			};
-
-			switch (col_schemes[x].color[y].fg)
-			{
-				case 0:
-					snprintf(fg_buf, sizeof(fg_buf), "black");
-					break;
-				case 1:
-					snprintf(fg_buf, sizeof(fg_buf), "red");
-					break;
-				case 2:
-					snprintf(fg_buf, sizeof(fg_buf), "green");
-					break;
-				case 3:
-					snprintf(fg_buf, sizeof(fg_buf), "yellow");
-					break;
-				case 4:
-					snprintf(fg_buf, sizeof(fg_buf), "blue");
-					break;
-				case 5:
-					snprintf(fg_buf, sizeof(fg_buf), "magenta");
-					break;
-				case 6:
-					snprintf(fg_buf, sizeof(fg_buf), "cyan");
-					break;
-				case 7:
-					snprintf(fg_buf, sizeof(fg_buf), "white");
-					break;
-				default:
-					snprintf(fg_buf, sizeof(fg_buf), "-1");
-					break;
-			}
-
-			switch (col_schemes[x].color[y].bg)
-			{
-				case 0:
-					snprintf(bg_buf, sizeof(bg_buf), "black");
-					break;
-				case 1:
-					snprintf(bg_buf, sizeof(bg_buf), "red");
-					break;
-				case 2:
-					snprintf(bg_buf, sizeof(bg_buf), "green");
-					break;
-				case 3:
-					snprintf(bg_buf, sizeof(bg_buf), "yellow");
-					break;
-				case 4:
-					snprintf(bg_buf, sizeof(bg_buf), "blue");
-					break;
-				case 5:
-					snprintf(bg_buf, sizeof(bg_buf), "magenta");
-					break;
-				case 6:
-					snprintf(bg_buf, sizeof(bg_buf), "cyan");
-					break;
-				case 7:
-					snprintf(bg_buf, sizeof(bg_buf), "white");
-					break;
-				default:
-					snprintf(bg_buf, sizeof(bg_buf), "-1");
-					break;
-			}
-
-			fprintf(fp, "COLOR=%s=%s=%s\n", buf, fg_buf, bg_buf);
-
-		}
-	}
-
-	fclose(fp);
-	return;
 }
 
 /* The return value is the color scheme base number for the colorpairs.
- * There are 12 color pairs for each color scheme.
  *
- * Default returns 0;
- * Second color scheme returns 12
- * Third color scheme returns 24
- *
- * The color scheme with the longest matching directory path is the one that 
+ * The color scheme with the longest matching directory path is the one that
  * should be returned.
  */
 int
-check_directory_for_color_scheme(const char *dir)
+check_directory_for_color_scheme(int left, const char *dir)
 {
-	int x,y;
-	int z = 0;
-	int v = 0;
+	char *p;
+	char t;
 
-	for(x = 0; x < cfg.color_scheme_num;  x++)
+	union
 	{
-		y = strlen(col_schemes[x].dir);
+		char *name;
+		tree_val_t buf;
+	}u;
 
-		if(!strncmp(col_schemes[x].dir, dir, y))
+	if(dirs == NULL_TREE)
+		return DCOLOR_BASE;
+
+	curr_stats.cs_base = left ? LCOLOR_BASE : RCOLOR_BASE;
+	curr_stats.cs = left ? &lwin.cs : &rwin.cs;
+	*curr_stats.cs = cfg.cs;
+
+	p = (char *)dir;
+	do
+	{
+		char full[PATH_MAX];
+		t = *p;
+		*p = '\0';
+
+		if(tree_get_data(dirs, dir, &u.buf) != 0 || !find_color_scheme(u.name))
 		{
-			if (y > z)
-			{
-				z = y;
-				v = x;
-			}
+			*p = t;
+			if((p = strchr(p + 1, '/')) == NULL)
+				p = (char *)dir + strlen(dir);
+			continue;
 		}
 
-	}
+		snprintf(full, sizeof(full), "%s/colors/%s", cfg.config_dir, u.name);
+		(void)source_file(full);
 
-	return (v * 12);
+		*p = t;
+		if((p = strchr(p + 1, '/')) == NULL)
+			p = (char *)dir + strlen(dir);
+	}
+	while(t != '\0');
+
+	check_color_scheme(curr_stats.cs);
+	load_color_pairs(curr_stats.cs_base, curr_stats.cs);
+	curr_stats.cs_base = DCOLOR_BASE;
+	curr_stats.cs = &cfg.cs;
+
+	return left ? LCOLOR_BASE : RCOLOR_BASE;
 }
 
+static void
+load_color_pairs(int base, const col_scheme_t *cs)
+{
+	int i;
+	for(i = 0; i < MAXNUM_COLOR; i++)
+		init_pair(base + i, cs->color[i].fg, cs->color[i].bg);
+}
+
+void
+complete_colorschemes(const char *name)
+{
+	char colors_dir[PATH_MAX];
+	DIR *dir;
+	struct dirent *d;
+	size_t len;
+
+	snprintf(colors_dir, sizeof(colors_dir), "%s/colors", cfg.config_dir);
+
+	dir = opendir(colors_dir);
+	if(dir == NULL)
+		return;
+
+	len = strlen(name);
+
+	while((d = readdir(dir)) != NULL)
+	{
+#ifndef _WIN32
+		if(d->d_type != DT_REG && d->d_type != DT_LNK)
+			continue;
+#endif
+
+		if(d->d_name[0] == '.')
+			continue;
+
+		if(strncmp(name, d->d_name, len) == 0)
+			add_completion(d->d_name);
+	}
+	closedir(dir);
+
+	completion_group_end();
+	add_completion(name);
+}
+
+const char *
+attrs_to_str(int attrs)
+{
+	static char result[64];
+	result[0] = '\0';
+	if(attrs == 0)
+		strcpy(result, "none,");
+	if((attrs & A_BOLD) == A_BOLD)
+		strcat(result, "bold,");
+	if((attrs & A_UNDERLINE) == A_UNDERLINE)
+		strcat(result, "underline,");
+	if((attrs & A_REVERSE) == A_REVERSE)
+		strcat(result, "reverse,");
+	if((attrs & A_STANDOUT) == A_STANDOUT)
+		strcat(result, "standout,");
+	if(result[0] != '\0')
+		result[strlen(result) - 1] = '\0';
+	return result;
+}
+
+void
+assoc_dir(const char *name, const char *dir)
+{
+	union
+	{
+		char *s;
+		tree_val_t l;
+	}u = {
+		.s = strdup(name),
+	};
+
+	ensure_dirs_tree_exists();
+
+	if(tree_set_data(dirs, dir, u.l) != 0)
+		free(u.s);
+}
+
+static void
+ensure_dirs_tree_exists(void)
+{
+	if(dirs == NULL_TREE)
+	{
+		dirs = tree_create(1, 1);
+	}
+}
+
+void
+mix_colors(col_attr_t *base, const col_attr_t *mixup)
+{
+	if(mixup->fg != -1)
+		base->fg = mixup->fg;
+	if(mixup->bg != -1)
+		base->bg = mixup->bg;
+	base->attr = mixup->attr;
+}
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

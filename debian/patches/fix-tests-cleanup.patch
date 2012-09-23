@@ -1,0 +1,17 @@
+Description: fix clean target for tests
+ Tests were not cleaned up correctly due to a missing file in the clean target
+Author: xaizek <xaizek@lavabit.com
+Origin: upstream
+Forwarded: no
+Last-Update: 2012-10-26
+
+--- a/tests/Makefile
++++ b/tests/Makefile
+@@ -62,6 +62,7 @@
+ 
+ clean: $(dirs_c)
+ 	-$(RM) -r bin/
++	$(RM) -r seatest/*.o seatest/*.d
+ 
+ $(dirs_c):
+ 	$(MAKE) --directory=$(subst _c,,$@) --makefile=../Makefile.inc clean

@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,32 +14,65 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include<sys/types.h>
+#ifndef __BACKGROUND_H__
+#define __BACKGROUND_H__
 
-typedef struct Jobs_List {
-	int fd;
+#ifdef _WIN32
+#include <windef.h>
+#endif
+
+#include <sys/types.h>
+
+#include <stdio.h>
+
+typedef struct job_t
+{
 	pid_t pid;
 	char *cmd;
-	char *error_buf;
+	int skip_errors;
 	int running;
-	struct Jobs_List *next;
-} Jobs_List;
+	int exit_code;
+	char *error;
 
-typedef struct Finished_Jobs {
-	pid_t pid;
-	int remove;
-	struct Finished_Jobs *next;
-} Finished_Jobs;
+	/* for backgrounded commands */
+	int total;
+	int done;
 
-extern struct Jobs_List *jobs;
-extern struct Finished_Jobs *fjobs;
+#ifndef _WIN32
+	int fd;
+#else
+	HANDLE hprocess;
+#endif
+	struct job_t *next;
+}job_t;
 
-int start_background_job(char *cmd);
+extern struct job_t *jobs;
+
+/* Prepere background unit for the work. */
+void init_background(void);
+
+int start_background_job(const char *cmd, int skip_errors);
+int background_and_wait_for_status(char *cmd);
 int background_and_wait_for_errors(char *cmd);
+int background_and_capture(char *cmd, FILE **out, FILE **err);
 void add_finished_job(pid_t pid, int status);
 void check_background_jobs(void);
 void update_jobs_list(void);
 
+void add_inner_bg_job(job_t *job);
+void inner_bg_next(void);
+void remove_inner_bg_job(void);
+
+#ifndef _WIN32
+job_t * add_background_job(pid_t pid, const char *cmd, int fd);
+#else
+job_t * add_background_job(pid_t pid, const char *cmd, HANDLE hprocess);
+#endif
+
+#endif
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

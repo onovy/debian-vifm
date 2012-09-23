@@ -1,0 +1,2 @@
+?package(vifm):needs="text" section="Applications/File Management"\
+  title="Vifm" command="/usr/bin/vifm"

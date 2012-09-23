@@ -2,4 +2,6 @@ addon: vifm
 description: interface to the vifm file manager
 files:
   - plugin/vifm.vim
+  - ftplugin/vifm.vim 
   - doc/vifm.txt
+  - ftdetect/vifm.vim
