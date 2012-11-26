@@ -2,8 +2,7 @@ Source: vifm
 Section: utils
 Priority: optional
 Maintainer: Hendrik Jaeger <deb@henk.geekmail.org>
-Build-Depends: debhelper (>= 9), libncursesw5-dev, libmagic-dev, dh-autoreconf,
- quilt
+Build-Depends: debhelper (>= 9), libncursesw5-dev, libmagic-dev
 Standards-Version: 3.9.4
 Homepage: http://vifm.sourceforge.net/
 
