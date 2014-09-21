@@ -25,3 +25,10 @@ vim-addons is provided by the vim-addon-manager package, have a look at its
 manpage for more information.
 
  -- Edelhard Becker <becker@edelhard.de>  Tue, 27 Aug 2002 19:19:28 +0200
+
+
+If you followed the package's recommendation to install libx11-6, vifm will be
+capable of setting (and resetting on quit) the terminal title.
+
+ -- Hendrik Jäger <deb@henk.geekmail.org>  Mon, 27 May 2013 17:12:06 +0200
+
