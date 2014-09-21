@@ -1,3 +1,5 @@
 version=3
-http://sf.net/vifm/vifm-(.*)\.tar\.bz2
+# X.Y.Z-beta comes before X.Y.Z
+opts=uversionmangle=s/-/~/ \
+    http://sf.net/vifm/vifm-(.*)\.tar\.bz2
 
