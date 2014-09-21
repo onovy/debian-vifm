@@ -3,7 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: Hendrik Jaeger <deb@henk.geekmail.org>
 Build-Depends: debhelper (>= 9), libncursesw5-dev, libmagic-dev
-Standards-Version: 3.9.4
+Standards-Version: 3.9.6
 Homepage: http://vifm.sourceforge.net/
 
 Package: vifm
