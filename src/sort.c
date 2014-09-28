@@ -19,6 +19,7 @@
 #include<ncurses.h>
 #include<string.h> /* strrchr */
 
+#include "color_scheme.h"
 #include "config.h"
 #include "filelist.h"
 #include "keys.h"
@@ -133,7 +134,8 @@ sort_key_cb(FileView *view)
 	int col = 6;
 	char filename[NAME_MAX];
 
-	snprintf(filename, sizeof(filename), "%s", view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", 
+			view->dir_entry[view->list_pos].name);
 
 	curs_set(0);
 	wmove(sort_win, curr, col);

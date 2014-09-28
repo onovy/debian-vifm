@@ -23,8 +23,10 @@
 #include<string.h> /* strncpy */
 #include<sys/stat.h> /* stat */
 #include<unistd.h> /* stat */
+#include<locale.h> /* setlocale */
 
 #include"bookmarks.h"
+#include"color_scheme.h"
 #include"commands.h"
 #include"config.h"
 #include"filelist.h"
@@ -38,6 +40,7 @@
 
 Config cfg;
 Status curr_stats;
+Col_scheme col_schemes[8];
 
 static void
 show_help_msg(void)
@@ -63,9 +66,11 @@ main(int argc, char *argv[])
 	char config_dir[PATH_MAX];
 	char *console = NULL;
 	int x;
-	int side = 0;
+	int rwin_args = 0;
+	int lwin_args = 0;
 	struct stat stat_buf;
 
+	setlocale(LC_ALL, "");
 	getcwd(dir, sizeof(dir));
 
 	/* Window initializations */
@@ -76,6 +81,7 @@ main(int argc, char *argv[])
 	rwin.selected_filelist = NULL;
 	rwin.history_num = 0;
 	rwin.invert = 0;
+	rwin.color_scheme = 0;
 
 	lwin.curr_line = 0;
 	lwin.top_line = 0;
@@ -84,13 +90,13 @@ main(int argc, char *argv[])
 	lwin.selected_filelist = NULL;
 	lwin.history_num = 0;
 	lwin.invert = 0;
+	lwin.color_scheme = 0;
 
 	/* These need to be initialized before reading the configuration file */
 	cfg.command_num = 0;
 	cfg.filetypes_num = 0;
 	cfg.nmapped_num = 0;
 	cfg.vim_filter = 0;
-	cfg.use_custom_colors = 0;
 	cfg.show_one_window = 0;
 	command_list = NULL;
 	filetypes = NULL;
@@ -102,6 +108,9 @@ main(int argc, char *argv[])
 	cfg.cmd_history_num = -1;
 	cfg.cmd_history = (char **)calloc(cfg.cmd_history_len, sizeof(char *));
 	cfg.auto_execute = 0;
+	cfg.color_scheme_num = 0;
+	//col_schemes = (Col_scheme *)calloc(1, sizeof(Col_scheme*));
+	cfg.color_pairs_num = 0;
 
 	/* Maximum argument length to pass to the shell */
 	if (! (cfg.max_args = sysconf(_SC_ARG_MAX)) > 0)
@@ -136,6 +145,7 @@ main(int argc, char *argv[])
 	curr_stats.curr_register = -1;
 	curr_stats.register_saved = 0;
 	curr_stats.show_full = 0;
+	curr_stats.view = 0;
 
 	if (cfg.show_one_window)
 		curr_stats.number_of_windows = 1;
@@ -197,12 +207,21 @@ main(int argc, char *argv[])
 				}
 				else if(is_dir(argv[x]))
 				{
-					if(side)
-						snprintf(rwin.curr_dir, sizeof(rwin.curr_dir), "%s", argv[x]);
+					if(lwin_args)
+					{
+						snprintf(rwin.curr_dir, sizeof(rwin.curr_dir), 
+								"%s", argv[x]);
+
+						rwin_args++;
+
+					}
 					else
 					{
-						snprintf(lwin.curr_dir, sizeof(lwin.curr_dir), "%s", argv[x]);
-						side++;
+						snprintf(lwin.curr_dir, sizeof(lwin.curr_dir),
+							   	"%s", argv[x]);
+
+
+						lwin_args++;
 					}
 				}
 				else
@@ -215,7 +234,16 @@ main(int argc, char *argv[])
 	}
 
 
+
+	
 	load_dir_list(&rwin, 0);
+
+	if (rwin_args)
+	{
+		change_directory(&rwin, rwin.curr_dir);
+		load_dir_list(&rwin, 0);
+	}
+
 	mvwaddstr(rwin.win, rwin.curr_line, 0, "*"); 
 	wrefresh(rwin.win);
 
@@ -223,6 +251,13 @@ main(int argc, char *argv[])
 	switch_views();
 
 	load_dir_list(&lwin, 0);
+
+	if (lwin_args)
+	{
+		change_directory(&lwin, lwin.curr_dir);
+		load_dir_list(&lwin, 0);
+	}
+
 	moveto_list_pos(&lwin, 0);
 	update_all_windows();
 	setup_signals();

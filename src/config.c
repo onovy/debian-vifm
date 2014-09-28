@@ -16,8 +16,8 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
  */
 
-#define CP_HELP "cp /usr/local/share/vifm/vifm-%.1f.help.txt ~/.vifm"
-#define CP_RC "cp /usr/local/share/vifm/vifmrc%.1f ~/.vifm"
+#define CP_HELP "cp /usr/local/share/vifm/vifm-help.txt ~/.vifm"
+#define CP_RC "cp /usr/local/share/vifm/vifmrc ~/.vifm"
 
 #include<stdio.h> /* FILE */
 #include<stdlib.h> /* getenv */
@@ -28,6 +28,7 @@
 #include<ctype.h> /* isalnum */
 
 #include"bookmarks.h"
+#include"color_scheme.h"
 #include"fileops.h"
 #include"filetype.h"
 #include"registers.h"
@@ -65,7 +66,7 @@ create_help_file(void)
 {
 	char command[PATH_MAX];
 
-	snprintf(command, sizeof(command), CP_HELP, VERSION);
+	snprintf(command, sizeof(command), CP_HELP);
 	file_exec(command);
 }
 
@@ -74,7 +75,7 @@ create_rc_file(void)
 {
 	char command[PATH_MAX];
 
-	snprintf(command, sizeof(command), CP_RC, VERSION);
+	snprintf(command, sizeof(command), CP_RC);
 	file_exec(command);
 	add_bookmark('H', getenv("HOME"), "../");
 	add_bookmark('z', cfg.config_dir, "../");
@@ -87,21 +88,11 @@ static void
 load_default_configuration(void)
 {
 	cfg.use_trash = 1;
-	cfg.use_color = 1;
 	cfg.vi_command = strdup("vim");
 	cfg.use_screen = 0;
 	cfg.history_len = 15;
 	cfg.use_vim_help = 0;
 	strncpy(lwin.regexp, "\\..~$", sizeof(lwin.regexp) -1);
-
-	/*
-	lwin.filename_filter = (char *)realloc(lwin.filename_filter, 
-			strlen("\\.o$") +1);
-	strncpy(lwin.filename_filter, "\\.o$", sizeof(lwin.filename_filter));
-	lwin.prev_filter = (char *)realloc(lwin.prev_filter, 
-			strlen("\\.o$") +1);
-	strncpy(lwin.prev_filter, "\\.o$", sizeof(lwin.prev_filter));
-	*/
 
  	lwin.filename_filter = (char *)realloc(lwin.filename_filter, 
  			strlen(DEFAULT_FILENAME_FILTER) +1);
@@ -113,16 +104,7 @@ load_default_configuration(void)
 	lwin.invert = TRUE;
 	strncpy(rwin.regexp, "\\..~$", sizeof(rwin.regexp) -1);
 
-	/*
-	rwin.filename_filter = (char *)realloc(rwin.filename_filter, 
-			strlen("\\.o$") +1);
-	strncpy(rwin.filename_filter, "\\.o$", sizeof(rwin.filename_filter));
-	rwin.prev_filter = (char *)realloc(rwin.prev_filter, 
-			strlen("\\.o$") +1);
-	strncpy(rwin.prev_filter, "\\.o$", sizeof(rwin.prev_filter));
-	*/
-
-  rwin.filename_filter = (char *)realloc(rwin.filename_filter, 
+    rwin.filename_filter = (char *)realloc(rwin.filename_filter, 
  			strlen(DEFAULT_FILENAME_FILTER) +1);
  	strcpy(rwin.filename_filter, DEFAULT_FILENAME_FILTER);
  	rwin.prev_filter = (char *)realloc(rwin.prev_filter, 
@@ -133,31 +115,7 @@ load_default_configuration(void)
 	lwin.sort_type = SORT_BY_NAME;
 	rwin.sort_type = SORT_BY_NAME;
 
-	cfg.color[MENU_COLOR].fg = COLOR_CYAN,
-	cfg.color[MENU_COLOR].bg = COLOR_BLACK;
-	cfg.color[BORDER_COLOR].fg = COLOR_BLACK,
-	cfg.color[BORDER_COLOR].bg = COLOR_WHITE;
-	cfg.color[WIN_COLOR].fg = COLOR_WHITE,
-	cfg.color[WIN_COLOR].bg = COLOR_BLACK;
-	cfg.color[STATUS_BAR_COLOR].fg = COLOR_WHITE,
-	cfg.color[STATUS_BAR_COLOR].bg = COLOR_BLACK;
-	cfg.color[CURR_LINE_COLOR].fg = COLOR_WHITE;
-	cfg.color[CURR_LINE_COLOR].bg = COLOR_BLUE;
-	cfg.color[DIRECTORY_COLOR].fg = COLOR_CYAN,
-	cfg.color[DIRECTORY_COLOR].bg = COLOR_BLACK;
-	cfg.color[LINK_COLOR].fg = COLOR_YELLOW,
-	cfg.color[LINK_COLOR].bg = COLOR_BLACK;
-	cfg.color[SOCKET_COLOR].fg = COLOR_BLUE,
-	cfg.color[SOCKET_COLOR].bg = COLOR_BLACK;
-	cfg.color[DEVICE_COLOR].fg = COLOR_RED,
-	cfg.color[DEVICE_COLOR].bg = COLOR_BLACK;
-	cfg.color[EXECUTABLE_COLOR].fg = COLOR_GREEN,
-	cfg.color[EXECUTABLE_COLOR].bg = COLOR_BLACK;
-	cfg.color[SELECTED_COLOR].fg = COLOR_MAGENTA,
-	cfg.color[SELECTED_COLOR].bg = COLOR_WHITE;
-	cfg.color[CURRENT_COLOR].fg = COLOR_BLACK,
-	cfg.color[CURRENT_COLOR].bg = COLOR_WHITE;
-
+	read_color_scheme_file();
 }
 
 void
@@ -171,10 +129,9 @@ set_config_dir(void)
 		char help_file[PATH_MAX];
 		char rc_file[PATH_MAX];
 
-		snprintf(rc_file, sizeof(rc_file), "%s/.vifm/vifmrc%.1f", 
-				home_dir, VERSION);
-		snprintf(help_file, sizeof(help_file), "%s/.vifm/vifm-%.1f.help_txt", 
-				home_dir, VERSION);
+		snprintf(rc_file, sizeof(rc_file), "%s/.vifm/vifmrc", home_dir);
+		snprintf(help_file, sizeof(help_file), "%s/.vifm/vifm-help_txt", 
+				home_dir);
 		snprintf(cfg.config_dir, sizeof(cfg.config_dir), "%s/.vifm", home_dir);
 		snprintf(cfg.trash_dir, sizeof(cfg.trash_dir), "%s/.vifm/Trash", home_dir);
 
@@ -193,170 +150,6 @@ set_config_dir(void)
 	}
 }
 
-/*
- * convert possible <color_name> to <int>
- */
-int
-colname2int(char col[])
-{
- /* test if col[] is a number... */
-	 if (isdigit(col[0]))
-	   return atoi(col);
-
- /* otherwise convert */
- if(!strcmp(col, "black"))
-   return 0;
- if(!strcmp(col, "red"))
-   return 1;
- if(!strcmp(col, "green"))
-   return 2;
- if(!strcmp(col, "yellow"))
-   return 3;
- if(!strcmp(col, "blue"))
-   return 4;
- if(!strcmp(col, "magenta"))
-   return 5;
- if(!strcmp(col, "cyan"))
-   return 6;
- if(!strcmp(col, "white"))
-   return 7;
- /* return default color */
- return -1;
-}
-
-
-
-/*
- * add color
- */
-void
-add_color(char s1[], char s2[], char s3[])
-{
- 	int fg, bg;
-
-  fg = colname2int(s2);
-  bg = colname2int(s3);
-
- if(!strcmp(s1, "MENU"))
- {
-		cfg.color[MENU_COLOR].fg = fg;
-		cfg.color[MENU_COLOR].bg = bg;
-	}
-	if(!strcmp(s1, "BORDER"))
-	{
-		cfg.color[BORDER_COLOR].fg = fg;
-		cfg.color[BORDER_COLOR].bg = bg;
-	}
-	if(!strcmp(s1, "WIN"))
-	{
-			cfg.color[WIN_COLOR].fg = fg;
-			cfg.color[WIN_COLOR].bg = bg;
-	}
-	if(!strcmp(s1, "STATUS_BAR"))
-	{
-		 cfg.color[STATUS_BAR_COLOR].fg = fg;
-		 cfg.color[STATUS_BAR_COLOR].bg = bg;
-	 }
-	 if(!strcmp(s1, "CURR_LINE"))
-	 {
-			cfg.color[CURR_LINE_COLOR].fg = fg;
-			cfg.color[CURR_LINE_COLOR].bg = bg;
-	 }
-	 if(!strcmp(s1, "DIRECTORY"))
-	 {
-		 cfg.color[DIRECTORY_COLOR].fg = fg;
-		 cfg.color[DIRECTORY_COLOR].bg = bg;
-	 }
-	 if(!strcmp(s1, "LINK"))
-	 {
-			cfg.color[LINK_COLOR].fg = fg;
-			cfg.color[LINK_COLOR].bg = bg;
-		}
-	if(!strcmp(s1, "SOCKET"))
-	{
-		 cfg.color[SOCKET_COLOR].fg = fg;
-		 cfg.color[SOCKET_COLOR].bg = bg;
-	 }
-	 if(!strcmp(s1, "DEVICE"))
-	 {
-			cfg.color[DEVICE_COLOR].fg = fg;
-			cfg.color[DEVICE_COLOR].bg = bg;
-	 }
-	 if(!strcmp(s1, "EXECUTABLE"))
-	 {
-		 cfg.color[EXECUTABLE_COLOR].fg = fg;
-		 cfg.color[EXECUTABLE_COLOR].bg = bg;
-		}
-		if(!strcmp(s1, "SELECTED"))
-		{
-			 cfg.color[SELECTED_COLOR].fg = fg;
-			 cfg.color[SELECTED_COLOR].bg = bg;
-		 }
-		if(!strcmp(s1, "CURRENT"))
-		{
-			 cfg.color[CURRENT_COLOR].fg = fg;
-			 cfg.color[CURRENT_COLOR].bg = bg;
-		 }
-}
-
-
-/*
- * write colors back to config file.
- */
-void
-write_colors(FILE *fp)
-{
-
-
-	 fprintf(fp, "\n# The standard ncurses colors are:\n");
-	 fprintf(fp, "# BLACK 0\n");
-	 fprintf(fp, "# RED 1\n");
-	 fprintf(fp, "# GREEN 2\n");
-	 fprintf(fp, "# YELLOW 3\n");
-	 fprintf(fp, "# BLUE 4\n");
-	 fprintf(fp, "# MAGENTA 5\n");
-	 fprintf(fp, "# CYAN 6\n");
-	 fprintf(fp, "# WHITE 7\n");
-	 fprintf(fp, "# COLOR=Window_name=foreground_color=background_color\n\n");
-
-	 fprintf(fp, "COLOR=MENU=%d=%d\n",
-			   cfg.color[MENU_COLOR].fg,
-			   cfg.color[MENU_COLOR].bg);
-	 fprintf(fp, "COLOR=BORDER=%d=%d\n",
-			    cfg.color[BORDER_COLOR].fg,
-			    cfg.color[BORDER_COLOR].bg);
-	 fprintf(fp, "COLOR=WIN=%d=%d\n",
-			    cfg.color[WIN_COLOR].fg,
-			    cfg.color[WIN_COLOR].bg);
-	 fprintf(fp, "COLOR=STATUS_BAR=%d=%d\n",
-			    cfg.color[STATUS_BAR_COLOR].fg,
-			    cfg.color[STATUS_BAR_COLOR].bg);
-	 fprintf(fp, "COLOR=CURR_LINE=%d=%d\n",
-			    cfg.color[CURR_LINE_COLOR].fg,
-			    cfg.color[CURR_LINE_COLOR].bg);
-	 fprintf(fp, "COLOR=DIRECTORY=%d=%d\n",
-			    cfg.color[DIRECTORY_COLOR].fg,
-			    cfg.color[DIRECTORY_COLOR].bg);
-	 fprintf(fp, "COLOR=LINK=%d=%d\n",
-			    cfg.color[LINK_COLOR].fg,
-			    cfg.color[LINK_COLOR].bg);
-	 fprintf(fp, "COLOR=SOCKET=%d=%d\n",
-			    cfg.color[SOCKET_COLOR].fg,
-			    cfg.color[SOCKET_COLOR].bg);
-	 fprintf(fp, "COLOR=DEVICE=%d=%d\n",
-			    cfg.color[DEVICE_COLOR].fg,
-			    cfg.color[DEVICE_COLOR].bg);
-	 fprintf(fp, "COLOR=EXECUTABLE=%d=%d\n",
-			    cfg.color[EXECUTABLE_COLOR].fg,
-			    cfg.color[EXECUTABLE_COLOR].bg);
-	 fprintf(fp, "COLOR=SELECTED=%d=%d\n",
-			    cfg.color[SELECTED_COLOR].fg,
-			    cfg.color[SELECTED_COLOR].bg);
-	 fprintf(fp, "COLOR=CURRENT=%d=%d\n",
-			    cfg.color[CURRENT_COLOR].fg,
-			    cfg.color[CURRENT_COLOR].bg);
-}
-		
 
 int
 read_config_file(void)
@@ -371,7 +164,7 @@ read_config_file(void)
 	int args;
 
 
-	snprintf(config_file, sizeof(config_file), "%s/vifmrc%.1f", cfg.config_dir, VERSION);
+	snprintf(config_file, sizeof(config_file), "%s/vifmrc", cfg.config_dir);
 
 	if((fp = fopen(config_file, "r")) == NULL)
 	{
@@ -438,11 +231,6 @@ read_config_file(void)
 				cfg.use_screen = atoi(s1);
 				continue;
 			}
-			if(!strcmp(line, "USE_COLOR"))
-			{
-				cfg.use_color = atoi(s1);
-				continue;
-			}
 			if(!strcmp(line, "HISTORY_LENGTH"))
 			{
 				cfg.history_len = atoi(s1);
@@ -493,13 +281,6 @@ read_config_file(void)
 				cfg.use_vim_help = atoi(s1);
 				continue;
 			}
-			/*
-			if(!strcmp(line, "USE_AUTOMATIC_UPDATE"))
-			{
-				cfg.auto_update = atoi(s1);
-				continue;
-			}
-			*/
 			if(!strcmp(line, "RUN_EXECUTABLE"))
 			{
 				cfg.auto_execute = atoi(s1);
@@ -519,16 +300,12 @@ read_config_file(void)
 					add_bookmark(*s1, s2, s3);
 				continue;
 			}
-			if(!strcmp(line, "COLOR"))
-			{
-				add_color(s1, s2, s3);
-				continue;
-			}
 		}
 	}
 
-
 	fclose(fp);
+
+	read_color_scheme_file();
 
 	return 1;
 }
@@ -541,8 +318,7 @@ write_config_file(void)
 	char config_file[PATH_MAX];
 	curr_stats.getting_input = 1;
 
-	snprintf(config_file, sizeof(config_file), "%s/vifmrc%.1f", cfg.config_dir,
-			VERSION);
+	snprintf(config_file, sizeof(config_file), "%s/vifmrc", cfg.config_dir);
 
 	if((fp = fopen(config_file, "w")) == NULL)
 		return;
@@ -583,8 +359,6 @@ write_config_file(void)
 
 	fprintf(fp, "\n# 1 means use color if the terminal supports it.\n");
 	fprintf(fp, "# 0 means don't use color even if supported.\n");
-	fprintf(fp, "\nUSE_COLOR=%d\n", cfg.use_color);
-
 
 	fprintf(fp, "\n# This is how many files to show in the directory history menu.\n");
 	fprintf(fp, "\nHISTORY_LENGTH=%d\n", cfg.history_len);
@@ -619,15 +393,6 @@ write_config_file(void)
 	fprintf(fp, "# If would rather use a plain text help file set this to 0.\n");
 	fprintf(fp, "\nUSE_VIM_HELP=%d\n", cfg.use_vim_help);
 
-	/* Removed
-	fprintf(fp, "\n# Setting this to 1 will result in the file list being \n");
-	fprintf(fp, "# reloaded if it has been changed.  If you turn this off\n");
-	fprintf(fp, "# you can use CTRL-L to refresh the screen.\n");
-	fprintf(fp, "\nUSE_AUTOMATIC_UPDATE=%d\n", cfg.auto_update);
-	*/
-
-	write_colors(fp);
-
 	fprintf(fp, "\n# If you would like to run an executable file when you \n");
 	fprintf(fp, "# press return on the file name set this to 1.\n");
 	fprintf(fp, "\nRUN_EXECUTABLE=%d\n", cfg.auto_execute);
@@ -649,9 +414,8 @@ write_config_file(void)
 	fprintf(fp, "# %%f the current selected file, or files.\n");
 	fprintf(fp, "# %%F the current selected file, or files in the other directoy.\n");
 	fprintf(fp, "# %%d the current directory name.\n");
-	fprintf(fp, "# %%D the other window directory name.\n\n");
-	fprintf(fp, "# %%m run the command in a menu window\n");
-	fprintf(fp, "# %%s run the command in a new screen region\n");
+	fprintf(fp, "# %%D the other window directory name.\n");
+	fprintf(fp, "# %%m run the command in a menu window\n\n");
 	for(x = 0; x < cfg.command_num; x++)
 	{
 		fprintf(fp, "COMMAND=%s=%s\n", command_list[x].name, 
@@ -672,5 +436,8 @@ write_config_file(void)
 	}
 
 	fclose(fp);
+
+	write_color_scheme_file();
+
 	curr_stats.getting_input = 0;
 }

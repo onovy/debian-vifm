@@ -28,6 +28,7 @@
 
 #include"bookmarks.h"
 #include"background.h"
+#include"color_scheme.h"
 #include"commands.h"
 #include"config.h"
 #include"filelist.h"
@@ -49,6 +50,7 @@ enum
 	COM_CHANGE,
 	COM_CD, 		
 	COM_CMAP,			
+	COM_COLORSCHEME,
 	COM_COMMAND,		
 	COM_DELETE, 		
 	COM_DELCOMMAND,	
@@ -77,8 +79,10 @@ enum
 	COM_SPLIT,
 	COM_SYNC,
 	COM_UNMAP,
+	COM_VIEW,
 	COM_VIFM,
 	COM_VMAP,
+	COM_YANK,	
 	COM_X
 };
 
@@ -91,6 +95,7 @@ char *reserved_commands[] = {
 	"change",
 	"cd",
 	"cmap",
+	"colorscheme",
 	"command",
 	"delete",
 	"delcommand",
@@ -119,12 +124,14 @@ char *reserved_commands[] = {
 	"split",
 	"sync",
 	"unmap",
+	"view",
 	"vifm",
 	"vmap",
+	"yank",
 	"x"
 	};
 
-#define RESERVED 35
+#define RESERVED 39
 
 typedef struct current_command
 {
@@ -488,6 +495,7 @@ is_user_command(char *command)
 			return x;
 		}
 	}
+
 	return -1;
 }
 
@@ -529,10 +537,13 @@ remove_command(char *name)
 			strcpy(command_list[x].action, command_list[x +1].action);
 			x++;
 		}
-		if(command_list[x].name)
+
+		if(strlen(command_list[x].name))
 			my_free(command_list[x].name);
-		if(command_list[x].action)
+
+		if(strlen(command_list[x].action))
 			my_free(command_list[x].action);
+
 	}
 	else
 		show_error_msg(" Command Not Found ", s);
@@ -726,18 +737,6 @@ shellout(char *command, int pause)
 	my_system(buf);
 
 
-	/* The window size has changed */ 
-	/*
-	if(curr_stats.need_redraw && !isendwin())
-		redraw_window();
-	else
-		update_all_windows();
-
-	def_prog_mode();
-	endwin();
-	refresh();
-	*/
-
 	/* There is a problem with using the screen program and 
 	 * catching all the SIGWICH signals.  So just redraw the window.
 	 */
@@ -761,6 +760,80 @@ initialize_command_struct(cmd_t *cmd)
 	cmd->is_user = -1;
 	cmd->pos = 0;
 	cmd->pause = 0;
+}
+
+static int
+select_files_in_range(FileView *view, cmd_t * cmd)
+{
+
+				int x;
+				int y = 0;
+
+				/* Both a starting range and an ending range are given. */
+				if(cmd->start_range > -1)
+				{
+					if(cmd->end_range < cmd->start_range)
+					{
+						show_error_msg(" Command Error ", "Backward range given.");
+						//save_msg = 1;
+						//break;
+					}
+
+					for(x = 0; x < view->list_rows; x++)
+						view->dir_entry[x].selected = 0;
+
+					for(x = cmd->start_range; x <= cmd->end_range; x++)
+					{
+						view->dir_entry[x].selected = 1;
+						y++;
+					}
+					view->selected_files = y;
+				}
+				/* A count is given */
+				else if(cmd->count)
+				{
+					if(!cmd->count)
+						cmd->count = 1;
+
+					/* A one digit range with a count. :4y5 */
+					if(cmd->end_range)
+					{
+						y = 0;
+						for(x = 0; x < view->list_rows; x++)
+							view->dir_entry[x].selected = 0;
+
+						for(x = cmd->end_range; x < view->list_rows; x++)
+						{
+							if(cmd->count == y)
+								break;
+							view->dir_entry[x].selected = 1;
+							y++;
+
+						}
+						view->selected_files = y;
+					}
+					/* Just a count is given. */ 
+					else
+					{
+						y = 0;
+
+						for(x = 0; x < view->list_rows; x++)
+							view->dir_entry[x].selected = 0;
+
+						for(x = view->list_pos; x < view->list_rows; x++)
+						{
+							if(cmd->count == y )
+								break;
+
+							view->dir_entry[x].selected = 1;
+							y++;
+						}
+						view->selected_files = y;
+
+					}
+				}
+
+	return 0;
 }
 
 static int
@@ -1085,6 +1158,23 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 			break;
 		case COM_CMAP:
 			break;
+		case COM_COLORSCHEME:
+		{
+			if(cmd->args)
+			{
+				//snprintf(buf, sizeof(buf), "args are %s", cmd->args);
+				show_error_msg("Color Scheme",
+						"The :colorscheme command is reserved ");
+
+			}
+			else /* Should show error message with colorschemes listed */
+			{
+				show_error_msg("Color Scheme",
+						"The :colorscheme command is reserved ");
+			}
+
+			break;
+		}
 		case COM_COMMAND:
 			{
 				if(cmd->args)
@@ -1105,72 +1195,14 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 			break;
 		case COM_DELETE:
 			{
-				int x;
-				int y = 0;
+				/*
+				int selection_worked;
 
-				/* Both a starting range and an ending range are given. */
-				if(cmd->start_range > -1)
-				{
-					if(cmd->end_range < cmd->start_range)
-					{
-						show_error_msg(" Command Error ", "Backward range given.");
-						save_msg = 1;
-						break;
-					}
+				selection_worked = select_files_in_range(view, cmd);
 
-					for(x = 0; x < view->list_rows; x++)
-						view->dir_entry[x].selected = 0;
-
-					for(x = cmd->start_range; x <= cmd->end_range; x++)
-					{
-						view->dir_entry[x].selected = 1;
-						y++;
-					}
-					view->selected_files = y;
-				}
-				/* A count is given */
-				else if(cmd->count)
-				{
-					if(!cmd->count)
-						cmd->count = 1;
-
-					/* A one digit range with a count. :4d5 */
-					if(cmd->end_range)
-					{
-						y = 0;
-						for(x = 0; x < view->list_rows; x++)
-							view->dir_entry[x].selected = 0;
-
-						for(x = cmd->end_range; x < view->list_rows; x++)
-						{
-							if(cmd->count == y)
-								break;
-							view->dir_entry[x].selected = 1;
-							y++;
-
-						}
-						view->selected_files = y;
-					}
-					/* Just a count is given. */ 
-					else
-					{
-						y = 0;
-
-						for(x = 0; x < view->list_rows; x++)
-							view->dir_entry[x].selected = 0;
-
-						for(x = view->list_pos; x < view->list_rows; x++)
-						{
-							if(cmd->count == y )
-								break;
-
-							view->dir_entry[x].selected = 1;
-							y++;
-						}
-						view->selected_files = y;
-
-					}
-				}
+				if (selection_worked)
+				*/
+				select_files_in_range(view, cmd);
 				delete_file(view);
 			}
 			break;
@@ -1179,7 +1211,7 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 				if(cmd->args)
 				{
 					remove_command(cmd->args);
-					write_config_file();
+					//write_config_file();
 				}
 			}
 			break;
@@ -1281,8 +1313,10 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 				}
 				else
 				{
-					snprintf(help_file, sizeof(help_file), "%s %s/vifm-%.1f.help.txt",
-							cfg.vi_command, cfg.config_dir, VERSION);
+					snprintf(help_file, sizeof(help_file),
+						   	"%s %s/vifm-help.txt",
+							cfg.vi_command, cfg.config_dir);
+
 					shellout(help_file, 0);
 				}
 			}
@@ -1416,9 +1450,52 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 			break;
 		case COM_UNMAP:
 			break;
+		case COM_VIEW:
+			{
+				if(curr_stats.number_of_windows == 1)
+				{
+					show_error_msg("Cannot view files",
+							"Cannot view files in one window mode ");
+					break;
+				}
+				if(curr_stats.view)
+				{
+					curr_stats.view = 0;
+
+					wbkgdset(other_view->title,
+						COLOR_PAIR(BORDER_COLOR + other_view->color_scheme));
+					wbkgdset(other_view->win,
+						COLOR_PAIR(WIN_COLOR + other_view->color_scheme));
+					change_directory(other_view, other_view->curr_dir);
+					load_dir_list(other_view, 0);
+					change_directory(curr_view, curr_view->curr_dir);
+					load_dir_list(curr_view, 0);
+					moveto_list_pos(curr_view, curr_view->list_pos);
+				}
+				else
+				{
+					curr_stats.view = 1;
+					quick_view_file(view);
+				}
+			}
+			break;
 		case COM_VIFM:
 			show_error_msg(" I haven't gotten here yet ",
-						"Sorry this is not implemented");
+						"Sorry this is not implemented ");
+			break;
+		case COM_YANK:
+			{
+				/*
+				int selection_worked = 0;
+
+				selection_worked  = select_files_in_range(view);
+
+				if (selection_worked)
+					yank_selected_files(view);
+					*/
+				show_error_msg(":yank is not implemented yet",
+					   	":yank is not implemented yet ");
+			}
 			break;
 		case COM_VMAP:
 			break;
@@ -1467,6 +1544,7 @@ execute_user_command(FileView *view, cmd_t *cmd)
 
 	if (use_menu)
 	{
+
 		show_user_menu(view, expanded_com);
 
 		if(!cmd->background)

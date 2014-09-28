@@ -40,6 +40,7 @@ typedef struct
 	int curr_register;
 	int register_saved;
 	int number_of_windows;
+	int view;
 	int show_full;
 }Status;
 

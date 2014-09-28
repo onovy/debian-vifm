@@ -104,17 +104,6 @@ show_full_file_properties(FileView *view)
 	int key = 0;
 	int done = 0;
 
-	/*
-	if(view->win == lwin.win)
-		other_view = &rwin;
-	else
-		other_view = &lwin;
-
-	werase(other_view->title);
-	werase(other_view->win);
-	werase(stat_win);
-	wnoutrefresh(other_view->title);
-	*/
 
 	curr_stats.show_full = 0;
 
@@ -123,7 +112,9 @@ show_full_file_properties(FileView *view)
 	getmaxyx(menu_win, y, x);
 	werase(menu_win);
 
-	snprintf(name_buf, sizeof(name_buf), "%s", view->dir_entry[view->list_pos].name);
+	snprintf(name_buf, sizeof(name_buf), "%s", 
+			view->dir_entry[view->list_pos].name);
+
 	describe_file_size(size_buf, sizeof(size_buf), view);
 	
 	if((pwd_buf = getpwuid(view->dir_entry[view->list_pos].uid)) == NULL)
@@ -166,7 +157,7 @@ show_full_file_properties(FileView *view)
 			mvwaddstr(menu_win, 7, 11, "Couldn't Resolve Link");
 	}
  	else if (S_ISREG (view->dir_entry[view->list_pos].mode))
-  {
+   	{
 		FILE *pipe;
 		char command[1024];
 		char buf[NAME_MAX];
@@ -195,7 +186,7 @@ show_full_file_properties(FileView *view)
 		else
 			mvwaddstr(other_view->win, 6, 8, "Regular File");
 			*/
-  }
+	}
 	else if (S_ISDIR (view->dir_entry[view->list_pos].mode))
 	{
 	  mvwaddstr(menu_win, 6, 8, "Directory");
@@ -243,14 +234,6 @@ show_full_file_properties(FileView *view)
 		mvwaddstr(menu_win, 18, 10, grp_buf->gr_name);
 	}
 	wnoutrefresh(menu_win);
-	/*
-	update_pos_window(view);
-	getmaxyx(stat_win, y, x);
-	snprintf(name_buf, sizeof(name_buf), "%d files filtered", view->filtered);
-	if(view->filtered > 0)
-		mvwaddstr(stat_win, 0, x - (strlen(name_buf) + 2), name_buf);
-	wnoutrefresh(stat_win);
-	*/
 
 	box(menu_win, 0, 0);
 	wrefresh(menu_win);

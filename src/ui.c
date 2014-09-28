@@ -16,7 +16,6 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
  */
 
-#include<ncurses.h>
 #include<signal.h>  /* signal() */
 #include<stdlib.h> /* malloc */
 #include<sys/stat.h> /* stat */
@@ -27,6 +26,7 @@
 #include<termios.h> /* struct winsize */
 #include<sys/ioctl.h>
 
+#include "color_scheme.h"
 #include "config.h" /* for menu colors */
 #include "file_info.h"
 #include "filelist.h"
@@ -124,7 +124,7 @@ int
 setup_ncurses_interface()
 {
 	int screen_x, screen_y;
-	int x, y;
+	int i, x, y;
 
 	initscr();
 	noecho();
@@ -138,23 +138,20 @@ setup_ncurses_interface()
 	if(screen_x < 30)
 		finish("Terminal is too small to run vifm\n");
 
-	/* User did not want colors. */
-	if(cfg.use_color == 0)
-		cfg.use_color = 0;
-	else
-		cfg.use_color = has_colors();
+	if(! has_colors())
+		finish("Vifm requires a console that can support color.\n");
 
-	if(cfg.use_color)
+	start_color();
+	// Changed for pdcurses
+	use_default_colors();
+
+	x = 0;
+
+	for (i = 0; i < cfg.color_scheme_num; i++)
 	{
-		int i;
-
-		start_color();
-		use_default_colors();
-
-		for (i = 0; i < MAXNUM_COLOR; ++i)
-		{
-			init_pair(i, cfg.color[i].fg, cfg.color[i].bg);
-		}
+		for(x = 0; x < 12; x++)
+			init_pair(col_schemes[i].color[x].name,
+				col_schemes[i].color[x].fg, col_schemes[i].color[x].bg);
 	}
 	
 	werase(stdscr);
@@ -177,10 +174,7 @@ setup_ncurses_interface()
 
 	lborder = newwin(screen_y - 2, 1, 0, 0);
 
-	if(cfg.use_color)
-		wbkgdset(lborder, COLOR_PAIR(BORDER_COLOR));
-	else
-		wbkgdset(lborder, A_REVERSE);
+	wbkgdset(lborder, COLOR_PAIR(BORDER_COLOR));
 
 	werase(lborder);
 
@@ -189,13 +183,8 @@ setup_ncurses_interface()
 	else
 		lwin.title = newwin(0, screen_x/2 -1, 0, 1);
 		
-	if(cfg.use_color)
-	{
-		wattrset(lwin.title, A_BOLD);
-		wbkgdset(lwin.title, COLOR_PAIR(BORDER_COLOR));
-	}
-	else
-		wbkgdset(lwin.title, A_REVERSE);
+	wattrset(lwin.title, A_BOLD);
+	wbkgdset(lwin.title, COLOR_PAIR(BORDER_COLOR));
 
 	werase(lwin.title);
 
@@ -215,10 +204,7 @@ setup_ncurses_interface()
 
 	mborder = newwin(screen_y, 2, 0, screen_x/2 -1);
 
-	if(cfg.use_color)
-		wbkgdset(mborder, COLOR_PAIR(BORDER_COLOR));
-	else
-		wbkgdset(mborder, A_REVERSE);
+	wbkgdset(mborder, COLOR_PAIR(BORDER_COLOR));
 
 	werase(mborder);
 
@@ -227,14 +213,9 @@ setup_ncurses_interface()
 	else
 		rwin.title = newwin(1, screen_x/2 -1  , 0, screen_x/2 +1);
 
-	if(cfg.use_color)
-	{
-		wbkgdset(rwin.title, COLOR_PAIR(BORDER_COLOR));
-		wattrset(rwin.title, A_BOLD);
-		wattroff(rwin.title, A_BOLD);
-	}
-	else
-		wbkgdset(rwin.title, A_REVERSE);
+	wbkgdset(rwin.title, COLOR_PAIR(BORDER_COLOR));
+	wattrset(rwin.title, A_BOLD);
+	wattroff(rwin.title, A_BOLD);
 
 	werase(rwin.title);
 
@@ -252,29 +233,15 @@ setup_ncurses_interface()
 	rwin.window_rows = y - 1;
 	rwin.window_width = x -1;
 
+	rborder = newwin(screen_y - 2, 1, 0, screen_x -1);
 
-	/*
-	if(screen_x % 2)
-		rborder = newwin(screen_y - 2, 2, 0, screen_x -1);
-	else
-	*/
-		rborder = newwin(screen_y - 2, 1, 0, screen_x -1);
-
-
-	if(cfg.use_color)
-		wbkgdset(rborder, COLOR_PAIR(BORDER_COLOR));
-	else
-		wbkgdset(rborder, A_REVERSE);
-
+	wbkgdset(rborder, COLOR_PAIR(BORDER_COLOR));
 
 	werase(rborder);
 
 	stat_win = newwin(1, screen_x, screen_y -2, 0);
 
-	if(cfg.use_color)
-		wbkgdset(stat_win, COLOR_PAIR(BORDER_COLOR));
-	else
-		wbkgdset(stat_win, A_REVERSE);
+	wbkgdset(stat_win, COLOR_PAIR(BORDER_COLOR));
 
 	werase(stat_win);
 
@@ -324,6 +291,7 @@ redraw_window(void)
 
 	ioctl(0, TIOCGWINSZ, &ws);
 	
+	// changed for pdcurses
 	resize_term(ws.ws_row, ws.ws_col);
 
 	getmaxyx(stdscr, screen_y, screen_x);
@@ -345,16 +313,17 @@ redraw_window(void)
 	wclear(rborder);
 	wclear(mborder);
 	wclear(lborder);
+
+	wclear(change_win);
+	wclear(sort_win);
 	
 	wresize(stdscr, screen_y, screen_x);
 	mvwin(sort_win, (screen_y - 14)/2, (screen_x -30)/2);
-	mvwin(change_win, (screen_y - 14)/2, (screen_x -30)/2);
+	mvwin(change_win, (screen_y - 10)/2, (screen_x -30)/2);
 	wresize(menu_win, screen_y - 1, screen_x);
 	wresize(error_win, (screen_y -10)/2, screen_x -2);
 	mvwin(error_win, (screen_y -10)/2, 1);
 	wresize(lborder, screen_y -2, 1);
-
-
 
 	if (curr_stats.number_of_windows == 1)
 	{
@@ -397,9 +366,6 @@ redraw_window(void)
 
 	/* For FreeBSD */
 	keypad(lwin.win, TRUE);
-
-
-	/* For FreeBSD */
 	keypad(rwin.win, TRUE);
 
 	if (screen_x % 2)
@@ -433,7 +399,18 @@ redraw_window(void)
 	load_dir_list(&rwin, 0);
 	change_directory(&lwin, lwin.curr_dir);
 	load_dir_list(&lwin, 0);
-	change_directory(curr_view, curr_view->curr_dir);
+
+	if(curr_stats.view)
+	{
+		wclear(other_view->win);
+
+		change_directory(curr_view, curr_view->curr_dir);
+		load_dir_list(curr_view, 0);
+
+		quick_view_file(curr_view);
+	}
+	else
+		change_directory(curr_view, curr_view->curr_dir);
 
 	update_stat_window(curr_view);
 
@@ -458,6 +435,7 @@ redraw_window(void)
 
 	curr_stats.freeze = 0;
 	curr_stats.need_redraw = 0;
+
 
 }
 

@@ -18,7 +18,6 @@
 
 #include<sys/types.h>
 #include<regex.h>
-#include<ncurses.h>
 #include<ctype.h> /* isspace() */
 #include<string.h> /* strchr() */
 #include<unistd.h> /* access() */
@@ -28,6 +27,7 @@
 
 #include "background.h"
 #include "bookmarks.h"
+#include "color_scheme.h"
 #include "commands.h"
 #include "config.h"
 #include "filelist.h"
@@ -55,7 +55,6 @@ typedef struct menu_info
 	char **data;
 	/* For user menus only */
 	char *get_info_script; /* program + args to fill in menu. */
-	char *action_program; /* program to run with selected item(s) as an argument. */
 }menu_info;
 
 enum {
@@ -148,13 +147,11 @@ clean_menu_position(menu_info *m)
 	buf[x] = ' ';
 	buf[x + 1] = '\0';
 
-	if (cfg.use_color)
-		wattron(menu_win, COLOR_PAIR(WIN_COLOR));
+	wattron(menu_win, COLOR_PAIR(WIN_COLOR));
 
 	mvwaddnstr(menu_win, m->current, 1, buf, x - 2);
 
-	if (cfg.use_color)
-		wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
+	wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 
 	my_free(buf);
 }
@@ -312,17 +309,11 @@ moveto_menu_pos(FileView *view, int pos,  menu_info *m)
 	buf[x] = ' ';
 	buf[x + 1] = '\0';
 
-	if (cfg.use_color)
-		wattron(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	else
-		wattron(menu_win, A_REVERSE);
+	wattron(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 	
 	mvwaddnstr(menu_win, m->current, 1, buf, x - 2);
 
-	if (cfg.use_color)
-		wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	else
-		wattroff(menu_win, A_REVERSE);
+	wattroff(menu_win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 
 	m->pos = pos;
 	my_free(buf);
@@ -339,7 +330,8 @@ redraw_menu(FileView *view, menu_info *m)
 	curr_stats.redraw_menu = 0;
 
 	ioctl(0, TIOCGWINSZ, &ws);
-	resizeterm(ws.ws_row, ws.ws_col);
+	//changed for pdcurses
+	//resizeterm(ws.ws_row, ws.ws_col);
 	getmaxyx(stdscr, screen_y, screen_x);
 
 	wclear(stdscr);
@@ -547,66 +539,6 @@ execute_apropos_cb(FileView *view, menu_info *m)
 		my_free(free_this);
 }
 
-static void
-execute_user_cb(FileView *view, menu_info *m)
-{
-	char *dir = NULL;
-	char *file = NULL;
-	char *free_this = NULL;
-	//int isdir = 0;
-
-	free_this = file = dir = strdup(m->data[m->pos]);
-	chomp(file);
-
-	if (m->action_program == NULL)
-	{
-		/* check if it really is a file */
-		/*
-		if (!access(file, R_OK))
-		{
-			if (is_dir(file))
-				isdir = 1;
-
-			file = strrchr(dir, '/');
-			*file = '\0';
-			file++;
-			
-			change_directory(view, dir);
-
-			status_bar_message("Finding the correct directory.");
-
-			wrefresh(status_bar);
-			load_dir_list(view, 1);
-
-
-			if (find_file_pos_in_list(view, file) < 0)
-			{
-				if (isdir)
-				{
-					strcat(file, "/");
-				}
-
-				if (file[0] == '.')
-					show_dot_files(view);
-
-				if (find_file_pos_in_list(view, file) < 0)
-					remove_filename_filter(view);
-
-				moveto_list_pos(view, find_file_pos_in_list(view, file));
-			}
-			else
-				moveto_list_pos(view, find_file_pos_in_list(view, file));
-		}
-		*/
-	}
-	else if (m->action_program != NULL)
-	{
-		char buf[strlen(free_this) + strlen(m->action_program) + 2];
-		snprintf(buf, sizeof(buf), "%s %s", m->action_program, free_this);
-		shellout(buf, 0);
-	}
-	my_free(free_this);
-}
 
 static void
 execute_locate_cb(FileView *view, menu_info *m)
@@ -770,8 +702,6 @@ execute_menu_cb(FileView *view, menu_info *m)
 		case LOCATE:
 				execute_locate_cb(view, m);
 			break;
-		case USER:
-				execute_user_cb(view, m);
 			break;
 		case VIFM:
 			break;
@@ -1345,16 +1275,16 @@ show_history_menu(FileView *view)
 
 		/* Change the current dir to reflect the current file. */ 
 		if(!strcmp(view->history[x].dir, view->curr_dir))
-			snprintf(view->history[x].file, sizeof(view->history[x].file), "%s",
-						view->dir_entry[view->list_pos].name);
+			snprintf(view->history[x].file, sizeof(view->history[x].file),
+						"%s", view->dir_entry[view->list_pos].name);
 
 		if(!strcmp(view->history[x].dir, "/"))
 		{
 			m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 			m.data[x] = (char *)malloc((strlen(view->history[x].file) + 1) 
 					* sizeof(char));
-			snprintf(m.data[x], strlen(view->history[x].file), "%s",
-						view->history[x].file);
+			snprintf(m.data[x], strlen(view->history[x].file), 
+						"%s", view->history[x].file);
 		}
 		else
 		{
@@ -1462,7 +1392,16 @@ show_user_menu(FileView *view, char *command)
 	m.args = NULL;
 	m.data = NULL;
 	m.get_info_script = command;
-	m.action_program = NULL;
+
+
+	for ( x = 0; x < strlen(command); x++)
+	{
+		if (command[x] == ',')
+		{
+			command[x] = '\0';
+			break;
+		}
+	}
 
 	getmaxyx(menu_win, m.win_rows, x);
 

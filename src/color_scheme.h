@@ -16,32 +16,43 @@
  * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
  */
 
-#ifndef __FILELIST_H__
-#define __FILELIST_H__
+#ifndef __COLOR_SCHEME_H__
+#define __COLOR_SCHEME_H__
+
+#include<limits.h>
+#define MAXNUM_COLOR 12
+
+#define MENU_COLOR 0
+#define BORDER_COLOR 1
+#define WIN_COLOR 2
+#define	STATUS_BAR_COLOR 3
+#define CURR_LINE_COLOR 4
+#define DIRECTORY_COLOR 5
+#define LINK_COLOR 6
+#define SOCKET_COLOR 7
+#define DEVICE_COLOR 8
+#define EXECUTABLE_COLOR 9
+#define SELECTED_COLOR 10
+#define CURRENT_COLOR 11
+
+typedef struct _Col_attr {
+	int name;
+	int fg;
+	int bg;
+} Col_attr;
 
 
-#include "ui.h"
+typedef struct _Col_Scheme {
+	char name[NAME_MAX];
+	char dir[PATH_MAX];
+	Col_attr color[12];
+} Col_scheme;
 
-enum {
-	LINK,
-	DIRECTORY,
-	DEVICE,
-	SOCKET,
-	EXECUTABLE,
-	REGULAR,
-	UNKNOWN
-};
+extern Col_scheme col_schemes[8];;
 
-
-void quick_view_file(FileView * view);
-void change_directory(FileView *view, char *directory);
-void load_dir_list(FileView *view, int reload);
-void draw_dir_list(FileView *view, int top, int pos);
-char * get_current_file_name(FileView *view);
-void moveto_list_pos(FileView *view, int pos);
-int find_file_pos_in_list(FileView *view, char *file);
-void get_all_selected_files(FileView *view);
-void free_selected_file_array(FileView *view);
-void erase_current_line_bar(FileView *view);
+void read_color_scheme_file();
+void write_color_scheme_file();
+int check_directory_for_color_scheme(const char *);
+void load_color_scheme(char  *name, char *dir);
 
 #endif

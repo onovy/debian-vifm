@@ -2,7 +2,7 @@ Installation
 ~~~~~~~~~~~~
 You need:
 
-	A working version of ncurses and an ascii compliant terminal.
+	A working version of ncursesw and an ascii compliant terminal.
 	Vifm will currently not work with Solaris curses or with PDcurses.
 
 Basic Installation:
@@ -16,8 +16,10 @@ Basic Installation:
 		Copy the vifm and pauseme executables to where you want to run them.
 		You will also need to copy vifm help files and vifmrc file to ~/.vifm.
 
-	When you start vifm for the first time, you should edit the configuration 
-	file.  It will be at ~/.vifm/vifmrc02.
+	After you start vifm for the first time, you should edit the configuration 
+	file.  It will be at ~/.vifm/vifmrc.
+	If you edit the vifmrc file with vifm running any changes you make
+	will be overwritten when you close vifm.
 
 
 Vim Specific Options:

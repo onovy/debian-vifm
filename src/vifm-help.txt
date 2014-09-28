@@ -88,13 +88,14 @@ The basic vi key bindings are used to move through the files and popup
 	:e load file into vi
 	:only - switch to a one window view.
 	:pwd - show the present working directory 
+	:ch[ange] - create a menu window to alter a files properties.
 	:cd - change directory
 		:cd ~/bin
 	:s[ort] - popup menu of different sorting methods
 	:sp[lit] - switch to a two window view.
 	:his[tory] - popup menu of directories visited
 	:jobs - shows menu of current backgrounded processes.
-	:vifm
+	:view - toggle on and off the quick file view.
 	:h[elp] - this crude help file
 	:marks - popup menu of bookmarks
 	:screen toggles whether to use the screen program or not.
@@ -218,6 +219,7 @@ Reserved :commands
 		sh
 		sort
 		unmap
+		view
 		vifm
 		vmap
 		x

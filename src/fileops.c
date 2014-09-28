@@ -27,6 +27,7 @@
 #include<string.h>
 
 #include"background.h"
+#include"color_scheme.h"
 #include"commands.h"
 #include"config.h"
 #include"filelist.h"
@@ -220,10 +221,43 @@ handle_file(FileView *view)
 			shellout(buf, 1);
 			return;
 		}
-		else
-			view_file(view);
+		else /* Check for a filetype */
+		{
+			char *program = NULL;
+
+			if((program = get_default_program_for_file(
+						view->dir_entry[view->list_pos].name)) != NULL)
+			{
+				if(strchr(program, '%'))
+				{
+					int m = 0;
+					int s = 0;
+					char *command = expand_macros(view, program, NULL, &m, &s);
+					shellout(command, 0);
+					my_free(command);
+					return;
+				}
+				else
+				{
+					char buf[NAME_MAX *2];
+					char *temp = escape_filename(view->dir_entry[view->list_pos].name, 0);
+
+					snprintf(buf, sizeof(buf), "%s %s", program, temp); 
+					shellout(buf, 0);
+					my_free(program);
+					my_free(temp);
+					return;
+				}
+			}
+			else /* vi is set as the default for any extension without a program */
+			{
+				view_file(view);
+			}
+			return;
+		}
 	}
-	if(REGULAR == view->dir_entry[view->list_pos].type)
+	if((REGULAR == view->dir_entry[view->list_pos].type) 
+				|| (EXECUTABLE == view->dir_entry[view->list_pos].type))
 	{
 		char *program = NULL;
 
@@ -502,7 +536,7 @@ set_perm_string(FileView *view, int *perms, char *file)
 
 		strcat(perm_string, ",");
 	}
-	perm_string[strlen(perm_string)] = '\0'; /* Remove last , */
+	perm_string[strlen(perm_string) - 1] = '\0'; /* Remove last , */
 
 	file_chmod(view, file, perm_string, perms[12]);
 }
@@ -525,7 +559,8 @@ permissions_key_cb(FileView *view, int *perms, int isdir)
 	if (isdir)
 		bottom = 17;
 
-	snprintf(filename, sizeof(filename), "%s", view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", 
+			view->dir_entry[view->list_pos].name);
 	snprintf(path, sizeof(path), "%s/%s", view->curr_dir, 
 			view->dir_entry[view->list_pos].name);
 
@@ -574,6 +609,7 @@ permissions_key_cb(FileView *view, int *perms, int isdir)
 				}
 				break;
 			case 't':
+			case 32: /* ascii Spacebar */
 				{
 					changed++;
 					if (perms[permnum])
@@ -636,7 +672,8 @@ change_key_cb(FileView *view, int type)
 	int col = 6;
 	char filename[NAME_MAX];
 
-	snprintf(filename, sizeof(filename), "%s", view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", 
+			view->dir_entry[view->list_pos].name);
 
 	curs_set(0);
 	wmove(change_win, curr, col);
@@ -844,6 +881,8 @@ show_file_permissions_menu(FileView *view, int x)
 
 	permissions_key_cb(view, perms, isdir);
 }
+
+
 void
 show_change_window(FileView *view, int type)
 {
@@ -852,11 +891,14 @@ show_change_window(FileView *view, int type)
 	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 	curs_set(0);
 	doupdate();
-	werase(change_win);
+	wclear(change_win);
+
+	getmaxyx(stdscr, y, x);
+	mvwin(change_win, (y - 20)/2, (x - 30)/2);
 	box(change_win, ACS_VLINE, ACS_HLINE);
 
-	getmaxyx(change_win, y, x);
 	curs_set(1);
+	wrefresh(change_win);
 
 
 	switch(type)
@@ -887,5 +929,4 @@ show_change_window(FileView *view, int type)
 		default:
 			break;
 	}
-
 }
