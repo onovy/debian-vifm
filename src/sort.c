@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,224 +14,272 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include<ncurses.h>
-#include<string.h> /* strrchr */
+#define _GNU_SOURCE
 
-#include "color_scheme.h"
-#include "config.h"
+#include <curses.h>
+
+#include <fcntl.h> /* access */
+#include <sys/stat.h>
+
+#include <ctype.h>
+#include <string.h> /* strrchr */
+
+#include "cfg/config.h"
+#include "utils/fs_limits.h"
+#include "utils/macros.h"
+#include "utils/path.h"
+#include "utils/str.h"
+#include "utils/test_helpers.h"
+#include "utils/tree.h"
 #include "filelist.h"
-#include "keys.h"
 #include "status.h"
 #include "ui.h"
 
-/*
- * This function is from the git program written by Tudor Hulubei and
- *  Andrei Pitis
- */
-int
+#include "sort.h"
+
+static FileView* view;
+static int sort_descending;
+static int sort_type;
+
+static int sort_dir_list(const void *one, const void *two);
+TSTATIC int strnumcmp(const char s[], const char t[]);
+#if defined(_WIN32) || defined(__APPLE__) || defined(__CYGWIN__)
+static int vercmp(const char s[], const char t[]);
+#endif
+
+void
+sort_view(FileView *v)
+{
+	int i;
+
+	view = v;
+	i = NUM_SORT_OPTIONS;
+	while(--i >= 0)
+	{
+		int j;
+
+		if(view->sort[i] > NUM_SORT_OPTIONS)
+			continue;
+
+		sort_descending = (view->sort[i] < 0);
+		sort_type = abs(view->sort[i]);
+
+		for(j = 0; j < view->list_rows; j++)
+			view->dir_entry[j].list_num = j;
+
+		qsort(view->dir_entry, view->list_rows, sizeof(dir_entry_t), sort_dir_list);
+	}
+}
+
+static int
+compare_file_names(const char *s, const char *t, int ignore_case)
+{
+	char s_buf[NAME_MAX];
+	char t_buf[NAME_MAX];
+
+	snprintf(s_buf, sizeof(s_buf), "%s", s);
+	chosp(s_buf);
+	s = s_buf;
+	snprintf(t_buf, sizeof(t_buf), "%s", t);
+	chosp(t_buf);
+	t = t_buf;
+
+	if(ignore_case)
+	{
+		strtolower(s_buf);
+		strtolower(t_buf);
+	}
+
+	return !cfg.sort_numbers ? strcmp(s, t) : strnumcmp(s, t);
+}
+
+/* Compares file names containing numbers correctly. */
+TSTATIC int
+strnumcmp(const char s[], const char t[])
+{
+#if defined(_WIN32) || defined(__APPLE__) || defined(__CYGWIN__)
+		return vercmp(s, t);
+#else
+		const char *new_s = skip_all(s, '0');
+		const char *new_t = skip_all(t, '0');
+		if(new_s[0] == '\0' || new_t[0] == '\0')
+		{
+			return strverscmp(new_s, new_t);
+		}
+		else
+		{
+			return strverscmp(s, t);
+		}
+#endif
+}
+
+#if defined(_WIN32) || defined(__APPLE__) || defined(__CYGWIN__)
+static int
+vercmp(const char s[], const char t[])
+{
+	while(*s != '\0' && *t != '\0')
+	{
+		if(isdigit(*s) && isdigit(*t))
+		{
+			int num_a, num_b;
+			const char *os = s, *ot = t;
+			char *p;
+
+			num_a = strtol(s, &p, 10);
+			s = p;
+
+			num_b = strtol(t, &p, 10);
+			t = p;
+
+			if(num_a != num_b)
+				return num_a - num_b;
+			else if(*os != *ot)
+				return *os - *ot;
+		}
+		else if(*s == *t)
+		{
+			s++;
+			t++;
+		}
+		else
+			break;
+	}
+
+	return *s - *t;
+}
+#endif
+
+static int
 sort_dir_list(const void *one, const void *two)
 {
 	int retval;
 	char *pfirst, *psecond;
-	const dir_entry_t *first = (const dir_entry_t *) one;
-	const dir_entry_t *second = (const dir_entry_t *) two;
-	int first_is_dir = first->type == DIRECTORY;
-	int second_is_dir = second->type == DIRECTORY;
+	dir_entry_t *first = (dir_entry_t *) one;
+	dir_entry_t *second = (dir_entry_t *) two;
+	int first_is_dir = 0;
+	int second_is_dir = 0;
+
+	if(first->type == DIRECTORY)
+		first_is_dir = 1;
+	else if(first->type == LINK)
+		first_is_dir = (first->name[strlen(first->name) - 1] == '/');
+
+	if(second->type == DIRECTORY)
+		second_is_dir = 1;
+	else if(second->type == LINK)
+		second_is_dir = (second->name[strlen(second->name) - 1] == '/');
 
 	if(first_is_dir != second_is_dir)
 		return first_is_dir ? -1 : 1;
-	switch(curr_view->sort_type)
+
+	if(stroscmp(first->name, "../") == 0)
+		return -1;
+	else if(stroscmp(second->name, "../") == 0)
+		return 1;
+
+	retval = 0;
+	switch(sort_type)
 	{
-		 case SORT_BY_NAME:
-				 break;
+		case SORT_BY_NAME:
+		case SORT_BY_INAME:
+			if(first->name[0] == '.' && second->name[0] != '.')
+				retval = -1;
+			else if(first->name[0] != '.' && second->name[0] == '.')
+				retval = 1;
+			else
+				retval = compare_file_names(first->name, second->name,
+						sort_type == SORT_BY_INAME);
+			break;
 
-		 case SORT_BY_EXTENSION:
-				 pfirst  = strrchr(first->name,  '.');
-				 psecond = strrchr(second->name, '.');
+		case SORT_BY_EXTENSION:
+			pfirst  = strrchr(first->name,  '.');
+			psecond = strrchr(second->name, '.');
 
-				 if (pfirst && psecond)
-				 {
-					 retval = strcmp(++pfirst, ++psecond);
-					 if (retval != 0)
-							 return retval;
-				 }
-				 else
-					 if (pfirst || psecond)
-							 return (pfirst ? -1 : 1);
-				 break;
+			if(pfirst && psecond)
+				retval = compare_file_names(++pfirst, ++psecond, 0);
+			else if(pfirst || psecond)
+				retval = pfirst ? -1 : 1;
+			else
+				retval = compare_file_names(first->name, second->name, 0);
+			break;
 
-		 case SORT_BY_SIZE:
-				 if (first->size == second->size)
-						break;
-				 return first->size - second->size;
+		case SORT_BY_SIZE:
+			{
+				if(first_is_dir)
+					tree_get_data(curr_stats.dirsize_cache, first->name, &first->size);
 
-		 case SORT_BY_TIME_MODIFIED:
-				 if (first->mtime == second->mtime)
-						break;
-				 return first->mtime - second->mtime;
+				if(second_is_dir)
+					tree_get_data(curr_stats.dirsize_cache, second->name, &second->size);
 
-		 case SORT_BY_TIME_ACCESSED:
-				 if (first->atime == second->atime)
-						break;
-				 return first->atime - second->atime;
+				retval = (first->size < second->size) ?
+						-1 : (first->size > second->size);
+			}
+			break;
 
-		 case SORT_BY_TIME_CHANGED:
-				 if (first->ctime == second->ctime)
-						break;
-				 return first->ctime - second->ctime;
+		case SORT_BY_TIME_MODIFIED:
+			retval = first->mtime - second->mtime;
+			break;
 
-		 case SORT_BY_MODE:
-				 if (first->mode == second->mode)
-						break;
-				 return first->mode - second->mode;
+		case SORT_BY_TIME_ACCESSED:
+			retval = first->atime - second->atime;
+			break;
 
-		 case SORT_BY_OWNER_ID:
-				 if (first->uid == second->uid)
-						break;
-				 return first->uid - second->uid;
+		case SORT_BY_TIME_CHANGED:
+			retval = first->ctime - second->ctime;
+			break;
+#ifndef _WIN32
 
-		 case SORT_BY_GROUP_ID:
-				 if (first->gid == second->gid)
-						break;
-				 return first->gid - second->gid;
+		case SORT_BY_MODE:
+			retval = first->mode - second->mode;
+			break;
 
-		 case SORT_BY_OWNER_NAME:
-				 if (first->uid == second->uid)
-						break;
-				 return first->uid - second->uid;
+		case SORT_BY_OWNER_NAME: /* FIXME */
+		case SORT_BY_OWNER_ID:
+			retval = first->uid - second->uid;
+			break;
 
-		 case SORT_BY_GROUP_NAME:
-				 if (first->gid == second->gid)
-						break;
-				 return first->gid - second->gid;
-		 default:
-				 break;
-    }
-
-	return strcmp(first->name, second->name);
-}
-
-static void
-reset_sort_menu(void)
-{
-	curs_set(0);
-	werase(sort_win);
-	update_all_windows();
-	if(curr_stats.need_redraw)
-		redraw_window();
-}
-
-static void
-sort_key_cb(FileView *view)
-{
-	int done = 0;
-	int abort = 0;
-	int top = 2;
-	int bottom = 12;
-	int curr = view->sort_type + 2;
-	int col = 6;
-	char filename[NAME_MAX];
-
-	snprintf(filename, sizeof(filename), "%s", 
-			view->dir_entry[view->list_pos].name);
-
-	curs_set(0);
-	wmove(sort_win, curr, col);
-	wrefresh(sort_win);
-
-	while(!done)
-	{
-		int key = wgetch(sort_win);
-
-		switch(key)
-		{
-			case 'j':
-				{
-					mvwaddch(sort_win, curr, col, ' ');
-					curr++;
-					if(curr > bottom)
-						curr--;
-
-					mvwaddch(sort_win, curr, col, '*');
-					wmove(sort_win, curr, col);
-					wrefresh(sort_win);
-				}
-				break;
-			case 'k':
-				{
-
-					mvwaddch(sort_win, curr, col, ' ');
-					curr--;
-					if(curr < top)
-						curr++;
-
-					mvwaddch(sort_win, curr, col, '*');
-					wmove(sort_win, curr, col);
-					wrefresh(sort_win);
-				}
-				break;
-			case 3: /* ascii Ctrl C */
-			case 27: /* ascii Escape */
-				done = 1;
-				abort = 1;
-				break;
-			case 'l': 
-			case 13: /* ascii Return */
-				view->sort_type = curr - 2;
-				done = 1;
-				break;
-			default:
-				break;
-		}
+		case SORT_BY_GROUP_NAME: /* FIXME */
+		case SORT_BY_GROUP_ID:
+			retval = first->gid - second->gid;
+			break;
+#endif
 	}
 
-	if(abort)
-	{
-		reset_sort_menu();
-		moveto_list_pos(view, find_file_pos_in_list(view, filename));
-		return;
-	}
+	if(retval == 0)
+		retval = first->list_num - second->list_num;
+	else if(sort_descending)
+		retval = -retval;
 
-	reset_sort_menu();
-	load_dir_list(view, 1);
-	moveto_list_pos(view, find_file_pos_in_list(view, filename));
+	return retval;
 }
 
-
-void
-show_sort_menu(FileView *view)
+int
+get_secondary_key(int primary_key)
 {
-	int x, y;
-
-	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	mvwaddstr(view->win, view->curr_line, 0, "  ");
-	curs_set(0);
-	update_all_windows();
-	//doupdate();
-	werase(sort_win);
-	box(sort_win, ACS_VLINE, ACS_HLINE);
-
-
-	getmaxyx(sort_win, y, x);
-	curs_set(1);
-	mvwaddstr(sort_win, 0, (x - 6)/2, " Sort ");
-	mvwaddstr(sort_win, 1, 2, " Sort files by:");
-	mvwaddstr(sort_win, 2, 4, " [ ] File Extenstion");
-	mvwaddstr(sort_win, 3, 4, " [ ] File Name");
-	mvwaddstr(sort_win, 4, 4, " [ ] Group ID");
-	mvwaddstr(sort_win, 5, 4, " [ ] Group Name");
-	mvwaddstr(sort_win, 6, 4, " [ ] Mode");
-	mvwaddstr(sort_win, 7, 4, " [ ] Owner ID");
-	mvwaddstr(sort_win, 8, 4, " [ ] Owner Name");
-	mvwaddstr(sort_win, 9, 4, " [ ] Size");
-	mvwaddstr(sort_win, 10, 4, " [ ] Time Accessed");
-	mvwaddstr(sort_win, 11, 4, " [ ] Time Changed");
-	mvwaddstr(sort_win, 12, 4, " [ ] Time Modified");
-	mvwaddch(sort_win, view->sort_type + 2, 6, '*');
-	sort_key_cb(view);
+	switch(primary_key)
+	{
+#ifndef _WIN32
+		case SORT_BY_OWNER_NAME:
+		case SORT_BY_OWNER_ID:
+		case SORT_BY_GROUP_NAME:
+		case SORT_BY_GROUP_ID:
+		case SORT_BY_MODE:
+#endif
+		case SORT_BY_TIME_MODIFIED:
+		case SORT_BY_TIME_ACCESSED:
+		case SORT_BY_TIME_CHANGED:
+			return primary_key;
+		case SORT_BY_NAME:
+		case SORT_BY_INAME:
+		case SORT_BY_EXTENSION:
+		case SORT_BY_SIZE:
+		default:
+			return SORT_BY_SIZE;
+	}
 }
 
-
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

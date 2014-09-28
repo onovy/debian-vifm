@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,11 +14,24 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
+
+#ifndef __SEARCH_H__
+#define __SEARCH_H__
 
 #include "ui.h"
 
-int find_pattern(FileView *view, char *pattern);
-void find_next_pattern(FileView *view);
-void find_previous_pattern(FileView *view);
+int find_pattern(FileView *view, const char *pattern, int backward, int move);
+/* returns non-zero if pattern was found */
+int find_next_pattern(FileView *view, int wrap);
+/* returns non-zero if pattern was found */
+int find_previous_pattern(FileView *view, int wrap);
+
+/* Prints error message about failed search to the user. */
+void print_search_fail_msg(FileView *view, int backward);
+
+#endif
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

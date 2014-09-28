@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,634 +14,764 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#ifdef _WIN32
+#define _WIN32_WINNT 0x0500
+#include <windows.h>
+#endif
 
-#include<ctype.h> /* isspace() */
-#include<ncurses.h>
-#include<signal.h>
-#include<stdio.h>
-#include<stdlib.h> /*  system() */
-#include<string.h> /* strncmp() */
-#include<time.h>
-#include<unistd.h> /* chdir() */
+#include <regex.h>
 
-#include"bookmarks.h"
-#include"background.h"
-#include"color_scheme.h"
-#include"commands.h"
-#include"config.h"
-#include"filelist.h"
-#include"fileops.h"
-#include"keys.h"
-#include"menus.h"
-#include"search.h"
-#include"signals.h"
-#include"sort.h"
-#include"status.h"
-#include"ui.h"
-#include"utils.h"
-#include "rline.h"
+#include <curses.h>
+
+#include <sys/types.h> /* passwd */
+#ifndef _WIN32
+#include <sys/wait.h>
+#endif
+
+#include <assert.h> /* assert() */
+#include <ctype.h> /* isspace() */
+#include <limits.h> /* NAME_MAX PATH_MAX */
+#include <signal.h>
+#include <stdio.h> /* snprintf() */
+#include <stdlib.h> /* system() free() */
+#include <string.h> /* strncmp() */
+#include <time.h>
+
+#include "cfg/config.h"
+#include "cfg/info.h"
+#include "engine/cmds.h"
+#include "engine/completion.h"
+#include "engine/keys.h"
+#include "engine/options.h"
+#include "engine/parsing.h"
+#include "engine/text_buffer.h"
+#include "engine/var.h"
+#include "engine/variables.h"
+#include "menus/all.h"
+#include "menus/menus.h"
+#include "modes/dialogs/attr_dialog.h"
+#include "modes/dialogs/change_dialog.h"
+#include "modes/dialogs/sort_dialog.h"
+#include "modes/cmdline.h"
+#include "modes/menu.h"
+#include "modes/modes.h"
+#include "modes/normal.h"
+#include "modes/view.h"
+#include "modes/visual.h"
+#include "utils/env.h"
+#include "utils/fs.h"
+#include "utils/fs_limits.h"
+#include "utils/int_stack.h"
+#include "utils/macros.h"
+#include "utils/path.h"
+#include "utils/str.h"
+#include "utils/string_array.h"
+#include "utils/test_helpers.h"
+#include "utils/utils.h"
+#include "background.h"
+#include "bookmarks.h"
+#include "bracket_notation.h"
+#include "color_scheme.h"
+#include "commands_completion.h"
+#include "dir_stack.h"
+#include "file_magic.h"
+#include "filelist.h"
+#include "fileops.h"
+#include "filetype.h"
+#include "fuse.h"
+#include "macros.h"
+#include "opt_handlers.h"
+#include "path_env.h"
+#include "quickview.h"
+#include "registers.h"
+#include "running.h"
+#include "status.h"
+#include "term_title.h"
+#include "trash.h"
+#include "ui.h"
+#include "undo.h"
+
+#include "commands.h"
 
 enum
 {
-	COM_EXECUTE,
-	COM_APROPOS,
-	COM_CHANGE,
-	COM_CD, 		
-	COM_CMAP,			
-	COM_COLORSCHEME,
-	COM_COMMAND,		
-	COM_DELETE, 		
-	COM_DELCOMMAND,	
-	COM_DISPLAY,
-	COM_EDIT,				
-	COM_EMPTY,
-	COM_FILTER,
-	COM_FILE,
-	COM_HELP,
-	COM_HISTORY,
-	COM_INVERT,
-	COM_JOBS,	
-	COM_LOCATE,
-	COM_LS,
+	/* FIXME: commands without completion */
+	COM_FILTER = -100,
+	COM_SUBSTITUTE,
+	COM_TR,
+	COM_IF_STMT,
+	COM_CMAP,
+	COM_CNOREMAP,
+	COM_COMMAND,
+	COM_FILETYPE,
+	COM_FILEVIEWER,
+	COM_FILEXTYPE,
 	COM_MAP,
-	COM_MARKS,
 	COM_NMAP,
-	COM_NOH,
-	COM_ONLY,
-	COM_PWD,
-	COM_QUIT,
-	COM_REGISTER,
-	COM_SORT,
-	COM_SCREEN,
-	COM_SHELL,
-	COM_SPLIT,
-	COM_SYNC,
-	COM_UNMAP,
-	COM_VIEW,
-	COM_VIFM,
+	COM_NNOREMAP,
+	COM_NORMAL,
 	COM_VMAP,
-	COM_YANK,	
-	COM_X
+	COM_VNOREMAP,
+	COM_NOREMAP,
 };
 
-	/* The order of the commands is important as :e will match the first 
-	 * command starting with e.
-	 */
-char *reserved_commands[] = {
-	"!",
-	"apropos",
-	"change",
-	"cd",
-	"cmap",
-	"colorscheme",
-	"command",
-	"delete",
-	"delcommand",
-	"display",
-	"edit",
-	"empty",
-	"filter",
-	"file",
-	"help",
-	"history",
-	"invert",
-	"jobs",
-	"locate",
-	"ls",
-	"map",
-	"marks",
-	"nmap",
-	"nohlsearch",
-	"only",
-	"pwd",
-	"quit",
-	"register",
-	"sort",
-	"screen",
-	"shell",
-	"split",
-	"sync",
-	"unmap",
-	"view",
-	"vifm",
-	"vmap",
-	"yank",
-	"x"
-	};
+static int swap_range(void);
+static int resolve_mark(char mark);
+static char * cmds_expand_macros(const char *str, int *usr1, int *usr2);
+static void post(int id);
+TSTATIC void select_range(int id, const cmd_info_t *cmd_info);
+static int skip_at_beginning(int id, const char *args);
+static int is_whole_line_command(const char cmd[]);
 
-#define RESERVED 39
+static int goto_cmd(const cmd_info_t *cmd_info);
+static int emark_cmd(const cmd_info_t *cmd_info);
+static int alink_cmd(const cmd_info_t *cmd_info);
+static int apropos_cmd(const cmd_info_t *cmd_info);
+static int cd_cmd(const cmd_info_t *cmd_info);
+static int change_cmd(const cmd_info_t *cmd_info);
+static int chmod_cmd(const cmd_info_t *cmd_info);
+#ifndef _WIN32
+static int chown_cmd(const cmd_info_t *cmd_info);
+#endif
+static int clone_cmd(const cmd_info_t *cmd_info);
+static int cmap_cmd(const cmd_info_t *cmd_info);
+static int cnoremap_cmd(const cmd_info_t *cmd_info);
+static int copy_cmd(const cmd_info_t *cmd_info);
+static int colorscheme_cmd(const cmd_info_t *cmd_info);
+static int command_cmd(const cmd_info_t *cmd_info);
+static int cunmap_cmd(const cmd_info_t *cmd_info);
+static int delete_cmd(const cmd_info_t *cmd_info);
+static int delmarks_cmd(const cmd_info_t *cmd_info);
+static int dirs_cmd(const cmd_info_t *cmd_info);
+static int echo_cmd(const cmd_info_t *cmd_info);
+TSTATIC char * eval_echo(const char args[], const char **stop_ptr);
+static char * extend_string(char *str, const char with[], size_t *len);
+static int edit_cmd(const cmd_info_t *cmd_info);
+static int else_cmd(const cmd_info_t *cmd_info);
+static int empty_cmd(const cmd_info_t *cmd_info);
+static int endif_cmd(const cmd_info_t *cmd_info);
+static int exe_cmd(const cmd_info_t *cmd_info);
+static int file_cmd(const cmd_info_t *cmd_info);
+static int filetype_cmd(const cmd_info_t *cmd_info);
+static int filextype_cmd(const cmd_info_t *cmd_info);
+static int add_filetype(const cmd_info_t *cmd_info, int x);
+static int fileviewer_cmd(const cmd_info_t *cmd_info);
+static int filter_cmd(const cmd_info_t *cmd_info);
+static int find_cmd(const cmd_info_t *cmd_info);
+static int finish_cmd(const cmd_info_t *cmd_info);
+static int grep_cmd(const cmd_info_t *cmd_info);
+static int help_cmd(const cmd_info_t *cmd_info);
+static int highlight_cmd(const cmd_info_t *cmd_info);
+static const char *get_group_str(int group, col_attr_t col);
+static int get_color(const char str[], int fg, int *attr);
+static int get_attrs(const char *text);
+static int history_cmd(const cmd_info_t *cmd_info);
+static int if_cmd(const cmd_info_t *cmd_info);
+static int invert_cmd(const cmd_info_t *cmd_info);
+static int jobs_cmd(const cmd_info_t *cmd_info);
+static int let_cmd(const cmd_info_t *cmd_info);
+static int locate_cmd(const cmd_info_t *cmd_info);
+static int ls_cmd(const cmd_info_t *cmd_info);
+static int map_cmd(const cmd_info_t *cmd_info);
+static int mark_cmd(const cmd_info_t *cmd_info);
+static int marks_cmd(const cmd_info_t *cmd_info);
+static int messages_cmd(const cmd_info_t *cmd_info);
+static int mkdir_cmd(const cmd_info_t *cmd_info);
+static int mmap_cmd(const cmd_info_t *cmd_info);
+static int mnoremap_cmd(const cmd_info_t *cmd_info);
+static int move_cmd(const cmd_info_t *cmd_info);
+static int munmap_cmd(const cmd_info_t *cmd_info);
+static int nmap_cmd(const cmd_info_t *cmd_info);
+static int nnoremap_cmd(const cmd_info_t *cmd_info);
+static int nohlsearch_cmd(const cmd_info_t *cmd_info);
+static int noremap_cmd(const cmd_info_t *cmd_info);
+static int map_or_remap(const cmd_info_t *cmd_info, int no_remap);
+static int normal_cmd(const cmd_info_t *cmd_info);
+static int nunmap_cmd(const cmd_info_t *cmd_info);
+static int only_cmd(const cmd_info_t *cmd_info);
+static int popd_cmd(const cmd_info_t *cmd_info);
+static int pushd_cmd(const cmd_info_t *cmd_info);
+static int pwd_cmd(const cmd_info_t *cmd_info);
+static int qmap_cmd(const cmd_info_t *cmd_info);
+static int qnoremap_cmd(const cmd_info_t *cmd_info);
+static int qunmap_cmd(const cmd_info_t *cmd_info);
+static int registers_cmd(const cmd_info_t *cmd_info);
+static int rename_cmd(const cmd_info_t *cmd_info);
+static int restart_cmd(const cmd_info_t *cmd_info);
+static int restore_cmd(const cmd_info_t *cmd_info);
+static int rlink_cmd(const cmd_info_t *cmd_info);
+static int screen_cmd(const cmd_info_t *cmd_info);
+static int set_cmd(const cmd_info_t *cmd_info);
+static int shell_cmd(const cmd_info_t *cmd_info);
+static int sort_cmd(const cmd_info_t *cmd_info);
+static int source_cmd(const cmd_info_t *cmd_info);
+static int split_cmd(const cmd_info_t *cmd_info);
+static int substitute_cmd(const cmd_info_t *cmd_info);
+static int sync_cmd(const cmd_info_t *cmd_info);
+static int touch_cmd(const cmd_info_t *cmd_info);
+static int tr_cmd(const cmd_info_t *cmd_info);
+static int undolist_cmd(const cmd_info_t *cmd_info);
+static int unmap_cmd(const cmd_info_t *cmd_info);
+static int unlet_cmd(const cmd_info_t *cmd_info);
+static int view_cmd(const cmd_info_t *cmd_info);
+static int vifm_cmd(const cmd_info_t *cmd_info);
+static int vmap_cmd(const cmd_info_t *cmd_info);
+static int vnoremap_cmd(const cmd_info_t *cmd_info);
+#ifdef _WIN32
+static int volumes_cmd(const cmd_info_t *cmd_info);
+#endif
+static int vsplit_cmd(const cmd_info_t *cmd_info);
+static int do_split(const cmd_info_t *cmd_info, SPLIT orientation);
+static int do_map(const cmd_info_t *cmd_info, const char map_type[], int mode,
+		int no_remap);
+static int vunmap_cmd(const cmd_info_t *cmd_info);
+static int do_unmap(const char *keys, int mode);
+static int windo_cmd(const cmd_info_t *cmd_info);
+static int winrun_cmd(const cmd_info_t *cmd_info);
+static int winrun(FileView *view, const char cmd[]);
+static int write_cmd(const cmd_info_t *cmd_info);
+static int quit_cmd(const cmd_info_t *cmd_info);
+static int wq_cmd(const cmd_info_t *cmd_info);
+static int yank_cmd(const cmd_info_t *cmd_info);
+static int get_reg_and_count(const cmd_info_t *cmd_info, int *reg);
+static int usercmd_cmd(const cmd_info_t* cmd_info);
+static void output_to_statusbar(const char *cmd);
 
-typedef struct current_command
-{
-	int start_range;
-	int end_range;
-	int count;
-	char *cmd_name;
-	char *args;
-	char *curr_files; /* holds %f macro files */
-	char *other_files; /* holds %F macro files */
-	char *user_args; /* holds %a macro string */
-	char *order; /* holds the order of macros command %a %f or command %f %a */
-	int background;
-	int split;
-	int builtin;
-	int is_user;
-	int pos;
-	int pause;
-}cmd_t;
+static const cmd_add_t commands[] = {
+	{ .name = "",                 .abbr = NULL,    .emark = 0,  .id = COM_GOTO,        .range = 1,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = goto_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "!",                .abbr = NULL,    .emark = 1,  .id = COM_EXECUTE,     .range = 1,    .bg = 1, .quote = 0, .regexp = 0,
+		.handler = emark_cmd,       .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "alink",            .abbr = NULL,    .emark = 1,  .id = COM_ALINK,       .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = alink_cmd,       .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "apropos",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = apropos_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "cd",               .abbr = NULL,    .emark = 1,  .id = COM_CD,          .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = cd_cmd,          .qmark = 0,      .expand = 3, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 0, },
+	{ .name = "change",           .abbr = "c",     .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = change_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+#ifndef _WIN32
+	{ .name = "chmod",            .abbr = NULL,    .emark = 1,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = chmod_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "chown",            .abbr = NULL,    .emark = 0,  .id = COM_CHOWN,       .range = 1,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = chown_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 1, },
+#else
+	{ .name = "chmod",            .abbr = NULL,    .emark = 1,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = chmod_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 1, },
+#endif
+	{ .name = "clone",            .abbr = NULL,    .emark = 1,  .id = COM_CLONE,       .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = clone_cmd,       .qmark = 1,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "cmap",             .abbr = "cm",    .emark = 0,  .id = COM_CMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = cmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "cnoremap",         .abbr = "cno",   .emark = 0,  .id = COM_CNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = cnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "colorscheme",      .abbr = "colo",  .emark = 0,  .id = COM_COLORSCHEME, .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = colorscheme_cmd, .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 0, },
+  { .name = "command",          .abbr = "com",   .emark = 1,  .id = COM_COMMAND,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+    .handler = command_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "copy",             .abbr = "co",    .emark = 1,  .id = COM_COPY,        .range = 1,    .bg = 1, .quote = 1, .regexp = 0,
+		.handler = copy_cmd,        .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "cunmap",           .abbr = "cu",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = cunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "delete",           .abbr = "d",     .emark = 1,  .id = -1,              .range = 1,    .bg = 1, .quote = 0, .regexp = 0,
+		.handler = delete_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 1, },
+	{ .name = "delmarks",         .abbr = "delm",  .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = delmarks_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "display",          .abbr = "di",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = registers_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "dirs",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = dirs_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "echo",             .abbr = "ec",    .emark = 0,  .id = COM_ECHO,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = echo_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "edit",             .abbr = "e",     .emark = 0,  .id = COM_EDIT,        .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = edit_cmd,        .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "else",             .abbr = "el",    .emark = 0,  .id = COM_IF_STMT,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = else_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "empty",            .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = empty_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "endif",            .abbr = "en",    .emark = 0,  .id = COM_IF_STMT,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = endif_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "execute",          .abbr = "exe",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = exe_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "exit",             .abbr = "exi",   .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = quit_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "file",             .abbr = "f",     .emark = 0,  .id = COM_FILE,        .range = 0,    .bg = 1, .quote = 0, .regexp = 0,
+		.handler = file_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "filetype",         .abbr = "filet", .emark = 0,  .id = COM_FILETYPE,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = filetype_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 2, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "fileviewer",       .abbr = "filev", .emark = 0,  .id = COM_FILEVIEWER,  .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = fileviewer_cmd,  .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 2, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "filextype",        .abbr = "filex", .emark = 0,  .id = COM_FILEXTYPE,   .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = filextype_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 2, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "filter",           .abbr = NULL,    .emark = 1,  .id = COM_FILTER,      .range = 0,    .bg = 0, .quote = 1, .regexp = 1,
+		.handler = filter_cmd,      .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "find",             .abbr = "fin",   .emark = 0,  .id = COM_FIND,        .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = find_cmd,        .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "finish",           .abbr = "fini",  .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = finish_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "grep",             .abbr = "gr",    .emark = 1,  .id = COM_GREP,        .range = 1,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = grep_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "help",             .abbr = "h",     .emark = 0,  .id = COM_HELP,        .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = help_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "highlight",        .abbr = "hi",    .emark = 0,  .id = COM_HIGHLIGHT,   .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = highlight_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 4,       .select = 0, },
+	{ .name = "history",          .abbr = "his",   .emark = 0,  .id = COM_HISTORY,     .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = history_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "if",               .abbr = NULL,    .emark = 0,  .id = COM_IF_STMT,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = if_cmd,          .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "invert",           .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = invert_cmd,      .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "jobs",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = jobs_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "let",              .abbr = NULL,    .emark = 0,  .id = COM_LET,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = let_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "locate",           .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = locate_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "ls",               .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = ls_cmd,          .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "map",              .abbr = NULL,    .emark = 1,  .id = COM_MAP,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = map_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 2, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "mark",             .abbr = "ma",    .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = mark_cmd,        .qmark = 2,      .expand = 1, .cust_sep = 0,         .min_args = 1, .max_args = 3,       .select = 0, },
+	{ .name = "marks",            .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = marks_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "messages",         .abbr = "mes",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = messages_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "mkdir",            .abbr = NULL,    .emark = 1,  .id = COM_MKDIR,       .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = mkdir_cmd,       .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "mmap",             .abbr = "mm",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = mmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "mnoremap",         .abbr = "mno",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = mnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "move",             .abbr = "m",     .emark = 1,  .id = COM_MOVE,        .range = 1,    .bg = 1, .quote = 1, .regexp = 0,
+		.handler = move_cmd,        .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "munmap",           .abbr = "mu",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = munmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "nmap",             .abbr = "nm",    .emark = 0,  .id = COM_NMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = nmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "nnoremap",         .abbr = "nn",    .emark = 0,  .id = COM_NNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = nnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "nohlsearch",       .abbr = "noh",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = nohlsearch_cmd,  .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "noremap",          .abbr = "no",    .emark = 0,  .id = COM_NOREMAP,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = noremap_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "normal",           .abbr = "norm",  .emark = 1,  .id = COM_NORMAL,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = normal_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "nunmap",           .abbr = "nun",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = nunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "only",             .abbr = "on",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = only_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "popd",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = popd_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "pushd",            .abbr = NULL,    .emark = 1,  .id = COM_PUSHD,       .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = pushd_cmd,       .qmark = 0,      .expand = 2, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 0, },
+	{ .name = "pwd",              .abbr = "pw",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = pwd_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "qmap",             .abbr = "qm",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = qmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "qnoremap",         .abbr = "qno",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = qnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "quit",             .abbr = "q",     .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = quit_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "qunmap",           .abbr = "qun",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = qunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "registers",        .abbr = "reg",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = registers_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "rename",           .abbr = NULL,    .emark = 1,  .id = COM_RENAME,      .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = rename_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "restart",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = restart_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "restore",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = restore_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 1, },
+	{ .name = "rlink",            .abbr = NULL,    .emark = 1,  .id = COM_RLINK,       .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = rlink_cmd,       .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "screen",           .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = screen_cmd,      .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "set",              .abbr = "se",    .emark = 0,  .id = COM_SET,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = set_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "shell",            .abbr = "sh",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = shell_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "sort",             .abbr = "sor",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = sort_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "source",           .abbr = "so",    .emark = 0,  .id = COM_SOURCE,      .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = source_cmd,      .qmark = 0,      .expand = 2, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "split",            .abbr = "sp",    .emark = 1,  .id = COM_SPLIT,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = split_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "substitute",       .abbr = "s",     .emark = 0,  .id = COM_SUBSTITUTE,  .range = 1,    .bg = 0, .quote = 0, .regexp = 1,
+		.handler = substitute_cmd,  .qmark = 0,      .expand = 0, .cust_sep = 1,         .min_args = 0, .max_args = 3,       .select = 1, },
+	{ .name = "sync",             .abbr = NULL,    .emark = 0,  .id = COM_SYNC,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = sync_cmd,        .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "touch",            .abbr = NULL,    .emark = 0,  .id = COM_TOUCH,       .range = 0,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = touch_cmd,       .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "tr",               .abbr = NULL,    .emark = 0,  .id = COM_TR,          .range = 1,    .bg = 0, .quote = 0, .regexp = 1,
+		.handler = tr_cmd,          .qmark = 0,      .expand = 0, .cust_sep = 1,         .min_args = 2, .max_args = 2,       .select = 1, },
+	{ .name = "undolist",         .abbr = "undol", .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = undolist_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "unmap",            .abbr = "unm",   .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = unmap_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "unlet",            .abbr = "unl",   .emark = 1,  .id = COM_UNLET,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = unlet_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "version",          .abbr = "ve",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = vifm_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "view",             .abbr = "vie",   .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = view_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "vifm",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = vifm_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "vmap",             .abbr = "vm",    .emark = 0,  .id = COM_VMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = vmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "vnoremap",         .abbr = "vn",    .emark = 0,  .id = COM_VNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = vnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+#ifdef _WIN32
+	{ .name = "volumes",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = volumes_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+#endif
+	{ .name = "vsplit",           .abbr = "vs",    .emark = 1,  .id = COM_VSPLIT,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = vsplit_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "vunmap",           .abbr = "vu",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = vunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "windo",            .abbr = NULL,    .emark = 0,  .id = COM_WINDO,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = windo_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "winrun",           .abbr = NULL,    .emark = 0,  .id = COM_WINRUN,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = winrun_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "write",            .abbr = "w",     .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = write_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "wq",               .abbr = NULL,    .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = wq_cmd,          .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "xit",              .abbr = "x",     .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = quit_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "yank",             .abbr = "y",     .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0,
+		.handler = yank_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 1, },
 
-int
-sort_this(const void *one, const void *two)
-{
-	const command_t *first = (const command_t *)one;
-	const command_t *second = (const command_t *)two;
+	{ .name = "<USERCMD>",        .abbr = NULL,    .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 1, .regexp = 0,
+		.handler = usercmd_cmd,     .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+};
 
-	return strcmp(first->name, second->name);
-}
+static cmds_conf_t cmds_conf = {
+	.complete_args = complete_args,
+	.swap_range = swap_range,
+	.resolve_mark = resolve_mark,
+	.expand_macros = cmds_expand_macros,
+	.expand_envvars = cmds_expand_envvars,
+	.post = post,
+	.select_range = select_range,
+	.skip_at_beginning = skip_at_beginning,
+};
 
-int
-command_is_reserved(char *name)
-{
-	int x;
-
-	for(x = 0; x < RESERVED; x++)
-	{
-		if(!strncmp(reserved_commands[x], name, strlen(name)))
-				return x;
-	}
-	return -1;
-}
-
-int
-command_is_being_used(char *command)
-{
-	int x;
-	for(x = 0; x < cfg.command_num; x++)
-	{
-		if(!strcmp(command_list[x].name, command))
-				return 1;
-	}
-	return 0;
-		
-}
-
-void
-save_search_history(char *pattern)
-{
-	int x = 0;
-
-	if ((cfg.search_history_num + 1) >= cfg.search_history_len)
-		cfg.search_history_num = x  = cfg.search_history_len - 1;
-	else
-		x = cfg.search_history_num + 1;
-
-	for (; x > 0; x--)
-	{
-		cfg.search_history[x] = (char *)realloc(cfg.search_history[x], 
-				strlen(cfg.search_history[x - 1]) + 1);
-		strcpy(cfg.search_history[x], cfg.search_history[x - 1]);
-	}
-
-	cfg.search_history[0] = (char *)realloc(cfg.search_history[0], 
-			strlen(pattern) + 1);
-	strcpy(cfg.search_history[0], pattern);
-	cfg.search_history_num++;
-	if (cfg.search_history_num >= cfg.search_history_len)
-		cfg.search_history_num = cfg.search_history_len - 1;
-}
-
-void
-save_command_history(char *command)
-{
-	int x = 0;
-
-	/* Don't add :!! or :! to history list */
-	if (!strcmp(command, "!!") || !strcmp(command, "!"))
-		return;
-
-	if ((cfg.cmd_history_num + 1) >= cfg.cmd_history_len)
-		cfg.cmd_history_num = x = cfg.cmd_history_len - 1;
-	else
-		x = cfg.cmd_history_num + 1;
-
-	for (; x > 0; x--)
-	{
-		cfg.cmd_history[x] = (char *)realloc(cfg.cmd_history[x], 
-				strlen(cfg.cmd_history[x - 1]) + 1);
-		strcpy(cfg.cmd_history[x], cfg.cmd_history[x - 1]);
-	}
-
-	cfg.cmd_history[0] = (char *)realloc(cfg.cmd_history[0], 
-			strlen(command) + 1);
-	strcpy(cfg.cmd_history[0], command);
-	cfg.cmd_history_num++;
-	if (cfg.cmd_history_num >= cfg.cmd_history_len)
-		cfg.cmd_history_num = cfg.cmd_history_len -1;
-
-}
-
-/* The string returned needs to be freed in the calling function */
-char *
-expand_macros(FileView *view, char *command, char *args,
-		int *use_menu, int *split)
-{
-	char * expanded = NULL;
-	int x;
-	int y = 0;
-	int len = 0;
-
-	curr_stats.getting_input = 1;
-
-	expanded = (char *)calloc(strlen(command) +1, sizeof(char *));
-
-	for(x = 0; x < strlen(command); x++)
-			if(command[x] == '%')
-				break;
-
-	strncat(expanded, command, x);
-	x++;
-	len = strlen(expanded);
-
-	do
-	{
-		switch(command[x])
-		{
-			case 'a': /* user arguments */
-				{
-					if(!args)
-						break;
-					else
-					{
-						char arg_buf[strlen(args) +2];
-
-						expanded = (char *)realloc(expanded, 
-								strlen(expanded) + strlen(args) +3);
-						snprintf(arg_buf, sizeof(arg_buf), "%s ", args);
-						strcat(expanded, arg_buf);
-						len = strlen(expanded);
-					}
-				}
-				break;
-			case 'f': /* current dir selected files */
-				{
-					if(view->selected_files)
-					{
-						int y = 0;
-						for(y = 0; y < view->list_rows; y++)
-						{
-							if(view->dir_entry[y].selected)
-							{
-								expanded = (char *)realloc(expanded, 
-										len + strlen(view->dir_entry[y].name) +5);
-
-								/* Directory has / appended to the name this removes it. */
-								if(view->dir_entry[y].type == DIRECTORY)
-								{
-									strncat(expanded, view->dir_entry[y].name, 
-											strlen(view->dir_entry[y].name) -1);
-								}
-								else 
-								{
-									char *temp = NULL;
-									temp = escape_filename(view->dir_entry[y].name, 1);
-									expanded = (char *)realloc(expanded, strlen(expanded) + 
-										strlen(temp) +3);
-									strcat(expanded, temp);
-
-									my_free(temp);
-								}
-								strcat(expanded, " ");
-								len = strlen(expanded);
-							}
-						}
-					}
-					else
-					{
-						expanded = (char *)realloc(expanded, strlen(expanded) + 
-								strlen(view->dir_entry[view->list_pos].name) +3);
-
-						if(view->dir_entry[view->list_pos].type == DIRECTORY)
-						{
-							strncat(expanded, view->dir_entry[view->list_pos].name,
-									strlen(view->dir_entry[view->list_pos].name) -1);
-						}
-						else
-						{
-							char *temp = 
-								escape_filename(view->dir_entry[view->list_pos].name, 1);
-
-							expanded = (char *)realloc(expanded, strlen(expanded) + 
-								strlen(temp) +3);
-							strcat(expanded, temp);
-							my_free(temp);
-						}
-						len = strlen(expanded);
-					}
-				}
-				break;
-			case 'F': /* other dir selected files */
-				{
-					if(other_view->selected_files)
-					{
-						int y = 0;
-
-						for(y = 0; y < other_view->list_rows; y++)
-						{
-							if(other_view->dir_entry[y].selected)
-							{
-								expanded = (char *)realloc(expanded, len +
-										strlen(other_view->dir_entry[y].name) +
-										strlen(other_view->curr_dir) + 3);
-
-								if(expanded == NULL)
-								{
-									show_error_msg("Memory Error", "Unable to allocate memory");
-									return NULL;
-								}
-
-								strcat(expanded, other_view->curr_dir);
-								strcat(expanded, "/");
-
-								if(other_view->dir_entry[y].type == DIRECTORY)
-									strncat(expanded, other_view->dir_entry[y].name,
-											strlen(other_view->dir_entry[y].name) -1);
-								else
-								{
-									char *temp = NULL;
-									temp = escape_filename(other_view->dir_entry[y].name, 1);
-
-									expanded = (char *)realloc(expanded, strlen(expanded) +
-											strlen(temp +3));
-									strcat(expanded, temp);
-
-									my_free(temp);
-								}
-
-								strcat(expanded, " ");
-								len = strlen(expanded);
-							}
-						}
-					}
-					else
-					{
-						expanded = (char *)realloc(expanded, len + 
-								strlen(other_view->dir_entry[other_view->list_pos].name) +
-								strlen(other_view->curr_dir) +4);
-						if(expanded == NULL)
-						{
-							show_error_msg("Memory Error", "Unable to allocate memory");
-							return NULL;
-						}
-
-						strcat(expanded, other_view->curr_dir);
-						strcat(expanded, "/");
-
-						if(other_view->dir_entry[other_view->list_pos].type == DIRECTORY)
-							strncat(expanded, 
-									other_view->dir_entry[other_view->list_pos].name,
-									strlen(other_view->dir_entry[other_view->list_pos].name) -1);
-						else
-						{
-							char *temp =
-								escape_filename(other_view->dir_entry[other_view->list_pos].name, 1);
-							expanded = (char *)realloc(expanded, strlen(expanded) +
-									strlen(temp) + 3);
-							strcat(expanded, temp);
-							my_free(temp);
-						}
-
-						len = strlen(expanded);
-					}
-				}
-				break;
-			case 'd': /* current directory */
-				{
-					expanded = (char *)realloc(expanded, 
-							len + strlen(view->curr_dir) +3);
-					strcat(expanded, "\"");
-					strcat(expanded, view->curr_dir);
-					strcat(expanded, "\"");
-					len = strlen(expanded);
-				}
-				break;
-			case 'D': /* other directory */
-				{
-					expanded = (char *)realloc(expanded, 
-							len + strlen(other_view->curr_dir) +3);
-					if(!expanded)
-					{
-						show_error_msg("Memory Error", "Unable to allocate memory");
-						return NULL;
-					}
-					strcat(expanded, "\"");
-					strcat(expanded, other_view->curr_dir);
-					strcat(expanded, "\"");
-					len = strlen(expanded);
-				}
-				break;
-			case 'm': /* use menu */
-				*use_menu = 1;
-				break;
-			case 's': /* split in new screen region */
-				*split = 1;
-				
-				break;
-			default:
-				break;
-		}
-		x++;
-		y = x;
-
-		for(; x < strlen(command); x++)
-		{
-				if(command[x] == '%')
-					break;
-		}
-		expanded = (char *)realloc(expanded, len + strlen(command) +1); 
-		strncat(expanded, command + y, x - y);
-		len = strlen(expanded);
-		x++;
-		}while(x < strlen(command));
-
-	len++;
-	expanded[len] = '\0';
-	if (len > cfg.max_args/2)
-		show_error_msg("Argument is too long", " FIXME ");
-
-	curr_stats.getting_input = 0;
-	
-	return expanded;
-}
-
-int
-is_user_command(char *command)
-{
-	char buf[strlen(command) +1]; 
-	char *com;
-	char *ptr;
-	int x;
-
-	com = strcpy(buf, command);
-
-	if((ptr = strchr(com, ' ')) != NULL)
-		*ptr = '\0';
-
-	for(x = 0; x < cfg.command_num; x++)
-	{
-		if(!strncmp(com, command_list[x].name, strlen(com)))
-		{
-			return x;
-		}
-	}
-
-	return -1;
-}
+static int need_clean_selection;
+/* Stores condition evaluation result for all nesting if-endif statements. */
+static int_stack_t if_levels;
 
 void
-remove_command(char *name)
+exec_startup_commands(int c, char **v)
 {
-	char *ptr = NULL;
-	char *s = name;
+	static int argc;
+	static char **argv;
 	int x;
-	int found = 0;
 
-	if((ptr = strchr(s, ' ')) != NULL)
-		*ptr = '\0';
-
-	if(command_is_reserved(s) > -1)
+	if(c > 0)
 	{
-		show_error_msg(" Trying to delete a reserved Command ", s);
-		return;
+		argc = c;
+		argv = v;
 	}
 
-	for(x = 0; x < cfg.command_num; x++)
+	for(x = 1; x < argc; x++)
 	{
-		if(!strcmp(s, command_list[x].name))
+		if(strcmp(argv[x], "-c") == 0)
 		{
-			found = 1;
-			break;
-		}
-	}
-	if(found)
-	{
-		cfg.command_num--;
-		while(x < cfg.command_num)
-		{
-			command_list[x].name = (char *)realloc(command_list[x].name, 
-					strlen(command_list[x +1].name +1));
-			strcpy(command_list[x].name, command_list[x +1].name);
-			command_list[x].action = (char *)realloc(command_list[x].action, 
-					strlen(command_list[x +1].action +1));
-			strcpy(command_list[x].action, command_list[x +1].action);
+			(void)exec_commands(argv[x + 1], curr_view, GET_COMMAND);
 			x++;
 		}
-
-		if(strlen(command_list[x].name))
-			my_free(command_list[x].name);
-
-		if(strlen(command_list[x].action))
-			my_free(command_list[x].action);
-
-	}
-	else
-		show_error_msg(" Command Not Found ", s);
-}
-
-void
-add_command(char *name, char *action)
-{
-	if(command_is_reserved(name) > -1)
-			return;
-	if(isdigit(*name))
-	{
-		show_error_msg(" Invalid Command Name ", 
-				"Commands cannot start with a number.");
-		return;
-	}
-
-	if(command_is_being_used(name))
-	{
-		return;
-	}
-
-	command_list = (command_t *)realloc(command_list, 
-			(cfg.command_num +1) * sizeof(command_t));
-
-	command_list[cfg.command_num].name = (char *)malloc(strlen(name) +1);
-	strcpy(command_list[cfg.command_num].name, name);
-	command_list[cfg.command_num].action = (char *)malloc(strlen(action) +1);
-	strcpy(command_list[cfg.command_num].action, action);
-	cfg.command_num++;
-
-	qsort(command_list, cfg.command_num, sizeof(command_t), sort_this);
-}
-
-static void
-set_user_command(char * command, int overwrite, int background)
-{
-	char buf[80];
-	char *ptr = NULL;
-	char *com_name = NULL;
-	char *com_action = NULL;
-
-	while(isspace(*command))
-		command++;
-
-	com_name = command;
-
-	if((ptr = strchr(command, ' ')) == NULL)
-			return;
-
-	*ptr = '\0';
-	ptr++;
-
-	while(isspace(*ptr) && *ptr != '\0')
-		ptr++;
-
-	if((strlen(ptr) < 1))
-	{
-		show_error_msg(" To set a Command Use: ", 
-				":com command_name command_action");
-		return;
-	}
-
-	com_action = strdup(ptr);
-
-	if(background)
-	{
-		com_action = (char *)realloc(com_action, 
-				(strlen(com_action) + 4) * sizeof(char));
-		snprintf(com_action, (strlen(com_action) + 3) * sizeof(char), "%s &", ptr);
-	}
-
-	if(command_is_reserved(com_name) > -1)
-	{
-		snprintf(buf, sizeof(buf), "%s is a reserved command name", com_name);
-		show_error_msg("", buf);
-		my_free(com_action);
-		return;
-	}
-	if(command_is_being_used(com_name))
-	{
-		if(overwrite)
+		else if(argv[x][0] == '+')
 		{
-			remove_command(com_name);
-			add_command(com_name, com_action);
+			(void)exec_commands(argv[x] + 1, curr_view, GET_COMMAND);
+		}
+	}
+}
+
+static int
+swap_range(void)
+{
+	return query_user_menu("Command Error", "Backwards range given, OK to swap?");
+}
+
+static int
+resolve_mark(char mark)
+{
+	int result;
+
+	result = check_mark_directory(curr_view, mark);
+	if(result < 0)
+		status_bar_errorf("Trying to use an invalid mark: '%c", mark);
+	return result;
+}
+
+static char *
+cmds_expand_macros(const char *str, int *usr1, int *usr2)
+{
+	char *result;
+	MacroFlags flags = MACRO_NONE;
+
+	result = expand_macros(curr_view, str, NULL, &flags);
+
+	*usr1 = flags;
+
+	return result;
+}
+
+char *
+cmds_expand_envvars(const char *str)
+{
+	char *result = NULL;
+	size_t len = 0;
+	int prev_slash = 0;
+	while(*str != '\0')
+	{
+		if(!prev_slash && *str == '$' && isalpha(str[1]))
+		{
+			char name[NAME_MAX];
+			const char *p = str + 1;
+			char *q = name;
+			const char *cq;
+			while((isalnum(*p) || *p == '_') && q - name < sizeof(name) - 1)
+				*q++ = *p++;
+			*q = '\0';
+
+			cq = env_get(name);
+			if(cq != NULL)
+			{
+				size_t old_len = len;
+				q = escape_filename(cq, 1);
+				len += strlen(q);
+				result = realloc(result, len + 1);
+				strcpy(result + old_len, q);
+				free(q);
+				str = p;
+			}
+			else
+			{
+				str++;
+			}
 		}
 		else
 		{
-			snprintf(buf, sizeof(buf), "%s is already set. Use :com! to overwrite.",
-					com_name);
-			show_error_msg("", buf);
+			if(*str == '\\')
+				prev_slash = !prev_slash;
+			else
+				prev_slash = 0;
+
+			result = realloc(result, len + 1 + 1);
+			result[len++] = *str++;
+			result[len] = '\0';
+		}
+	}
+	if(result == NULL)
+		result = strdup("");
+	return result;
+}
+
+static void
+post(int id)
+{
+	if(id == COM_GOTO)
+		return;
+	if((curr_view != NULL && !curr_view->selected_files) || !need_clean_selection)
+		return;
+
+	clean_selected_files(curr_view);
+	load_saving_pos(curr_view, 1);
+}
+
+TSTATIC void
+select_range(int id, const cmd_info_t *cmd_info)
+{
+	/* TODO: refactor this function select_range() */
+
+	int x;
+	int y = 0;
+
+	/* Both a starting range and an ending range are given. */
+	if(cmd_info->begin > -1)
+	{
+		clean_selected_files(curr_view);
+
+		for(x = cmd_info->begin; x <= cmd_info->end; x++)
+		{
+			if(stroscmp(curr_view->dir_entry[x].name, "../") == 0 &&
+					cmd_info->begin != cmd_info->end)
+				continue;
+			curr_view->dir_entry[x].selected = 1;
+			y++;
+		}
+		curr_view->selected_files = y;
+	}
+	else if(curr_view->selected_files == 0)
+	{
+		if(cmd_info->end > -1)
+		{
+			clean_selected_files(curr_view);
+
+			y = 0;
+			for(x = cmd_info->end; x < curr_view->list_rows; x++)
+			{
+				if(y == 1)
+					break;
+				curr_view->dir_entry[x].selected = 1;
+				y++;
+			}
+			curr_view->selected_files = y;
+		}
+		else if(id != COM_FIND && id != COM_GREP)
+		{
+			clean_selected_files(curr_view);
+
+			y = 0;
+			for(x = curr_view->list_pos; x < curr_view->list_rows; x++)
+			{
+				if(y == 1)
+					break;
+
+				curr_view->dir_entry[x].selected = 1;
+				y++;
+			}
+			curr_view->selected_files = y;
 		}
 	}
 	else
 	{
-		add_command(com_name, com_action);
+		return;
 	}
+
+	if(curr_view->selected_files > 0)
+		curr_view->user_selection = 0;
+}
+
+static void
+select_count(const cmd_info_t *cmd_info, int count)
+{
+	int pos;
+
+	/* Both a starting range and an ending range are given. */
+	pos = cmd_info->end;
+	if(pos < 0)
+		pos = curr_view->list_pos;
+
+	clean_selected_files(curr_view);
+
+	while(count-- > 0 && pos < curr_view->list_rows)
+	{
+		if(stroscmp(curr_view->dir_entry[pos].name, "../") != 0)
+		{
+			curr_view->dir_entry[pos].selected = 1;
+			curr_view->selected_files++;
+		}
+		pos++;
+	}
+}
+
+static int
+skip_at_beginning(int id, const char *args)
+{
+	if(id == COM_WINDO)
+	{
+		return 0;
+	}
+	else if(id == COM_WINRUN)
+	{
+		args = skip_whitespace(args);
+		if(*args != '\0')
+			return 1;
+	}
+	return -1;
+}
+
+void
+init_commands(void)
+{
+	if(cmds_conf.inner != NULL)
+	{
+		init_cmds(1, &cmds_conf);
+		return;
+	}
+
+	/* we get here when init_commands() is called first time */
+	init_cmds(1, &cmds_conf);
+	add_builtin_commands((const cmd_add_t *)&commands, ARRAY_LEN(commands));
+
+	init_bracket_notation();
+	init_variables();
+}
+
+static void
+save_history(const char *line, char **hist, int *num, int *len)
+{
+	int x;
+
+	if(*len <= 0)
+		return;
+
+	/* Don't add empty lines */
+	if(line[0] == '\0')
+		return;
+
+	/* Don't add duplicates */
+	for(x = 0; x <= *num; x++)
+	{
+		if(strcmp(hist[x], line) == 0)
+		{
+			/* move line to the last position */
+			char *t;
+			if(x == 0)
+				return;
+			t = hist[x];
+			memmove(hist + 1, hist, sizeof(char *)*x);
+			hist[0] = t;
+			return;
+		}
+	}
+
+	if(*num + 1 >= *len)
+		*num = x = *len - 1;
+	else
+		x = *num + 1;
+
+	while(x > 0)
+	{
+		(void)replace_string(&hist[x], hist[x - 1]);
+		x--;
+	}
+
+	(void)replace_string(&hist[0], line);
+	(*num)++;
+	if(*num >= *len)
+		*num = *len - 1;
+}
+
+void
+save_search_history(const char *pattern)
+{
+	save_history(pattern, cfg.search_history, &cfg.search_history_num,
+			&cfg.history_len);
+}
+
+void
+save_command_history(const char *command)
+{
+	/* Don't add :!! or :! to history list. */
+	if(strcmp(command, "!!") != 0 && strcmp(command, "!") != 0)
+	{
+		save_history(command, cfg.cmd_history, &cfg.cmd_history_num,
+				&cfg.history_len);
+	}
+}
+
+void
+save_prompt_history(const char *line)
+{
+	save_history(line, cfg.prompt_history, &cfg.prompt_history_num,
+			&cfg.history_len);
 }
 
 static void
@@ -648,1043 +779,2970 @@ split_screen(FileView *view, char *command)
 {
 	char buf[1024];
 
-	if (command)
+	if(command)
 	{
 		snprintf(buf, sizeof(buf), "screen -X eval \'chdir %s\'", view->curr_dir);
 		my_system(buf);
 
-		snprintf(buf,sizeof(buf), "screen-open-region-with-program \"%s\' ",
+		snprintf(buf, sizeof(buf), "screen-open-region-with-program \"%s\"",
 				command);
 
 		my_system(buf);
-
 	}
 	else
 	{
-		char *sh = getenv("SHELL");
 		snprintf(buf, sizeof(buf), "screen -X eval \'chdir %s\'", view->curr_dir);
 		my_system(buf);
 
-		snprintf(buf, sizeof(buf), "screen-open-region-with-program %s", sh);
+		snprintf(buf, sizeof(buf), "screen-open-region-with-program %s", cfg.shell);
 		my_system(buf);
 	}
 }
 
-void
-shellout(char *command, int pause)
+static int
+set_view_filter(FileView *view, const char *filter, int invert)
 {
-	char buf[1024];
+	/* TODO: move this to filelist.c */
+	regex_t re;
+	int err;
 
-	if(command != NULL)
+	if((err = regcomp(&re, filter, REG_EXTENDED)) != 0)
 	{
-		if(cfg.use_screen)
-		{
-			char *ptr = (char *)NULL;
-			char *title = strstr(command, cfg.vi_command);
-
-			if(title != NULL)
-			{
-				if(pause)
-					snprintf(buf, sizeof(buf), "screen -t \"%s\" sh -c \"pauseme %s\"", 
-							title + strlen(cfg.vi_command) +1, command);
-				else
-					snprintf(buf, sizeof(buf), "screen -t \"%s\" sh -c \"%s\"", 
-							title + strlen(cfg.vi_command) +1, command);
-			}
-			else
-			{
-				ptr = strchr(command, ' ');
-				if (ptr != NULL)
-				{
-					*ptr = '\0';
-					title = strdup(command);
-					*ptr = ' ';
-				}
-				else
-					title = strdup("Shell");
-
-				if(pause)
-					snprintf(buf, sizeof(buf), "screen -t \"%.10s\" sh -c \"pauseme %s\"", 
-							title, command);
-				else
-					snprintf(buf, sizeof(buf), "screen -t \"%.10s\" sh -c \"%s\"", title, command);
-				my_free(title);
-			}
-		}
-		else
-		{
-			if(pause)
-				snprintf(buf, sizeof(buf), "sh -c \"pauseme %s\"", command);
-			else
-				snprintf(buf, sizeof(buf), "sh -c \"%s\"", command);
-		}
+		status_bar_errorf("Filter not set: %s", get_regexp_error(err, &re));
+		regfree(&re);
+		return 1;
 	}
-	else
-	{
-		if(cfg.use_screen)
-			snprintf(buf, sizeof(buf), "screen");
-		else
-		{
-			char *sh = getenv("SHELL");
-			snprintf(buf, sizeof(buf), "%s", sh);
-		}
-	}
+	regfree(&re);
 
-	def_prog_mode();
-	endwin();
-
-	my_system("clear");
-	my_system(buf);
-
-
-	/* There is a problem with using the screen program and 
-	 * catching all the SIGWICH signals.  So just redraw the window.
-	 */
-	if (!isendwin())
-		redraw_window();
-
-	curs_set(0);
+	view->invert = invert;
+	set_filename_filter(view, filter);
+	load_saving_pos(view, 1);
+	return 0;
 }
 
 static void
-initialize_command_struct(cmd_t *cmd)
+remove_selection(FileView *view)
 {
-	cmd->start_range = 0;
-	cmd->end_range = 0;
-	cmd->count = 0;
-	cmd->cmd_name = NULL;
-	cmd->args = NULL;
-	cmd->background = 0;
-	cmd->split = 0;
-	cmd->builtin = -1;
-	cmd->is_user = -1;
-	cmd->pos = 0;
-	cmd->pause = 0;
+	/* TODO: maybe move this to filelist.c */
+	if(view->selected_files == 0)
+		return;
+
+	clean_selected_files(view);
+	redraw_view(view);
 }
 
+/* Returns negative value in case of error */
 static int
-select_files_in_range(FileView *view, cmd_t * cmd)
+execute_command(FileView *view, const char command[], int menu)
 {
+	int id;
+	int result;
 
-				int x;
-				int y = 0;
+	if(command == NULL)
+	{
+		remove_selection(view);
+		return 0;
+	}
 
-				/* Both a starting range and an ending range are given. */
-				if(cmd->start_range > -1)
+	while(isspace(*command) || *command == ':')
+		command++;
+
+	if(command[0] == '"')
+		return 0;
+
+	if(command[0] == '\0' && !menu)
+	{
+		remove_selection(view);
+		return 0;
+	}
+
+	if(!menu)
+	{
+		init_cmds(1, &cmds_conf);
+		cmds_conf.begin = 0;
+		cmds_conf.current = view->list_pos;
+		cmds_conf.end = view->list_rows - 1;
+	}
+
+	id = get_cmd_id(command);
+
+	if(!int_stack_is_empty(&if_levels) && !int_stack_get_top(&if_levels) &&
+			id != COM_IF_STMT)
+	{
+		return 0;
+	}
+
+	if(id == USER_CMD_ID)
+	{
+		char buf[COMMAND_GROUP_INFO_LEN];
+
+		snprintf(buf, sizeof(buf), "in %s: %s",
+				replace_home_part(curr_view->curr_dir), command);
+
+		cmd_group_begin(buf);
+		cmd_group_end();
+	}
+
+	need_clean_selection = 1;
+	result = execute_cmd(command);
+
+	if(result >= 0)
+		return result;
+
+	switch(result)
+	{
+		case CMDS_ERR_LOOP:
+			status_bar_error("Loop in commands");
+			break;
+		case CMDS_ERR_NO_MEM:
+			status_bar_error("Unable to allocate enough memory");
+			break;
+		case CMDS_ERR_TOO_FEW_ARGS:
+			status_bar_error("Too few arguments");
+			break;
+		case CMDS_ERR_TRAILING_CHARS:
+			status_bar_error("Trailing characters");
+			break;
+		case CMDS_ERR_INCORRECT_NAME:
+			status_bar_error("Incorrect command name");
+			break;
+		case CMDS_ERR_NEED_BANG:
+			status_bar_error("Add bang to force");
+			break;
+		case CMDS_ERR_NO_BUILTIN_REDEFINE:
+			status_bar_error("Can't redefine builtin command");
+			break;
+		case CMDS_ERR_INVALID_CMD:
+			status_bar_error("Invalid command name");
+			break;
+		case CMDS_ERR_NO_BANG_ALLOWED:
+			status_bar_error("No ! is allowed");
+			break;
+		case CMDS_ERR_NO_RANGE_ALLOWED:
+			status_bar_error("No range is allowed");
+			break;
+		case CMDS_ERR_NO_QMARK_ALLOWED:
+			status_bar_error("No ? is allowed");
+			break;
+		case CMDS_ERR_INVALID_RANGE:
+			/* message dialog is enough */
+			break;
+		case CMDS_ERR_NO_SUCH_UDF:
+			status_bar_error("No such user defined command");
+			break;
+		case CMDS_ERR_UDF_IS_AMBIGUOUS:
+			status_bar_error("Ambiguous use of user-defined command");
+			break;
+		case CMDS_ERR_ZERO_COUNT:
+			status_bar_error("Zero count");
+			break;
+		case CMDS_ERR_INVALID_ARG:
+			status_bar_error("Invalid argument");
+			break;
+		case CMDS_ERR_CUSTOM:
+			/* error message is posted by command handler */
+			break;
+		default:
+			status_bar_error("Unknown error");
+			break;
+	}
+	if(!menu && get_mode() == NORMAL_MODE)
+		remove_selection(view);
+	return -1;
+}
+
+/*
+ * Return value:
+ *  - 0 not in arg
+ *  - 1 skip next char
+ *  - 2 in arg
+ */
+TSTATIC int
+line_pos(const char begin[], const char end[], char sep, int rquoting)
+{
+	int state;
+	int count;
+	enum { BEGIN, NO_QUOTING, S_QUOTING, D_QUOTING, R_QUOTING };
+
+	state = BEGIN;
+	count = 0;
+	while(begin != end)
+	{
+		switch(state)
+		{
+			case BEGIN:
+				if(sep == ' ' && *begin == '\'')
+					state = S_QUOTING;
+				else if(sep == ' ' && *begin == '"')
+					state = D_QUOTING;
+				else if(sep == ' ' && *begin == '/' && rquoting)
+					state = R_QUOTING;
+				else if(*begin != sep)
+					state = NO_QUOTING;
+				break;
+			case NO_QUOTING:
+				if(*begin == sep)
 				{
-					if(cmd->end_range < cmd->start_range)
-					{
-						show_error_msg(" Command Error ", "Backward range given.");
-						//save_msg = 1;
-						//break;
-					}
-
-					for(x = 0; x < view->list_rows; x++)
-						view->dir_entry[x].selected = 0;
-
-					for(x = cmd->start_range; x <= cmd->end_range; x++)
-					{
-						view->dir_entry[x].selected = 1;
-						y++;
-					}
-					view->selected_files = y;
+					state = BEGIN;
+					count++;
 				}
-				/* A count is given */
-				else if(cmd->count)
+				else if(*begin == '\'')
 				{
-					if(!cmd->count)
-						cmd->count = 1;
-
-					/* A one digit range with a count. :4y5 */
-					if(cmd->end_range)
-					{
-						y = 0;
-						for(x = 0; x < view->list_rows; x++)
-							view->dir_entry[x].selected = 0;
-
-						for(x = cmd->end_range; x < view->list_rows; x++)
-						{
-							if(cmd->count == y)
-								break;
-							view->dir_entry[x].selected = 1;
-							y++;
-
-						}
-						view->selected_files = y;
-					}
-					/* Just a count is given. */ 
-					else
-					{
-						y = 0;
-
-						for(x = 0; x < view->list_rows; x++)
-							view->dir_entry[x].selected = 0;
-
-						for(x = view->list_pos; x < view->list_rows; x++)
-						{
-							if(cmd->count == y )
-								break;
-
-							view->dir_entry[x].selected = 1;
-							y++;
-						}
-						view->selected_files = y;
-
-					}
+					state = S_QUOTING;
 				}
+				else if(*begin == '"')
+				{
+					state = D_QUOTING;
+				}
+				else if(*begin == '\\')
+				{
+					begin++;
+					if(begin == end)
+						return 1;
+				}
+				break;
+			case S_QUOTING:
+				if(*begin == '\'')
+					state = BEGIN;
+				break;
+			case D_QUOTING:
+				if(*begin == '"')
+				{
+					state = BEGIN;
+				}
+				else if(*begin == '\\')
+				{
+					begin++;
+					if(begin == end)
+						return 1;
+				}
+				break;
+			case R_QUOTING:
+				if(*begin == '/')
+				{
+					state = BEGIN;
+				}
+				else if(*begin == '\\')
+				{
+					begin++;
+					if(begin == end)
+						return 1;
+				}
+				break;
+		}
+		begin++;
+	}
+	if(state == NO_QUOTING)
+	{
+		if(sep == ' ')
+			return 0;
+		else if(count > 0 && count < 3)
+			return 2;
+	}
+	else if(state != BEGIN)
+	{
+		return 2; /* error: no closing quote */
+	}
+	else if(sep != ' ' && count > 0 && *end != sep)
+		return 2;
 
 	return 0;
 }
 
 static int
-check_for_range(FileView *view, char *command, cmd_t *cmd)
+is_in_arg(const char *cmd, const char *pos)
 {
+	cmd_info_t info;
+	int id;
 
-	while(isspace(command[cmd->pos]) && cmd->pos < strlen(command))
-			cmd->pos++;
+	id = get_cmd_info(cmd, &info);
 
-	/*
-	 * First check for a count or a range
-	 * This should be changed to include the rest of the range 
-	 * characters [/?\/\?\&]
-	 */
-	if(command[cmd->pos] == '\'')
-	{
-		char mark;
-		cmd->pos++;
-		mark = command[cmd->pos];
-		cmd->start_range = check_mark_directory(view, mark);
-		if(cmd->start_range < 0)
-		{
-			show_error_msg("Invalid mark in range", "Trying to use an invalid mark.");
-			return -1;
-		}
-		cmd->pos++;
-	}
-	else if(command[cmd->pos] == '$')
-	{
-		cmd->count = view->list_rows;
-		if(strlen(command) == strlen("$"))
-		{
-			moveto_list_pos(view, cmd->count -1);
-			return -10;
-		}
-		cmd->pos++;
-	}
-	else if(command[cmd->pos] == '.')
-	{
-		cmd->start_range = view->list_pos;
-		cmd->pos++;
-	}
-	else if(command[cmd->pos] == '%')
-	{
-		cmd->start_range = 1;
-		cmd->end_range = view->list_rows;
-		cmd->pos++;
-	}
-	else if(isdigit(command[cmd->pos]))
-	{
-		char num_buf[strlen(command)];
-		int z = 0;
-		while(isdigit(command[cmd->pos]))
-		{
-			num_buf[z] = command[cmd->pos];
-				cmd->pos++;
-				z++;
-		}
-		num_buf[z] = '\0';
-		cmd->start_range = atoi(num_buf);
-
-		/* The command is just a number */
-		if(strlen(num_buf) == strlen(command))
-		{
-			moveto_list_pos(view, cmd->start_range - 1);
-			return -10;
-		}
-	}
-	while(isspace(command[cmd->pos]) && cmd->pos < strlen(command))
-			cmd->pos++;
-
-	/* Check for second number of range. */
-	if(command[cmd->pos] == ',')
-	{
-		cmd->pos++;
-
-		if(command[cmd->pos] == '\'')
-		{
-			char mark;
-			cmd->pos++;
-			mark = command[cmd->pos];
-			cmd->end_range = check_mark_directory(view, mark);
-			if(cmd->end_range < 0)
-			{
-				show_error_msg("Invalid mark in range", 
-						"Trying to use an invalid mark.");
-				return -1;
-			}
-			cmd->pos++;
-		}
-		else if(command[cmd->pos] == '$')
-		{
-			cmd->end_range = view->list_rows - 1;
-			cmd->pos++;
-		}
-		else if(command[cmd->pos] == '.')
-		{
-			cmd->end_range = view->list_pos;
-			cmd->pos++;
-		}
-		else if(isdigit(command[cmd->pos]))
-		{
-			char num_buf[strlen(command)];
-			int z = 0;
-			while(isdigit(command[cmd->pos]))
-			{
-				num_buf[z] = command[cmd->pos];
-					cmd->pos++;
-					z++;
-			}
-			num_buf[z] = '\0';
-			cmd->end_range = atoi(num_buf);
-		}
-		else
-			cmd->pos--;
-	}
-	else if(!cmd->end_range)/* Only one number is given for the range */
-	{
-		cmd->end_range = cmd->start_range;
-		cmd->start_range = -1;
-	}
-	return 1;
-}
-
-
-static int
-parse_command(FileView *view, char *command, cmd_t *cmd)
-{
-	int result;
-
-	initialize_command_struct(cmd);
-
-	while(strlen(command) > 0 && isspace(command[strlen(command) -1]))
-			command[strlen(command) -1] = '\0';
-
-	result = check_for_range(view, command, cmd);
-
-
-	/* Just a :number - :12 - or :$ handled in check_for_range() */
-	if(result == -10)
-		return 0;
-
-	/* If the range is invalid give up. */
-	if(result < 0)
-		return -1;
-
-	/* If it is :!! handle and skip everything else. */
-	if(!strcmp(command + cmd->pos, "!!"))
-	{
-		if(cfg.cmd_history[0] != NULL)
-		{
-			/* Just a safety check this should never happen. */
-			if (!strcmp(cfg.cmd_history[0], "!!"))
-				show_error_msg("Command Error", "Error in parsing command.");
-			else
-				execute_command(view, cfg.cmd_history[0]);
-		}
-		else
-			show_error_msg(" Command Error", "No Previous Commands in History List");
-
-		return 0;
-	}
-
-	cmd->cmd_name = strdup(command + cmd->pos);
-
-	/* The builtin commands do not contain numbers and ! is only used at the
-	 * end of the command name.
-	 */
-	while(cmd->cmd_name[cmd->pos] != ' ' && cmd->pos < strlen(cmd->cmd_name) 
-			&& cmd->cmd_name[cmd->pos] != '!')
-		cmd->pos++;
-
-	if (cmd->cmd_name[cmd->pos] != '!' || cmd->pos == 0)
-	{
-		cmd->cmd_name[cmd->pos] = '\0';
-		cmd->pos++;
-	}
-	else /* Prevent eating '!' after command name. by not doing cmd->pos++ */
-		cmd->cmd_name[cmd->pos] = '\0';
-
-
-
-	if(strlen(command) > cmd->pos)
-	{
-
-		/* Check whether to run command in background */
-		if(command[strlen(command) -1] == '&' && command[strlen(command) -2] == ' ')
-		{
-			int x = 2;
-
-			command[strlen(command) - 1] = '\0';
-
-			while(isspace(command[strlen(command) - x]))
-			{
-				command[strlen(command) - x] = '\0';
-				x++;
-			}
-			cmd->background = 1;
-
-		}
-		cmd->args = strdup(command + cmd->pos);
-	}
-
-	/* Get the actual command name. */
-	if((cmd->builtin = command_is_reserved(cmd->cmd_name)) > -1)
-	{
-		cmd->cmd_name = (char *)realloc(cmd->cmd_name, 
-				strlen(reserved_commands[cmd->builtin]) +1);
-		snprintf(cmd->cmd_name, sizeof(reserved_commands[cmd->builtin]),
-				"%s", reserved_commands[cmd->builtin]);
-	}
-	else if((cmd->is_user = is_user_command(cmd->cmd_name)) > -1)
-	{
-		cmd->cmd_name =(char *)realloc(cmd->cmd_name,
-				strlen(command_list[cmd->is_user].name) + 1);
-		snprintf(cmd->cmd_name, sizeof(command_list[cmd->is_user].name),
-				"%s", command_list[cmd->is_user].name);
-	}
+	if(id == COM_FILTER)
+		return (line_pos(cmd, pos, ' ', 1) == 0);
+	else if(id == COM_SUBSTITUTE || id == COM_TR)
+		return (line_pos(cmd, pos, info.sep, 1) == 0);
 	else
-	{
-		my_free(cmd->cmd_name);
-		my_free(cmd->args);
-		status_bar_message("Unknown Command");
-		return -1;
-	}
-
-	return 1;
+		return (line_pos(cmd, pos, ' ', 0) == 0);
 }
 
 int
-execute_builtin_command(FileView *view, cmd_t *cmd)
+exec_commands(const char cmd[], FileView *view, int type)
 {
+	char cmd_copy[strlen(cmd) + 1];
 	int save_msg = 0;
+	char *p, *q;
 
-	switch(cmd->builtin)
+	if(*cmd == '\0')
 	{
-		case COM_EXECUTE:
-			{
-				int i = 0;
-				int pause = 0;
-				char *com = NULL;
-
-				if (cmd->args)
-				{
-					int m = 0;
-					int s = 0;
-					if(strchr(cmd->args, '%') != NULL)
-						com = expand_macros(view, cmd->args, NULL, &m, &s);
-					else
-						com = strdup(cmd->args);
-
-					if(com[i] == '!')
-					{
-						pause = 1;
-						i++;
-					}
-					while(isspace(com[i]) && i < strlen(com))
-							i++;
-					if((strlen(com + i) > 0) && cmd->background)
-						start_background_job(com + i);
-					else if(strlen(com + i) > 0)
-					{
-						shellout(com +i, pause);
-					}
-					if(!cmd->background)
-						my_free(com);
-						
-				}
-				else
-				{
-					show_error_msg(" Command Error ",
-						"The :! command requires an argument - :!command");
-			 		save_msg = 1;
-				}
-			}
-			break;
-		case COM_APROPOS:
-			{
-				if(cmd->args)
-				{
-					show_apropos_menu(view, cmd->args);
-				}
-			}
-			break;
-		case COM_CHANGE:
-			show_change_window(view, FILE_CHANGE);
-			break;
-		case COM_CD:
-			{
-				char dir[PATH_MAX];
-
-				if(cmd->args)
-				{
-					if(cmd->args[0] == '/')
-					{
-						change_directory(view, cmd->args);
-						load_dir_list(view, 0);
-						moveto_list_pos(view, view->list_pos);
-					}
-					else if(cmd->args[0] == '~')
-					{
-						snprintf(dir, sizeof(dir), "%s%s", getenv("HOME"), cmd->args +1);
-						change_directory(view, dir);
-						load_dir_list(view, 0);
-						moveto_list_pos(view, view->list_pos);
-					}
-					else
-					{
-						snprintf(dir, sizeof(dir), "%s/%s", view->curr_dir, cmd->args);
-						change_directory(view, dir);
-						load_dir_list(view, 0);
-						moveto_list_pos(view, view->list_pos);
-					}
-				}
-				else
-				{
-					change_directory(view, getenv("HOME"));
-					load_dir_list(view, 0);
-					moveto_list_pos(view, view->list_pos);
-				}
-			}
-			break;
-		case COM_CMAP:
-			break;
-		case COM_COLORSCHEME:
-		{
-			if(cmd->args)
-			{
-				//snprintf(buf, sizeof(buf), "args are %s", cmd->args);
-				show_error_msg("Color Scheme",
-						"The :colorscheme command is reserved ");
-
-			}
-			else /* Should show error message with colorschemes listed */
-			{
-				show_error_msg("Color Scheme",
-						"The :colorscheme command is reserved ");
-			}
-
-			break;
-		}
-		case COM_COMMAND:
-			{
-				if(cmd->args)
-				{
-					if(cmd->args[0] == '!')
-					{
-						int x = 1;
-						while(isspace(cmd->args[x]) && x < strlen(cmd->args))
-							x++;
-						set_user_command(cmd->args + x, 1, cmd->background);
-					}
-					else
-						set_user_command(cmd->args, 0, cmd->background);
-				}
-				else
-					show_commands_menu(view);
-			}
-			break;
-		case COM_DELETE:
-			{
-				/*
-				int selection_worked;
-
-				selection_worked = select_files_in_range(view, cmd);
-
-				if (selection_worked)
-				*/
-				select_files_in_range(view, cmd);
-				delete_file(view);
-			}
-			break;
-		case COM_DELCOMMAND:
-			{
-				if(cmd->args)
-				{
-					remove_command(cmd->args);
-					//write_config_file();
-				}
-			}
-			break;
-		case COM_DISPLAY:
-		case COM_REGISTER:
-			show_register_menu(view);
-			break;
-		case COM_EDIT:
-			{
-				if((!view->selected_files) || 
-						(!view->dir_entry[view->list_pos].selected))
-				{
-					char buf[PATH_MAX];
-					if(view->dir_entry[view->list_pos].name != NULL)
-					{
-						char *temp = 
-							escape_filename(view->dir_entry[view->list_pos].name, 0);
-						snprintf(buf, sizeof(buf), "%s %s/%s", cfg.vi_command, 
-								view->curr_dir, temp); 
-						shellout(buf, 0);
-						my_free(temp);
-					}
-				}
-				else
-				{
-					int m = 0;
-					int s = 0;
-					char *buf = NULL;
-					char *files = expand_macros(view, "%f", NULL, &m, &s);
-
-					if((buf = (char *)malloc(strlen(cfg.vi_command) + strlen(files) + 2))
-							== NULL)
-					{
-						show_error_msg("Unable to allocate enough memory", 
-								"Cannot load file");
-						break;
-					}
-					snprintf(buf, strlen(cfg.vi_command) + strlen(files) +1, 
-							"%s %s", cfg.vi_command, files);
-					
-					shellout(buf, 0);
-					my_free(files);
-					my_free(buf);
-				}
-			}
-			break;
-		case COM_EMPTY:
-			{
-				char buf[256];
-				snprintf(buf, sizeof(buf), "%s/Trash", cfg.config_dir);
-				if(chdir(buf))
-					break;
-
-				start_background_job("rm -fr * .[!.]*"); 
-				chdir(view->curr_dir);
-			}
-			break;
-		case COM_FILTER:
-			{
-				if(cmd->args)
-				{
-					view->invert = 1;
-					view->filename_filter = (char *)realloc(view->filename_filter,
-						strlen(cmd->args) +2);
-					snprintf(view->filename_filter, strlen(cmd->args) +1, 
-							"%s", cmd->args); 
-					load_dir_list(view, 1);
-					moveto_list_pos(view, 0);
-				}
-				else
-				{
-					show_error_msg(" Command Error ", 
-							"The :filter command requires an argument - :filter pattern");
-					save_msg = 1;
-				}
-			}
-			break;
-		case COM_FILE:
-			show_filetypes_menu(view);
-			break;
-		case COM_HELP:
-			{
-				char help_file[PATH_MAX];
-
-				if(cfg.use_vim_help)
-				{
-					if(cmd->args)
-					{
-						snprintf(help_file, sizeof(help_file), 
-								"%s -c \'help %s\' -c only", cfg.vi_command, cmd->args);
-						shellout(help_file, 0);
-					}
-					else 
-					{
-						snprintf(help_file, sizeof(help_file), 
-								"%s -c \'help vifm\' -c only", cfg.vi_command);
-						shellout(help_file, 0);
-					}
-				}
-				else
-				{
-					snprintf(help_file, sizeof(help_file),
-						   	"%s %s/vifm-help.txt",
-							cfg.vi_command, cfg.config_dir);
-
-					shellout(help_file, 0);
-				}
-			}
-			break;
-		case COM_HISTORY:
-			show_history_menu(view);
-			break;
-		case COM_INVERT:
-			{
-				if(view->invert)
-					view->invert = 0;
-				else
-					view->invert = 1;
-				load_dir_list(view, 1);
-				moveto_list_pos(view, 0);
-			}
-			break;
-		case COM_JOBS:	
-			show_jobs_menu(view);
-			break;
-		case COM_LOCATE:
-			{
-				if(cmd->args)
-				{
-					show_locate_menu(view, cmd->args);
-				}
-			}
-			break;
-		case COM_LS:
-			if (!cfg.use_screen)
-				break;
-			my_system("screen -X eval 'windowlist'");
-			break;
-		case COM_MAP:
-			break;
-		case COM_MARKS:
-			show_bookmarks_menu(view);
-			break;
-		case COM_NMAP:
-			break;
-		case COM_NOH:
-			{
-				if(view->selected_files)
-				{
-					int y = 0;
-					for(y = 0; y < view->list_rows; y++)
-					{
-						if(view->dir_entry[y].selected)
-							view->dir_entry[y].selected = 0;
-					}
-					draw_dir_list(view, view->top_line, view->list_pos);
-					moveto_list_pos(view, view->list_pos);
-				}
-			}
-			break;
-		case COM_ONLY:
-			{
-				curr_stats.number_of_windows = 1;
-				redraw_window();
-			//my_system("screen -X eval \"only\"");
-			}
-			break;
-		case COM_PWD:
-			status_bar_message(view->curr_dir);
-			save_msg = 1;
-			break;
-		case COM_X:
-		case COM_QUIT:
-			{
-				if(cfg.vim_filter)
-				{
-					char buf[256];
-					FILE *fp;
-
-
-					snprintf(buf, sizeof(buf), "%s/vimfiles", cfg.config_dir);
-					fp = fopen(buf, "w");
-					endwin();
-					fprintf(fp, "NULL");
-					fclose(fp);
-					exit(0);
-				}
-
-				write_config_file();
-
-				endwin();
-				system("clear");
-				exit(0);
-			}
-			break;
-		case COM_SORT:
-			show_sort_menu(view);
-			break;
-		case COM_SCREEN:
-			{
-				if(cfg.use_screen)
-					cfg.use_screen = 0;
-				else
-					cfg.use_screen = 1;
-			}
-			break;
-		case COM_SHELL:
-			shellout(NULL, 0);
-			break;
-		case COM_SPLIT:
-			{
-				curr_stats.number_of_windows = 2;
-				redraw_window();
-				/*
-				char *tmp = NULL;
-
-				if (!cfg.use_screen)
-					break;
-
-				if (cmd->args) 
-				{
-					if (strchr(cmd->args, '%'))
-					{
-						tmp = expand_macros(view, cmd->args, NULL, 0, 0);
-					}
-					else
-						tmp = strdup(cmd->args);
-				}
-				split_screen(view, tmp);
-				*/
-			}
-			break;
-		case COM_SYNC:
-			change_directory(other_view, view->curr_dir);
-			load_dir_list(other_view, 0);
-			break;
-		case COM_UNMAP:
-			break;
-		case COM_VIEW:
-			{
-				if(curr_stats.number_of_windows == 1)
-				{
-					show_error_msg("Cannot view files",
-							"Cannot view files in one window mode ");
-					break;
-				}
-				if(curr_stats.view)
-				{
-					curr_stats.view = 0;
-
-					wbkgdset(other_view->title,
-						COLOR_PAIR(BORDER_COLOR + other_view->color_scheme));
-					wbkgdset(other_view->win,
-						COLOR_PAIR(WIN_COLOR + other_view->color_scheme));
-					change_directory(other_view, other_view->curr_dir);
-					load_dir_list(other_view, 0);
-					change_directory(curr_view, curr_view->curr_dir);
-					load_dir_list(curr_view, 0);
-					moveto_list_pos(curr_view, curr_view->list_pos);
-				}
-				else
-				{
-					curr_stats.view = 1;
-					quick_view_file(view);
-				}
-			}
-			break;
-		case COM_VIFM:
-			show_error_msg(" I haven't gotten here yet ",
-						"Sorry this is not implemented ");
-			break;
-		case COM_YANK:
-			{
-				/*
-				int selection_worked = 0;
-
-				selection_worked  = select_files_in_range(view);
-
-				if (selection_worked)
-					yank_selected_files(view);
-					*/
-				show_error_msg(":yank is not implemented yet",
-					   	":yank is not implemented yet ");
-			}
-			break;
-		case COM_VMAP:
-			break;
-		default:
-			{
-				char buf[48];
-				snprintf(buf, sizeof(buf), "Builtin is %d", cmd->builtin);
-				show_error_msg("Internal Error in Command.c", buf);
-			}
-			break;
+		return exec_command(cmd, view, type);
 	}
 
-	if (view->selected_files)
-	{
-		int x;
-		for (x = 0; x < view->list_rows; x++)
-			view->dir_entry[x].selected = 0;
+	strcpy(cmd_copy, cmd);
+	cmd = cmd_copy;
 
+	p = cmd_copy;
+	q = cmd_copy;
+	while(*cmd != '\0')
+	{
+		if(*p == '\\')
+		{
+			if(*(p + 1) == '|')
+			{
+				*q++ = '|';
+				p += 2;
+			}
+			else
+			{
+				*q++ = *p++;
+				*q++ = *p++;
+			}
+		}
+		else if((*p == '|' && is_in_arg(cmd, q)) || *p == '\0')
+		{
+			int ret;
+
+			if(*p != '\0')
+			{
+				p++;
+			}
+
+			while(*cmd == ' ' || *cmd == ':')
+			{
+				cmd++;
+			}
+			if(is_whole_line_command(cmd))
+			{
+				save_msg += exec_command(cmd, view, type) != 0;
+				break;
+			}
+
+			*q = '\0';
+			q = p;
+
+			ret = exec_command(cmd, view, type);
+			if(ret != 0)
+			{
+				save_msg = (ret < 0) ? -1 : 1;
+			}
+
+			cmd = q;
+		}
+		else
+		{
+			*q++ = *p++;
+		}
 	}
 
 	return save_msg;
 }
 
-int 
-execute_user_command(FileView *view, cmd_t *cmd)
+static int
+is_whole_line_command(const char cmd[])
 {
-	char *expanded_com = NULL;
-	int use_menu = 0;
-	int split = 0;
-
-	if(strchr(command_list[cmd->is_user].action, '%') != NULL)
-		expanded_com = expand_macros(view, command_list[cmd->is_user].action, 
-		cmd->args, &use_menu, &split);
-	else
-		expanded_com = strdup(command_list[cmd->is_user].action);
-
-	while(isspace(expanded_com[strlen(expanded_com) -1]))
-		expanded_com[strlen(expanded_com) -1] = '\0';
-
-	if(expanded_com[strlen(expanded_com)-1] == '&' 
-			&& expanded_com[strlen(expanded_com) -2] == ' ')
+	const int cmd_id = get_cmd_id(cmd);
+	switch(cmd_id)
 	{
-		expanded_com[strlen(expanded_com)-1] = '\0';
-		cmd->background = 1;
+		case COM_EXECUTE:
+		case COM_CMAP:
+		case COM_CNOREMAP:
+		case COM_COMMAND:
+		case COMMAND_CMD_ID:
+		case COM_FILETYPE:
+		case COM_FILEVIEWER:
+		case COM_FILEXTYPE:
+		case COM_MAP:
+		case COM_NMAP:
+		case COM_NNOREMAP:
+		case COM_NORMAL:
+		case COM_VMAP:
+		case COM_VNOREMAP:
+		case COM_NOREMAP:
+		case COM_WINDO:
+		case COM_WINRUN:
+			return 1;
+
+		default:
+			return 0;
+	}
+}
+
+
+char *
+find_last_command(char *cmd)
+{
+	char *p, *q;
+
+	p = cmd;
+	q = cmd;
+	while(*cmd != '\0')
+	{
+		if(*p == '\\')
+		{
+			if(*(p + 1) == '|')
+				q++;
+			else
+				q += 2;
+			p += 2;
+		}
+		else if((*p == '|' &&
+				line_pos(cmd, q, ' ', strncmp(cmd, "fil", 3) == 0) == 0) || *p == '\0')
+		{
+			if(*p != '\0')
+				p++;
+
+			while(*cmd == ' ' || *cmd == ':')
+				cmd++;
+			if(*cmd == '!' || strncmp(cmd, "com", 3) == 0)
+				break;
+
+			q = p;
+
+			if(*q == '\0')
+				break;
+
+			cmd = q;
+		}
+		else
+		{
+			q++;
+			p++;
+		}
 	}
 
-	if (use_menu)
+	return cmd;
+}
+
+int
+exec_command(const char cmd[], FileView *view, int type)
+{
+	if(cmd == NULL)
 	{
-
-		show_user_menu(view, expanded_com);
-
-		if(!cmd->background)
-			my_free(expanded_com);
-
+		if(type == GET_FSEARCH_PATTERN || type == GET_BSEARCH_PATTERN)
+			return find_npattern(view, view->regexp, type == GET_BSEARCH_PATTERN, 1);
+		if(type == GET_VFSEARCH_PATTERN || type == GET_VBSEARCH_PATTERN)
+			return find_vpattern(view, view->regexp, type == GET_VBSEARCH_PATTERN);
+		if(type == GET_COMMAND)
+			return execute_command(view, cmd, 0);
+		if(type == GET_VWFSEARCH_PATTERN || type == GET_VWBSEARCH_PATTERN)
+			return find_vwpattern(cmd, type == GET_VWBSEARCH_PATTERN);
 		return 0;
 	}
 
-	if (split)
+	if(type == GET_COMMAND)
 	{
-		if (!cfg.use_screen)
+		return execute_command(view, cmd, 0);
+	}
+	if(type == GET_MENU_COMMAND)
+	{
+		return execute_command(view, cmd, 1);
+	}
+	else if(type == GET_FSEARCH_PATTERN || type == GET_BSEARCH_PATTERN)
+	{
+		strncpy(view->regexp, cmd, sizeof(view->regexp));
+		return find_npattern(view, cmd, type == GET_BSEARCH_PATTERN, 1);
+	}
+	else if(type == GET_VFSEARCH_PATTERN || type == GET_VBSEARCH_PATTERN)
+	{
+		strncpy(view->regexp, cmd, sizeof(view->regexp));
+		return find_vpattern(view, cmd, type == GET_VBSEARCH_PATTERN);
+	}
+	else if(type == GET_VWFSEARCH_PATTERN || type == GET_VWBSEARCH_PATTERN)
+	{
+		return find_vwpattern(cmd, type == GET_VWBSEARCH_PATTERN);
+	}
+	return 0;
+}
+
+void
+comm_quit(int write_info, int force)
+{
+	/* TODO: move this to some other unit */
+	if(!force)
+	{
+		job_t *job;
+		int bg_count = 0;
+#ifndef _WIN32
+		sigset_t new_mask;
+
+		sigemptyset(&new_mask);
+		sigaddset(&new_mask, SIGCHLD);
+		sigprocmask(SIG_BLOCK, &new_mask, NULL);
+#endif
+
+		job = jobs;
+		while(job != NULL)
 		{
-			my_free(expanded_com);
+			if(job->running && job->pid == -1)
+				bg_count++;
+			job = job->next;
+		}
+
+#ifndef _WIN32
+		/* Unblock SIGCHLD signal */
+		sigprocmask(SIG_UNBLOCK, &new_mask, NULL);
+#endif
+
+		if(bg_count > 0)
+		{
+			if(!query_user_menu("Warning",
+					"Some of backgrounded commands are still working.  Quit?"))
+				return;
+		}
+	}
+
+	unmount_fuse();
+
+	if(write_info)
+		write_info_file();
+
+	if(cfg.vim_filter)
+	{
+		char buf[PATH_MAX];
+		FILE *fp;
+
+		snprintf(buf, sizeof(buf), "%s/vimfiles", cfg.config_dir);
+		fp = fopen(buf, "w");
+		fclose(fp);
+	}
+
+#ifdef _WIN32
+	system("cls");
+#endif
+
+	set_term_title(NULL);
+	endwin();
+	exit(0);
+}
+
+void
+comm_only(void)
+{
+	/* TODO: move this to ui.c */
+	if(curr_stats.number_of_windows == 1)
+		return;
+
+	curr_stats.number_of_windows = 1;
+	update_screen(UT_REDRAW);
+}
+
+void
+comm_split(SPLIT orientation)
+{
+	/* TODO: move this to ui.c */
+	if(curr_stats.number_of_windows == 2 && curr_stats.split == orientation)
+		return;
+
+	if(curr_stats.number_of_windows == 2 && curr_stats.splitter_pos > 0)
+	{
+		if(orientation == VSPLIT)
+			curr_stats.splitter_pos *= (float)getmaxx(stdscr)/getmaxy(stdscr);
+		else
+			curr_stats.splitter_pos *= (float)getmaxy(stdscr)/getmaxx(stdscr);
+	}
+
+	curr_stats.split = orientation;
+	curr_stats.number_of_windows = 2;
+	curr_stats.need_update = UT_REDRAW;
+}
+
+static int
+goto_cmd(const cmd_info_t *cmd_info)
+{
+	move_to_list_pos(curr_view, cmd_info->end);
+	return 0;
+}
+
+static int
+emark_cmd(const cmd_info_t *cmd_info)
+{
+	int i;
+	char *com = (char *)cmd_info->args;
+	char buf[COMMAND_GROUP_INFO_LEN];
+	MacroFlags flags;
+
+	i = skip_whitespace(com) - com;
+
+	if(com[i] == '\0')
+		return 0;
+
+	flags = (MacroFlags)cmd_info->usr1;
+	if(flags == MACRO_STATUSBAR_OUTPUT)
+	{
+		output_to_statusbar(com);
+		return 1;
+	}
+	else if(flags == MACRO_IGNORE)
+	{
+		output_to_nowhere(com);
+		return 0;
+	}
+	else if(flags == MACRO_MENU_OUTPUT || flags == MACRO_MENU_NAV_OUTPUT)
+	{
+		show_user_menu(curr_view, com, flags == MACRO_MENU_NAV_OUTPUT);
+	}
+	else if(flags == MACRO_SPLIT)
+	{
+		if(!cfg.use_screen)
+		{
+			status_bar_error("The screen program support isn't enabled");
+			return 1;
+		}
+
+		split_screen(curr_view, com);
+	}
+	else if(cmd_info->bg)
+	{
+		start_background_job(com + i, 0);
+	}
+	else
+	{
+		clean_selected_files(curr_view);
+		if(cfg.fast_run)
+		{
+			char *buf = fast_run_complete(com + i);
+			if(buf == NULL)
+				return 1;
+
+			(void)shellout(buf, cmd_info->emark ? 1 : -1, 1);
+			free(buf);
+		}
+		else
+		{
+			(void)shellout(com + i, cmd_info->emark ? 1 : (cfg.fast_run ? 0 : -1), 1);
+		}
+	}
+
+	snprintf(buf, sizeof(buf), "in %s: !%s",
+			replace_home_part(curr_view->curr_dir), cmd_info->raw_args);
+	cmd_group_begin(buf);
+	add_operation(OP_USR, strdup(com + i), NULL, "", "");
+	cmd_group_end();
+
+	return 0;
+}
+
+static int
+alink_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"!\"");
+			return 1;
+		}
+		return cpmv_files(curr_view, NULL, -1, 0, 1, 0) != 0;
+	}
+	else
+	{
+		return cpmv_files(curr_view, cmd_info->argv, cmd_info->argc, 0, 1,
+				cmd_info->emark) != 0;
+	}
+}
+
+static int
+apropos_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+
+	if(cmd_info->argc > 0)
+	{
+		(void)replace_string(&last_args, cmd_info->args);
+	}
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
+	}
+
+	show_apropos_menu(curr_view, last_args);
+	return 0;
+}
+
+static int
+cd_cmd(const cmd_info_t *cmd_info)
+{
+	int result;
+	if(!cfg.auto_ch_pos)
+	{
+		clean_positions_in_history(curr_view);
+		curr_stats.ch_pos = 0;
+	}
+	if(cmd_info->argc == 0)
+	{
+		result = cd(curr_view, curr_view->curr_dir, cfg.home_dir);
+		if(cmd_info->emark)
+			result += cd(other_view, other_view->curr_dir, cfg.home_dir);
+	}
+	else if(cmd_info->argc == 1)
+	{
+		result = cd(curr_view, curr_view->curr_dir, cmd_info->argv[0]);
+		if(cmd_info->emark)
+		{
+			if(!is_path_absolute(cmd_info->argv[0]) && cmd_info->argv[0][0] != '~' &&
+					strcmp(cmd_info->argv[0], "-") != 0)
+			{
+				char dir[PATH_MAX];
+				snprintf(dir, sizeof(dir), "%s/%s", curr_view->curr_dir,
+						cmd_info->argv[0]);
+				result += cd(other_view, other_view->curr_dir, dir);
+			}
+			else if(strcmp(cmd_info->argv[0], "-") == 0)
+			{
+				result += cd(other_view, other_view->curr_dir, curr_view->curr_dir);
+			}
+			else
+			{
+				result += cd(other_view, other_view->curr_dir, cmd_info->argv[0]);
+			}
+			refresh_view_win(other_view);
+		}
+	}
+	else
+	{
+		result = cd(curr_view, curr_view->curr_dir, cmd_info->argv[0]);
+		if(!is_path_absolute(cmd_info->argv[1]) && cmd_info->argv[1][0] != '~')
+		{
+			char dir[PATH_MAX];
+			snprintf(dir, sizeof(dir), "%s/%s", curr_view->curr_dir,
+					cmd_info->argv[1]);
+			result += cd(other_view, other_view->curr_dir, dir);
+		}
+		else
+		{
+			result += cd(other_view, other_view->curr_dir, cmd_info->argv[1]);
+		}
+		refresh_view_win(other_view);
+	}
+	if(!cfg.auto_ch_pos)
+		curr_stats.ch_pos = 1;
+	return result;
+}
+
+static int
+change_cmd(const cmd_info_t *cmd_info)
+{
+	enter_change_mode(curr_view);
+	need_clean_selection = 0;
+	return 0;
+}
+
+static int
+chmod_cmd(const cmd_info_t *cmd_info)
+{
+#ifndef _WIN32
+	regex_t re;
+	int err;
+	int i;
+#endif
+
+	if(cmd_info->argc == 0)
+	{
+		enter_attr_mode(curr_view);
+		need_clean_selection = 0;
+		return 0;
+	}
+
+#ifndef _WIN32
+	if((err = regcomp(&re, "^([ugoa]*([-+=]([rwxXst]*|[ugo]))+)|([0-7]{3,4})$",
+			REG_EXTENDED)) != 0)
+	{
+		status_bar_errorf("Regexp error: %s", get_regexp_error(err, &re));
+		regfree(&re);
+		return 1;
+	}
+
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		if(regexec(&re, cmd_info->argv[i], 0, NULL, 0) == REG_NOMATCH)
+		{
+			regfree(&re);
+			status_bar_errorf("Invalid argument: %s", cmd_info->argv[i]);
+			return 1;
+		}
+	}
+	regfree(&re);
+
+	files_chmod(curr_view, cmd_info->args, cmd_info->emark);
+#endif
+	return 0;
+}
+
+#ifndef _WIN32
+static int
+chown_cmd(const cmd_info_t *cmd_info)
+{
+	char *colon, *user, *group;
+	int u, g;
+	uid_t uid;
+	gid_t gid;
+
+	if(cmd_info->argc == 0)
+	{
+		change_owner();
+		return 0;
+	}
+
+	colon = strchr(cmd_info->argv[0], ':');
+	if(colon == NULL)
+	{
+		user = cmd_info->argv[0];
+		group = "";
+	}
+	else
+	{
+		*colon = '\0';
+		user = cmd_info->argv[0];
+		group = colon + 1;
+	}
+	u = user[0] != '\0';
+	g = group[0] != '\0';
+
+	if(u && get_uid(user, &uid) != 0)
+	{
+		status_bar_errorf("Invalid user name: \"%s\"", user);
+		return 1;
+	}
+	if(g && get_gid(group, &gid) != 0)
+	{
+		status_bar_errorf("Invalid group name: \"%s\"", group);
+		return 1;
+	}
+
+	clean_selected_files(curr_view);
+	chown_files(u, g, uid, gid);
+
+	return 0;
+}
+#endif
+
+static int
+clone_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"!\"");
+			return 1;
+		}
+		return clone_files(curr_view, NULL, -1, 0, 1) != 0;
+	}
+	else
+	{
+		return clone_files(curr_view, cmd_info->argv, cmd_info->argc,
+				cmd_info->emark, 1) != 0;
+	}
+}
+
+static int
+cmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Command Line", CMDLINE_MODE, 0) != 0;
+}
+
+static int
+cnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Command Line", CMDLINE_MODE, 1) != 0;
+}
+
+static int
+colorscheme_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		status_bar_message(cfg.cs.name);
+		return 1;
+	}
+	else if(cmd_info->argc == 0)
+	{
+		/* show menu with colorschemes listed */
+		show_colorschemes_menu(curr_view);
+		return 0;
+	}
+	else if(find_color_scheme(cmd_info->argv[0]))
+	{
+		if(cmd_info->argc == 2)
+		{
+			char *directory = expand_tilde(strdup(cmd_info->argv[1]));
+			if(!is_path_absolute(directory))
+			{
+				if(curr_stats.load_stage < 3)
+				{
+					status_bar_errorf("The path in :colorscheme command cannot be "
+							"relative in startup scripts (%s)", directory);
+					free(directory);
+					return 1;
+				}
+				else
+				{
+					char path[PATH_MAX];
+					snprintf(path, sizeof(path), "%s/%s", curr_view->curr_dir, directory);
+					(void)replace_string(&directory, path);
+				}
+			}
+			if(!is_dir(directory))
+			{
+				status_bar_errorf("%s isn't a directory", directory);
+				free(directory);
+				return 1;
+			}
+
+			assoc_dir(cmd_info->argv[0], directory);
+			free(directory);
+
+			lwin.color_scheme = check_directory_for_color_scheme(1, lwin.curr_dir);
+			rwin.color_scheme = check_directory_for_color_scheme(0, rwin.curr_dir);
+			redraw_lists();
 			return 0;
 		}
-			
-		split_screen(view, expanded_com);
-		my_free(expanded_com);
-		return 0;
-
-	}
-
-	if(!strncmp(expanded_com, "filter ", 7)) 
-	{
-		view->invert = 1;
-		view->filename_filter = (char *)realloc(view->filename_filter,
-				strlen(strchr(expanded_com, ' ')) +1);
-		snprintf(view->filename_filter, 
-				strlen(strchr(expanded_com, ' ')) +1, "%s", 
-				strchr(expanded_com, ' ') +1); 
-
-		load_dir_list(view, 1);
-		moveto_list_pos(view, 0);
-	}
-	else if(!strncmp(expanded_com, "!", 1))
-	{
-		char buf[strlen(expanded_com) + 1];
-		char *tmp = strcpy(buf, expanded_com);
-		int pause = 0;
-		tmp++;
-		if(*tmp == '!')
+		else
 		{
-			pause = 1;
-			tmp++;
+			int ret = load_color_scheme(cmd_info->argv[0]);
+			lwin.cs = cfg.cs;
+			rwin.cs = cfg.cs;
+			redraw_lists();
+			update_all_windows();
+			return ret;
 		}
-		while(isspace(*tmp))
-				tmp++;
-
-		if((strlen(tmp) > 0) && cmd->background)
-			start_background_job(tmp);
-		else if(strlen(tmp) > 0)
-			shellout(tmp, pause);
-	}
-	else if(!strncmp(expanded_com, "/", 1))
-	{
-		strncpy(view->regexp, expanded_com +1, sizeof(view->regexp));
-		return find_pattern(view, view->regexp);
-	}
-	else if(cmd->background)
-	{
-		char buf[strlen(expanded_com) + 1];
-		char *tmp = strcpy(buf, expanded_com);
-		start_background_job(tmp);
 	}
 	else
-		shellout(expanded_com, 0);
-
-	if(!cmd->background)
-		my_free(expanded_com);
-
-
-	if(view->selected_files)
 	{
-		free_selected_file_array(view);
-		view->selected_files = 0;
-		load_dir_list(view, 1);
+		status_bar_errorf("Cannot find colorscheme %s" , cmd_info->argv[0]);
+		return 1;
 	}
-	return 0;
 }
 
-int
-execute_command(FileView *view, char *command)
+static int
+command_cmd(const cmd_info_t *cmd_info)
 {
-	cmd_t cmd;
+	char *desc;
+
+	if(cmd_info->argc == 0)
+		return show_commands_menu(curr_view) != 0;
+
+	if((desc = list_udf_content(cmd_info->argv[0])) == NULL)
+		return CMDS_ERR_NO_SUCH_UDF;
+	status_bar_message(desc);
+	free(desc);
+	return 1;
+}
+
+static int
+copy_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"?\"");
+			return 1;
+		}
+		if(cmd_info->bg)
+			return cpmv_files_bg(curr_view, NULL, -1, 0, cmd_info->emark) != 0;
+		else
+			return cpmv_files(curr_view, NULL, -1, 0, 0, 0) != 0;
+	}
+	else if(cmd_info->bg)
+	{
+		return cpmv_files_bg(curr_view, cmd_info->argv, cmd_info->argc, 0,
+				cmd_info->emark) != 0;
+	}
+	else
+	{
+		return cpmv_files(curr_view, cmd_info->argv, cmd_info->argc, 0, 0,
+				cmd_info->emark) != 0;
+	}
+}
+
+static int
+cunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], CMDLINE_MODE);
+}
+
+static int
+delete_cmd(const cmd_info_t *cmd_info)
+{
+	int reg = DEFAULT_REG_NAME;
 	int result;
 
-	cmd.cmd_name = NULL;
-	cmd.args = NULL;
+	result = get_reg_and_count(cmd_info, &reg);
+	if(result != 0)
+		return result;
 
-	result = parse_command(view, command, &cmd);
+	if(cmd_info->bg)
+		result = delete_file_bg(curr_view, !cmd_info->emark) != 0;
+	else
+		result = delete_file(curr_view, reg, 0, NULL, !cmd_info->emark) != 0;
 
-	/* !! command  is already handled in parse_command() */
-	if(result == 0)
+	return result;
+}
+
+static int
+delmarks_cmd(const cmd_info_t *cmd_info)
+{
+	int i;
+	int save_msg = 0;
+
+	if(cmd_info->emark)
+	{
+		const char *p = valid_bookmarks;
+		while(*p != '\0')
+		{
+			int index = mark2index(*p++);
+			remove_bookmark(index);
+		}
+		return 0;
+	}
+
+	if(cmd_info->argc == 0)
+		return CMDS_ERR_TOO_FEW_ARGS;
+
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		int j;
+		for(j = 0; cmd_info->argv[i][j] != '\0'; j++)
+		{
+			if(!char_is_one_of(valid_bookmarks, cmd_info->argv[i][j]))
+				return CMDS_ERR_INVALID_ARG;
+		}
+	}
+
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		int j;
+		for(j = 0; cmd_info->argv[i][j] != '\0'; j++)
+		{
+			int index = mark2index(cmd_info->argv[i][j]);
+			save_msg += remove_bookmark(index);
+		}
+	}
+	return save_msg;
+}
+
+static int
+dirs_cmd(const cmd_info_t *cmd_info)
+{
+	return show_dirstack_menu(curr_view) != 0;
+}
+
+/* Evaluates arguments as expression and outputs result to statusbar. */
+static int
+echo_cmd(const cmd_info_t *cmd_info)
+{
+	char *eval_result;
+	const char *error_pos;
+
+	if(cmd_info->argc == 0)
+	{
+		return 0;
+	}
+
+	text_buffer_clear();
+	eval_result = eval_echo(cmd_info->args, &error_pos);
+
+	if(eval_result == NULL)
+	{
+		text_buffer_addf("%s: %s", "Invalid expression", error_pos);
+		status_bar_errorf(text_buffer_get());
+	}
+	else
+	{
+		status_bar_message(eval_result);
+		free(eval_result);
+	}
+	return 1;
+}
+
+/* Evaluates :echo result for arguments.  args can not be empty string.  Returns
+ * pointer to newly allocated string, which should be freed by caller, or NULL
+ * on error.  stop_ptr will point to the beginning of invalid expression in case
+ * of error. */
+TSTATIC char *
+eval_echo(const char args[], const char **stop_ptr)
+{
+	size_t len = 0;
+	char *eval_result = NULL;
+
+	assert(args[0] != '\0');
+
+	while(args[0] != '\0')
+	{
+		var_t result = var_false();
+		const ParsingErrors parsing_error = parse(args, &result);
+		char *free_this = NULL;
+		const char *tmp_result = NULL;
+		if(parsing_error == PE_INVALID_EXPRESSION && is_prev_token_whitespace())
+		{
+			result = get_parsing_result();
+			tmp_result = free_this = var_to_string(result);
+			args = get_last_parsed_char();
+		}
+		else if(parsing_error == PE_NO_ERROR)
+		{
+			tmp_result = free_this = var_to_string(result);
+			args = get_last_position();
+		}
+
+		if(tmp_result == NULL)
+		{
+			var_free(result);
+			break;
+		}
+
+		if(!is_null_or_empty(eval_result))
+		{
+			eval_result = extend_string(eval_result, " ", &len);
+		}
+		eval_result = extend_string(eval_result, tmp_result, &len);
+
+		var_free(result);
+		free(free_this);
+	}
+	if(args[0] == '\0')
+	{
+		return eval_result;
+	}
+	else
+	{
+		free(eval_result);
+		*stop_ptr = args;
+		return NULL;
+	}
+}
+
+/* Concatenates the str with the with by reallocating string.  Returns str, when
+ * there is not enough memory. */
+static char *
+extend_string(char *str, const char with[], size_t *len)
+{
+	size_t with_len = strlen(with);
+	char *new = realloc(str, *len + with_len + 1);
+	if(new == NULL)
+	{
+		return str;
+	}
+
+	strncpy(new + *len, with, with_len + 1);
+	*len += with_len;
+	return new;
+}
+
+static int
+edit_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->argc != 0)
+	{
+		char buf[PATH_MAX];
+		size_t len;
+		int i;
+		int bg;
+
+		if(cfg.vim_filter)
+			use_vim_plugin(curr_view, cmd_info->argc, cmd_info->argv); /* no return */
+
+		len = snprintf(buf, sizeof(buf), "%s ", get_vicmd(&bg));
+		for(i = 0; i < cmd_info->argc && len < sizeof(buf) - 1; i++)
+		{
+			char *escaped = escape_filename(cmd_info->argv[i], 0);
+			len += snprintf(buf + len, sizeof(buf) - len, "%s ", escaped);
+			free(escaped);
+		}
+		if(bg)
+			start_background_job(buf, 0);
+		else
+			shellout(buf, -1, 1);
+		return 0;
+	}
+	if(!curr_view->selected_files ||
+			!curr_view->dir_entry[curr_view->list_pos].selected)
+	{
+		char buf[PATH_MAX];
+		if(cfg.vim_filter)
+			use_vim_plugin(curr_view, cmd_info->argc, cmd_info->argv); /* no return */
+
+		snprintf(buf, sizeof(buf), "%s/%s", curr_view->curr_dir,
+				get_current_file_name(curr_view));
+		view_file(buf, -1, 1);
+	}
+	else
+	{
+		int i;
+		char *cmd;
+		int bg;
+
+		for(i = 0; i < curr_view->list_rows; i++)
+		{
+			struct stat st;
+			if(curr_view->dir_entry[i].selected == 0)
+				continue;
+			if(lstat(curr_view->dir_entry[i].name, &st) == 0 &&
+					!path_exists(curr_view->dir_entry[i].name))
+			{
+				show_error_msgf("Access error",
+						"Can't access destination of link \"%s\". It might be broken.",
+						curr_view->dir_entry[i].name);
+				return 0;
+			}
+		}
+
+		if(cfg.vim_filter)
+			use_vim_plugin(curr_view, cmd_info->argc, cmd_info->argv); /* no return */
+
+		if((cmd = edit_selection(curr_view, &bg)) == NULL)
+		{
+			show_error_msg("Memory error", "Unable to allocate enough memory");
+			return 0;
+		}
+		if(bg)
+			start_background_job(cmd, 0);
+		else
+			shellout(cmd, -1, 1);
+		free(cmd);
+	}
+	return 0;
+}
+
+/* This command designates beginning of the alternative part of if-endif
+ * statement. */
+static int
+else_cmd(const cmd_info_t *cmd_info)
+{
+	if(int_stack_is_empty(&if_levels))
+	{
+		status_bar_error(":else without :if");
+		return 1;
+	}
+	int_stack_set_top(&if_levels, !int_stack_get_top(&if_levels));
+	return 0;
+}
+
+static int
+empty_cmd(const cmd_info_t *cmd_info)
+{
+	empty_trash();
+	return 0;
+}
+
+/* This command ends conditional block. */
+static int
+endif_cmd(const cmd_info_t *cmd_info)
+{
+	if(int_stack_is_empty(&if_levels))
+	{
+		status_bar_error(":endif without :if");
+		return 1;
+	}
+	int_stack_pop(&if_levels);
+	return 0;
+}
+
+static int
+exe_cmd(const cmd_info_t *cmd_info)
+{
+	size_t len = 0;
+	char *line = NULL;
+	int i;
+	int result;
+
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		char *p;
+		if(line != NULL)
+			strcat(line, " ");
+		len += 1 + strlen(cmd_info->argv[i]) + 1;
+		p = realloc(line, len);
+		if(p == NULL)
+		{
+			show_error_msg("Memory error", "Unable to allocate enough memory");
+			break;
+		}
+		if(line == NULL)
+			*p = '\0';
+		line = p;
+		strcat(line, cmd_info->argv[i]);
+	}
+	if(line == NULL)
 		return 0;
 
-	/* Invalid command or range. */
-	if(result < 0)
-		return 1;
-
-	if(cmd.builtin > -1)
-		execute_builtin_command(view, &cmd);
-	else
-		execute_user_command(view, &cmd);
-
-	my_free(cmd.cmd_name);
-	my_free(cmd.args);
-
-	return 0;
+	result = exec_commands(line, curr_view, GET_COMMAND);
+	free(line);
+	return result != 0;
 }
 
-int
-get_command(FileView *view, int type, void * ptr)
+static int
+file_cmd(const cmd_info_t *cmd_info)
 {
-	char * command = my_rl_gets(type);
-
-	if(command == NULL)
+	if(cmd_info->argc == 0)
 	{
-		if (type == GET_SEARCH_PATTERN || type == MAPPED_SEARCH)
-			return find_pattern(view, view->regexp);
-		else
+		need_clean_selection = 0;
+		return show_filetypes_menu(curr_view, cmd_info->bg) != 0;
+	}
+	else
+	{
+		if(run_with_filetype(curr_view, cmd_info->argv[0], cmd_info->bg) != 0)
+		{
+			status_bar_error(
+					"Can't find associated program with requested beginning");
 			return 1;
+		}
+		return 0;
+	}
+}
+
+static int
+filetype_cmd(const cmd_info_t *cmd_info)
+{
+	return add_filetype(cmd_info, 0);
+}
+
+static int
+filextype_cmd(const cmd_info_t *cmd_info)
+{
+	return add_filetype(cmd_info, 1);
+}
+
+static int
+add_filetype(const cmd_info_t *cmd_info, int x)
+{
+	const char *records;
+
+	records = skip_non_whitespace(cmd_info->args);
+	records = skip_whitespace(records + 1);
+
+	set_programs(cmd_info->argv[0], records, x,
+			curr_stats.env_type == ENVTYPE_EMULATOR_WITH_X);
+	return 0;
+}
+
+static int
+fileviewer_cmd(const cmd_info_t *cmd_info)
+{
+	const char *records;
+
+	records = skip_non_whitespace(cmd_info->args);
+	records = skip_whitespace(records + 1);
+
+	set_fileviewer(cmd_info->argv[0], records);
+	return 0;
+}
+
+static int
+filter_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(curr_view->filename_filter[0] == '\0')
+			status_bar_message("Filter is empty");
+		else
+			status_bar_message(curr_view->filename_filter);
+		return 1;
+	}
+	if(cmd_info->argc == 0)
+	{
+		if(cmd_info->emark)
+		{
+			curr_view->invert = !curr_view->invert;
+			load_dir_list(curr_view, 1);
+			move_to_list_pos(curr_view, 0);
+		}
+		else
+		{
+			set_view_filter(curr_view, "", !cmd_info->emark);
+		}
+	}
+	else
+	{
+		return set_view_filter(curr_view, cmd_info->argv[0], !cmd_info->emark) != 0;
+	}
+	return 0;
+}
+
+static int
+find_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+	static int last_dir;
+
+	if(cmd_info->argc > 0)
+	{
+		if(cmd_info->argc == 1)
+			last_dir = 0;
+		else if(is_dir(cmd_info->argv[0]))
+			last_dir = 1;
+		else
+			last_dir = 0;
+		(void)replace_string(&last_args, cmd_info->args);
+	}
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
 	}
 
-	if(type == GET_COMMAND || type == MAPPED_COMMAND 
-			|| type == GET_VISUAL_COMMAND)
+	return show_find_menu(curr_view, last_dir, last_args) != 0;
+}
+
+static int
+finish_cmd(const cmd_info_t *cmd_info)
+{
+	if(curr_stats.sourcing_state != SOURCING_PROCESSING)
 	{
-		save_command_history(command);
-		return execute_command(view, command);
+		status_bar_error(":finish used outside of a sourced file");
+		return 1;
 	}
-	else if(type == GET_SEARCH_PATTERN || type == MAPPED_SEARCH)
+
+	curr_stats.sourcing_state = SOURCING_FINISHING;
+	return 0;
+}
+
+static int
+grep_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+	static int last_invert;
+	int inv;
+
+	if(cmd_info->argc > 0)
 	{
-		strncpy(view->regexp, command, sizeof(view->regexp));
-		save_search_history(command);
-		return find_pattern(view, command);
+		(void)replace_string(&last_args, cmd_info->args);
+		last_invert = cmd_info->emark;
 	}
-	else if (type == MENU_SEARCH)
-		return search_menu_list(view, command, ptr);
-	else if (type == MENU_COMMAND)
-		return execute_menu_command(view, command, ptr);
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
+	}
+
+	inv = last_invert;
+	if(cmd_info->argc == 0 && cmd_info->emark)
+		inv = !inv;
+
+	return show_grep_menu(curr_view, last_args, inv) != 0;
+}
+
+static int
+help_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[PATH_MAX];
+	int bg;
+
+	if(cfg.use_vim_help)
+	{
+		if(cmd_info->argc > 0)
+		{
+#ifndef _WIN32
+			char *escaped = escape_filename(cmd_info->args, 0);
+			snprintf(buf, sizeof(buf), "%s -c help\\ %s -c only", get_vicmd(&bg),
+					escaped);
+			free(escaped);
+#else
+			snprintf(buf, sizeof(buf), "%s -c \"help %s\" -c only", get_vicmd(&bg),
+					cmd_info->args);
+#endif
+		}
+		else
+		{
+			snprintf(buf, sizeof(buf), "%s -c 'help vifm.txt' -c only",
+					get_vicmd(&bg));
+		}
+	}
+	else
+	{
+		if(!path_exists_at(cfg.config_dir, VIFM_HELP))
+		{
+			show_error_msgf("No help file",
+					"Can't find \"%s/" VIFM_HELP "\" file", cfg.config_dir);
+			return 0;
+		}
+
+		snprintf(buf, sizeof(buf), "%s %s/" VIFM_HELP, get_vicmd(&bg),
+				cfg.config_dir);
+	}
+
+	if(bg)
+	{
+		start_background_job(buf, 0);
+	}
+	else
+	{
+#ifndef _WIN32
+		shellout(buf, -1, 1);
+#else
+		def_prog_mode();
+		endwin();
+		system("cls");
+		system(buf);
+		update_screen(UT_FULL);
+#endif
+	}
+	return 0;
+}
+
+static int
+highlight_cmd(const cmd_info_t *cmd_info)
+{
+	int i;
+	int pos;
+
+	if(cmd_info->argc == 0)
+	{
+		char buf[256*(MAXNUM_COLOR - 2)] = "";
+		for(i = 0; i < MAXNUM_COLOR - 2; i++)
+		{
+			strcat(buf, get_group_str(i, curr_view->cs.color[i]));
+			if(i < MAXNUM_COLOR - 2 - 1)
+				strcat(buf, "\n");
+		}
+		status_bar_message(buf);
+		return 1;
+	}
+
+	pos = string_array_pos_case(HI_GROUPS, MAXNUM_COLOR - 2, cmd_info->argv[0]);
+	if(pos < 0)
+	{
+		status_bar_errorf("Highlight group not found: %s", cmd_info->argv[0]);
+		return 1;
+	}
+
+	if(cmd_info->argc == 1)
+	{
+		status_bar_message(get_group_str(pos, curr_stats.cs->color[pos]));
+		return 1;
+	}
+
+	for(i = 1; i < cmd_info->argc; i++)
+	{
+		char *equal;
+		char arg_name[16];
+		if((equal = strchr(cmd_info->argv[i], '=')) == NULL)
+		{
+			status_bar_errorf("Missing equal sign in \"%s\"", cmd_info->argv[i]);
+			return 1;
+		}
+		else if(equal[1] == '\0')
+		{
+			status_bar_errorf("Missing argument: %s", cmd_info->argv[i]);
+			return 1;
+		}
+		snprintf(arg_name, MIN(sizeof(arg_name), equal - cmd_info->argv[i] + 1),
+				"%s", cmd_info->argv[i]);
+		if(strcmp(arg_name, "ctermbg") == 0)
+		{
+			int col;
+			if((col = get_color(equal + 1, 0, &curr_stats.cs->color[pos].attr)) < -1)
+			{
+				status_bar_errorf("Color name or number not recognized: %s", equal + 1);
+				curr_stats.cs->defaulted = -1;
+				return 1;
+			}
+			curr_stats.cs->color[pos].bg = col;
+		}
+		else if(strcmp(arg_name, "ctermfg") == 0)
+		{
+			int col;
+			if((col = get_color(equal + 1, 1, &curr_stats.cs->color[pos].attr)) < -1)
+			{
+				status_bar_errorf("Color name or number not recognized: %s", equal + 1);
+				curr_stats.cs->defaulted = -1;
+				return 1;
+			}
+			curr_stats.cs->color[pos].fg = col;
+		}
+		else if(strcmp(arg_name, "cterm") == 0)
+		{
+			int attrs;
+			if((attrs = get_attrs(equal + 1)) == -1)
+			{
+				status_bar_errorf("Illegal argument: %s", equal + 1);
+				return 1;
+			}
+			curr_stats.cs->color[pos].attr = attrs;
+			if(curr_stats.env_type == ENVTYPE_LINUX_NATIVE &&
+					(attrs & (A_BOLD | A_REVERSE)) == (A_BOLD | A_REVERSE))
+			{
+				curr_stats.cs->color[pos].attr |= A_BLINK;
+			}
+		}
+		else
+		{
+			status_bar_errorf("Illegal argument: %s", cmd_info->argv[i]);
+			return 1;
+		}
+	}
+	init_pair(curr_stats.cs_base + pos, curr_stats.cs->color[pos].fg,
+			curr_stats.cs->color[pos].bg);
+	curr_stats.need_update = UT_FULL;
+	return 0;
+}
+
+static const char *
+get_group_str(int group, col_attr_t col)
+{
+	static char buf[256];
+
+	char fg_buf[16], bg_buf[16];
+
+	if(col.fg == -1)
+		strcpy(fg_buf, "none");
+	else if(col.fg < ARRAY_LEN(COLOR_NAMES))
+		strcpy(fg_buf, COLOR_NAMES[col.fg]);
+	else
+		snprintf(fg_buf, sizeof(fg_buf), "%d", col.fg);
+
+	if(col.bg == -1)
+		strcpy(bg_buf, "none");
+	else if(col.bg < ARRAY_LEN(COLOR_NAMES))
+		strcpy(bg_buf, COLOR_NAMES[col.bg]);
+	else
+		snprintf(bg_buf, sizeof(bg_buf), "%d", col.bg);
+
+	snprintf(buf, sizeof(buf), "%-10s cterm=%s ctermfg=%-7s ctermbg=%-7s",
+			HI_GROUPS[group], attrs_to_str(col.attr), fg_buf, bg_buf);
+	return buf;
+}
+
+static int
+get_color(const char str[], int fg, int *attr)
+{
+	int col_pos = string_array_pos_case(COLOR_NAMES, ARRAY_LEN(COLOR_NAMES), str);
+	int light_col_pos = string_array_pos_case(LIGHT_COLOR_NAMES,
+			ARRAY_LEN(LIGHT_COLOR_NAMES), str);
+	int col_num = isdigit(*str) ? atoi(str) : -1;
+	if(strcmp(str, "-1") == 0 || strcasecmp(str, "default") == 0 ||
+			strcasecmp(str, "none") == 0)
+		return -1;
+	if(col_pos < 0 && light_col_pos < 0 && (col_num < 0 ||
+			(curr_stats.load_stage >= 2 && col_num > COLORS)))
+		return -2;
+
+	if(light_col_pos >= 0)
+	{
+		*attr |= (!fg && curr_stats.env_type == ENVTYPE_LINUX_NATIVE) ?
+				A_BLINK : A_BOLD;
+		return light_col_pos;
+	}
+	else if(col_pos >= 0)
+	{
+		if(!fg && curr_stats.env_type == ENVTYPE_LINUX_NATIVE)
+		{
+			*attr &= ~A_BLINK;
+		}
+		return col_pos;
+	}
+	else
+	{
+		return col_num;
+	}
+}
+
+static int
+get_attrs(const char *text)
+{
+	int result = 0;
+	while(*text != '\0')
+	{
+		const char *p;
+		char buf[64];
+
+		if((p = strchr(text, ',')) == 0)
+			p = text + strlen(text);
+
+		snprintf(buf, p - text + 1, "%s", text);
+		if(strcasecmp(buf, "bold") == 0)
+			result |= A_BOLD;
+		else if(strcasecmp(buf, "underline") == 0)
+			result |= A_UNDERLINE;
+		else if(strcasecmp(buf, "reverse") == 0)
+			result |= A_REVERSE;
+		else if(strcasecmp(buf, "inverse") == 0)
+			result |= A_REVERSE;
+		else if(strcasecmp(buf, "standout") == 0)
+			result |= A_STANDOUT;
+		else if(strcasecmp(buf, "none") == 0)
+			result = 0;
+		else
+			return -1;
+
+		text = (*p == '\0') ? p : p + 1;
+	}
+	return result;
+}
+
+static int
+history_cmd(const cmd_info_t *cmd_info)
+{
+	const char *const type = (cmd_info->argc == 0) ? "." : cmd_info->argv[0];
+	const size_t len = strlen(type);
+
+	if(strcmp(type, ":") == 0 || strncmp("cmd", type, len) == 0)
+		return show_cmdhistory_menu(curr_view) != 0;
+	else if(strcmp(type, "@") == 0 || strncmp("input", type, len) == 0)
+		return show_prompthistory_menu(curr_view) != 0;
+	else if(strcmp(type, "/") == 0 || strncmp("search", type, len) == 0 ||
+			strncmp("fsearch", type, len) == 0)
+		return show_fsearchhistory_menu(curr_view) != 0;
+	else if(strcmp(type, "?") == 0 || strncmp("bsearch", type, len) == 0)
+		return show_bsearchhistory_menu(curr_view) != 0;
+	else if(strcmp(type, ".") == 0 || strncmp("dir", type, len) == 0)
+		return show_history_menu(curr_view) != 0;
+	else
+		return CMDS_ERR_TRAILING_CHARS;
+}
+
+/* This command starts conditional block. */
+static int
+if_cmd(const cmd_info_t *cmd_info)
+{
+	var_t condition;
+	text_buffer_clear();
+	if(parse(cmd_info->args, &condition) != PE_NO_ERROR)
+	{
+		text_buffer_addf("%s: %s", "Invalid expression", cmd_info->args);
+		status_bar_error(text_buffer_get());
+		return 1;
+	}
+	int_stack_push(&if_levels, var_to_boolean(condition));
+	var_free(condition);
+	return 0;
+}
+
+static int
+invert_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(curr_view->invert)
+			status_bar_message("Filter is not inverted");
+		else
+			status_bar_message("Filter is inverted");
+		return 1;
+	}
+
+	curr_view->invert = !curr_view->invert;
+	load_dir_list(curr_view, 1);
+	move_to_list_pos(curr_view, 0);
+	return 0;
+}
+
+static int
+jobs_cmd(const cmd_info_t *cmd_info)
+{
+	return show_jobs_menu(curr_view) != 0;
+}
+
+static int
+let_cmd(const cmd_info_t *cmd_info)
+{
+	text_buffer_clear();
+	if(let_variable(cmd_info->args) != 0)
+	{
+		status_bar_error(text_buffer_get());
+		return 1;
+	}
+	else if(*text_buffer_get() != '\0')
+	{
+		status_bar_message(text_buffer_get());
+	}
+	update_path_env(0);
+	return 0;
+}
+
+static int
+locate_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+	if(cmd_info->argc > 0)
+	{
+		(void)replace_string(&last_args, cmd_info->args);
+	}
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
+	}
+	return show_locate_menu(curr_view, last_args) != 0;
+}
+
+static int
+ls_cmd(const cmd_info_t *cmd_info)
+{
+	if(!cfg.use_screen)
+	{
+		status_bar_message("screen program isn't used");
+		return 1;
+	}
+	my_system("screen -X eval 'windowlist'");
+	return 0;
+}
+
+static int
+map_cmd(const cmd_info_t *cmd_info)
+{
+	return map_or_remap(cmd_info, 0);
+}
+
+static int
+mark_cmd(const cmd_info_t *cmd_info)
+{
+	int result;
+	char *expanded_path;
+	char mark = cmd_info->argv[0][0];
+
+	if(cmd_info->argv[0][1] != '\0')
+		return CMDS_ERR_TRAILING_CHARS;
+
+	if(cmd_info->qmark)
+	{
+		int index = mark2index(mark);
+		if(!is_bookmark_empty(index))
+		{
+			status_bar_errorf("Mark isn't empty: %c", mark);
+			return 1;
+		}
+	}
+
+	if(cmd_info->argc == 1)
+	{
+		if(cmd_info->end == NOT_DEF)
+			return add_bookmark(mark, curr_view->curr_dir,
+					curr_view->dir_entry[curr_view->list_pos].name);
+		else
+			return add_bookmark(mark, curr_view->curr_dir,
+					curr_view->dir_entry[cmd_info->end].name);
+	}
+
+	expanded_path = expand_tilde(strdup(cmd_info->argv[1]));
+	if(!is_path_absolute(expanded_path))
+	{
+		free(expanded_path);
+		status_bar_error("Expected full path to the directory");
+		return 1;
+	}
+
+	if(cmd_info->argc == 2)
+	{
+		if(cmd_info->end == NOT_DEF || !pane_in_dir(curr_view, expanded_path))
+		{
+			if(curr_stats.load_stage >= 3 && pane_in_dir(curr_view, expanded_path))
+				result = add_bookmark(cmd_info->argv[0][0], expanded_path,
+						curr_view->dir_entry[curr_view->list_pos].name);
+			else
+				result = add_bookmark(cmd_info->argv[0][0], expanded_path, "../");
+		}
+		else
+			result = add_bookmark(cmd_info->argv[0][0], expanded_path,
+					curr_view->dir_entry[cmd_info->end].name);
+	}
+	else
+	{
+		result = add_bookmark(cmd_info->argv[0][0], expanded_path,
+				cmd_info->argv[2]);
+	}
+	free(expanded_path);
+	return result;
+}
+
+static int
+marks_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[256];
+	int i, j;
+
+	if(cmd_info->argc == 0)
+		return show_bookmarks_menu(curr_view, valid_bookmarks) != 0;
+
+	j = 0;
+	buf[0] = '\0';
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		const char *p = cmd_info->argv[i];
+		while(*p != '\0')
+		{
+			if(strchr(buf, *p) == NULL)
+			{
+				buf[j++] = *p;
+				buf[j] = '\0';
+			}
+			p++;
+		}
+	}
+	return show_bookmarks_menu(curr_view, buf);
+}
+
+static int
+messages_cmd(const cmd_info_t *cmd_info)
+{
+	/* TODO: move this code to ui.c */
+	char *lines;
+	size_t len;
+	int count;
+	int t;
+
+	lines = NULL;
+	len = 0;
+	count = curr_stats.msg_tail - curr_stats.msg_head;
+	if(count < 0)
+		count += ARRAY_LEN(curr_stats.msgs);
+	t = (curr_stats.msg_head + 1) % ARRAY_LEN(curr_stats.msgs);
+	while(count-- > 0)
+	{
+		const char *msg = curr_stats.msgs[t];
+		char *new_lines = realloc(lines, len + 1 + strlen(msg) + 1);
+		if(new_lines != NULL)
+		{
+			lines = new_lines;
+			len += sprintf(lines + len, "%s%s", (len == 0) ? "": "\n", msg);
+			t = (t + 1) % ARRAY_LEN(curr_stats.msgs);
+		}
+	}
+
+	if(lines == NULL)
+		return 0;
+
+	curr_stats.save_msg_in_list = 0;
+	status_bar_message(lines);
+	curr_stats.save_msg_in_list = 1;
+
+	free(lines);
+	return 1;
+}
+
+static int
+mkdir_cmd(const cmd_info_t *cmd_info)
+{
+	make_dirs(curr_view, cmd_info->argv, cmd_info->argc, cmd_info->emark);
+	return 1;
+}
+
+static int
+mmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Menu", MENU_MODE, 0) != 0;
+}
+
+static int
+mnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Menu", MENU_MODE, 1) != 0;
+}
+
+static int
+move_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"!\"");
+			return 1;
+		}
+		if(cmd_info->bg)
+			return cpmv_files_bg(curr_view, NULL, -1, 1, cmd_info->emark) != 0;
+		else
+			return cpmv_files(curr_view, NULL, -1, 1, 0, 0) != 0;
+	}
+	else if(cmd_info->bg)
+	{
+		return cpmv_files_bg(curr_view, cmd_info->argv, cmd_info->argc, 1,
+				cmd_info->emark) != 0;
+	}
+	else
+	{
+		return cpmv_files(curr_view, cmd_info->argv, cmd_info->argc, 1, 0,
+				cmd_info->emark) != 0;
+	}
+}
+
+static int
+munmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], MENU_MODE);
+}
+
+static int
+nmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Normal", NORMAL_MODE, 0) != 0;
+}
+
+static int
+nnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Normal", NORMAL_MODE, 1) != 0;
+}
+
+static int
+nohlsearch_cmd(const cmd_info_t *cmd_info)
+{
+	if(curr_view->selected_files == 0)
+		return 0;
+
+	clean_selected_files(curr_view);
+	redraw_current_view();
+	return 0;
+}
+
+static int
+noremap_cmd(const cmd_info_t *cmd_info)
+{
+	return map_or_remap(cmd_info, 1);
+}
+
+static int
+map_or_remap(const cmd_info_t *cmd_info, int no_remap)
+{
+	int result;
+	if(cmd_info->emark)
+	{
+		result = do_map(cmd_info, "", CMDLINE_MODE, no_remap);
+	}
+	else
+	{
+		result = do_map(cmd_info, "", NORMAL_MODE, no_remap);
+		if(result == 0)
+			result = do_map(cmd_info, "", VISUAL_MODE, no_remap);
+	}
+	return result != 0;
+}
+
+/* Executes normal mode commands. */
+static int
+normal_cmd(const cmd_info_t *cmd_info)
+{
+	wchar_t *wide = to_wide(cmd_info->args);
+
+	if(cmd_info->emark)
+	{
+		(void)execute_keys_timed_out_no_remap(wide);
+	}
+	else
+	{
+		(void)execute_keys_timed_out(wide);
+	}
+
+	/* Force leaving command-line mode if the wide contains unfinished ":". */
+	if(get_mode() == CMDLINE_MODE)
+	{
+		(void)execute_keys_timed_out(L"\x03");
+	}
+
+	free(wide);
+	return 0;
+}
+
+static int
+nunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], NORMAL_MODE);
+}
+
+static int
+only_cmd(const cmd_info_t *cmd_info)
+{
+	comm_only();
+	return 0;
+}
+
+static int
+popd_cmd(const cmd_info_t *cmd_info)
+{
+	if(popd() != 0)
+	{
+		status_bar_message("Directory stack empty");
+		return 1;
+	}
+	return 0;
+}
+
+static int
+pushd_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->argc == 0)
+	{
+		if(swap_dirs() != 0)
+		{
+			status_bar_error("No other directories");
+			return 1;
+		}
+		return 0;
+	}
+	if(pushd() != 0)
+	{
+		show_error_msg("Memory Error", "Unable to allocate enough memory");
+		return 0;
+	}
+	cd_cmd(cmd_info);
+	return 0;
+}
+
+static int
+pwd_cmd(const cmd_info_t *cmd_info)
+{
+	status_bar_message(curr_view->curr_dir);
+	return 1;
+}
+
+static int
+qmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "View", VIEW_MODE, 0) != 0;
+}
+
+static int
+qnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "View", VIEW_MODE, 1) != 0;
+}
+
+static int
+qunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], VIEW_MODE);
+}
+
+static int
+registers_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[256];
+	int i, j;
+
+	if(cmd_info->argc == 0)
+		return show_register_menu(curr_view, valid_registers) != 0;
+
+	j = 0;
+	buf[0] = '\0';
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		const char *p = cmd_info->argv[i];
+		while(*p != '\0')
+		{
+			if(strchr(buf, *p) == NULL)
+			{
+				buf[j++] = *p;
+				buf[j] = '\0';
+			}
+			p++;
+		}
+	}
+	return show_register_menu(curr_view, buf) != 0;
+}
+
+static int
+rename_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->emark && cmd_info->argc != 0)
+	{
+		status_bar_error("No arguments are allowed if you use \"!\"");
+		return 1;
+	}
+
+	if(cmd_info->emark)
+		return rename_files(curr_view, NULL, 0, 1) != 0;
+	else if(cmd_info->argc == 0)
+		return rename_files(curr_view, NULL, 0, 0) != 0;
+	else
+		return rename_files(curr_view, cmd_info->argv, cmd_info->argc, 0) != 0;
+}
+
+static int
+restart_cmd(const cmd_info_t *cmd_info)
+{
+	const char *p;
+	FileView *tmp_view;
+
+	curr_stats.restart_in_progress = 1;
+
+	/* all user mappings in all modes */
+	clear_user_keys();
+
+	/* user defined commands */
+	execute_cmd("comclear");
+
+	/* options of current pane */
+	reset_options_to_default();
+	/* options of other pane */
+	tmp_view = curr_view;
+	curr_view = other_view;
+	load_local_options(other_view);
+	reset_options_to_default();
+	curr_view = tmp_view;
+
+	/* file types and viewers */
+	reset_all_file_associations(curr_stats.env_type == ENVTYPE_EMULATOR_WITH_X);
+
+	/* session status */
+	(void)reset_status();
+
+	/* undo list */
+	reset_undo_list();
+
+	/* directory history */
+	lwin.history_num = 0;
+	lwin.history_pos = 0;
+	rwin.history_num = 0;
+	rwin.history_pos = 0;
+
+	/* command line history */
+	cfg.cmd_history_num = 0;
+
+	/* prompt history */
+	cfg.prompt_history_num = -1;
+
+	/* search history */
+	cfg.search_history_num = -1;
+
+	/* directory stack */
+	clean_stack();
+
+	/* registers */
+	p = valid_registers;
+	while(*p != '\0')
+		clear_register(*p++);
+
+	/* color schemes */
+	load_def_scheme();
+
+	/* bookmarks */
+	p = valid_bookmarks;
+	while(*p != '\0')
+	{
+		int index = mark2index(*p++);
+		if(!is_bookmark_empty(index))
+			remove_bookmark(index);
+	}
+
+	/* variables */
+	clear_variables();
+	init_variables();
+	/* this update is needed as clear_variables() will reset $PATH */
+	update_path_env(1);
+
+	prepare_views();
+	read_info_file(1);
+	save_view_history(&lwin, NULL, NULL, -1);
+	save_view_history(&rwin, NULL, NULL, -1);
+	load_color_scheme_colors();
+	exec_config();
+	exec_startup_commands(0, NULL);
+
+	curr_stats.restart_in_progress = 0;
 
 	return 0;
 }
 
+static int
+restore_cmd(const cmd_info_t *cmd_info)
+{
+	/* TODO: move this either to fileops.c or to trash.c */
+	int i;
+	int m = 0;
+	int n = curr_view->selected_files;
+
+	i = curr_view->list_pos;
+	while(i < curr_view->list_rows - 1 && curr_view->dir_entry[i].selected)
+		i++;
+	curr_view->list_pos = i;
+
+	cmd_group_begin("restore: ");
+	cmd_group_end();
+	for(i = 0; i < curr_view->list_rows; i++)
+	{
+		char buf[NAME_MAX];
+		if(!curr_view->dir_entry[i].selected)
+			continue;
+
+		snprintf(buf, sizeof(buf), "%s", curr_view->dir_entry[i].name);
+		chosp(buf);
+		if(restore_from_trash(buf) == 0)
+			m++;
+	}
+
+	load_saving_pos(curr_view, 1);
+	status_bar_messagef("Restored %d of %d", m, n);
+	return 1;
+}
+
+static int
+rlink_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"!\"");
+			return 1;
+		}
+		return cpmv_files(curr_view, NULL, -1, 0, 2, 0) != 0;
+	}
+	else
+	{
+		return cpmv_files(curr_view, cmd_info->argv, cmd_info->argc, 0, 2,
+				cmd_info->emark) != 0;
+	}
+}
+
+static int
+screen_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(cfg.use_screen)
+			status_bar_message("Screen support is enabled");
+		else
+			status_bar_message("Screen support is disabled");
+		return 1;
+	}
+	cfg.use_screen = !cfg.use_screen;
+	return 0;
+}
+
+static int
+set_cmd(const cmd_info_t *cmd_info)
+{
+	int result = process_set_args(cmd_info->args);
+	return (result < 0) ? CMDS_ERR_CUSTOM : (result != 0);
+}
+
+static int
+shell_cmd(const cmd_info_t *cmd_info)
+{
+	const char *sh = env_get_def("SHELL", cfg.shell);
+
+	/* Run shell with clean PATH environment variable. */
+	load_clean_path_env();
+	shellout(sh, 0, 1);
+	load_real_path_env();
+
+	return 0;
+}
+
+static int
+sort_cmd(const cmd_info_t *cmd_info)
+{
+	enter_sort_mode(curr_view);
+	need_clean_selection = 0;
+	return 0;
+}
+
+static int
+source_cmd(const cmd_info_t *cmd_info)
+{
+	int ret = 0;
+	char *path = expand_tilde(strdup(cmd_info->argv[0]));
+	if(!path_exists(path))
+	{
+		status_bar_errorf("File doesn't exist: %s", cmd_info->argv[0]);
+		ret = 1;
+	}
+	if(access(path, R_OK) != 0)
+	{
+		status_bar_errorf("File isn't readable: %s", cmd_info->argv[0]);
+		ret = 1;
+	}
+	if(source_file(path) != 0)
+	{
+		status_bar_errorf("Can't source file: %s", cmd_info->argv[0]);
+		ret = 1;
+	}
+	free(path);
+	return ret;
+}
+
+static int
+split_cmd(const cmd_info_t *cmd_info)
+{
+	return do_split(cmd_info, HSPLIT);
+}
+
+static int
+substitute_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_pattern;
+	static char *last_sub;
+	int ic = 0;
+	int glob = cfg.gdefault;
+
+	if(cmd_info->argc == 3)
+	{
+		int i;
+		for(i = 0; cmd_info->argv[2][i] != '\0'; i++)
+		{
+			if(cmd_info->argv[2][i] == 'i')
+				ic = 1;
+			else if(cmd_info->argv[2][i] == 'I')
+				ic = -1;
+			else if(cmd_info->argv[2][i] == 'g')
+				glob = !glob;
+			else
+				return CMDS_ERR_TRAILING_CHARS;
+		}
+	}
+
+	if(cmd_info->argc >= 1 && cmd_info->argv[0][0] != '\0')
+	{
+		(void)replace_string(&last_pattern, cmd_info->argv[0]);
+	}
+
+	if(cmd_info->argc >= 2)
+	{
+		(void)replace_string(&last_sub, cmd_info->argv[1]);
+	}
+	else if(cmd_info->argc == 1)
+	{
+		(void)replace_string(&last_sub, "");
+	}
+
+	if(last_pattern == NULL)
+	{
+		status_bar_error("No previous pattern");
+		return 1;
+	}
+
+	return substitute_in_names(curr_view, last_pattern, last_sub, ic, glob) != 0;
+}
+
+static int
+sync_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[PATH_MAX];
+
+	snprintf(buf, sizeof(buf), "%s/", curr_view->curr_dir);
+	if(cmd_info->argc > 0)
+		strcat(buf, cmd_info->argv[0]);
+
+	if(change_directory(other_view, buf) >= 0)
+	{
+		load_dir_list(other_view, 0);
+		refresh_view_win(other_view);
+	}
+	return 0;
+}
+
+static int
+touch_cmd(const cmd_info_t *cmd_info)
+{
+	return make_files(curr_view, cmd_info->argv, cmd_info->argc) != 0;
+}
+
+static int
+tr_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[strlen(cmd_info->argv[0]) + 1];
+	size_t pl, sl;
+
+	if(cmd_info->argv[0][0] == '\0' || cmd_info->argv[1][0] == '\0')
+	{
+		status_bar_error("Empty argument");
+		return 1;
+	}
+
+	pl = strlen(cmd_info->argv[0]);
+	sl = strlen(cmd_info->argv[1]);
+	strcpy(buf, cmd_info->argv[1]);
+	if(pl < sl)
+	{
+		status_bar_error("Second argument cannot be longer");
+		return 1;
+	}
+	else if(pl > sl)
+	{
+		while(sl < pl)
+		{
+			buf[sl] = buf[sl - 1];
+			sl++;
+		}
+	}
+	return tr_in_names(curr_view, cmd_info->argv[0], buf) != 0;
+}
+
+static int
+undolist_cmd(const cmd_info_t *cmd_info)
+{
+	return show_undolist_menu(curr_view, cmd_info->emark) != 0;
+}
+
+static int
+unmap_cmd(const cmd_info_t *cmd_info)
+{
+	int result;
+	wchar_t *subst;
+
+	subst = substitute_specs(cmd_info->argv[0]);
+	if(cmd_info->emark)
+	{
+		result = remove_user_keys(subst, CMDLINE_MODE) != 0;
+	}
+	else if(!has_user_keys(subst, NORMAL_MODE))
+	{
+		result = -1;
+	}
+	else if(!has_user_keys(subst, VISUAL_MODE))
+	{
+		result = -2;
+	}
+	else
+	{
+		result = remove_user_keys(subst, NORMAL_MODE) != 0;
+		result += remove_user_keys(subst, VISUAL_MODE) != 0;
+	}
+	free(subst);
+
+	if(result == -1)
+		status_bar_error("No such mapping in normal mode");
+	else if(result == -2)
+		status_bar_error("No such mapping in visual mode");
+	else
+		status_bar_error("Error");
+	return result != 0;
+}
+
+static int
+unlet_cmd(const cmd_info_t *cmd_info)
+{
+	text_buffer_clear();
+	if(unlet_variables(cmd_info->args) != 0 && !cmd_info->emark)
+	{
+		status_bar_error(text_buffer_get());
+		return 1;
+	}
+	return 0;
+}
+
+static int
+view_cmd(const cmd_info_t *cmd_info)
+{
+	if(curr_stats.number_of_windows == 1)
+	{
+		status_bar_error("Cannot view files in one window mode");
+		return 1;
+	}
+	if(other_view->explore_mode)
+	{
+		status_bar_error("Other view already is used for file viewing");
+		return 1;
+	}
+	if(curr_stats.view && cmd_info->emark)
+		return 0;
+	toggle_quick_view();
+	return 0;
+}
+
+static int
+vifm_cmd(const cmd_info_t *cmd_info)
+{
+	return show_vifm_menu(curr_view) != 0;
+}
+
+static int
+vmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Visual", VISUAL_MODE, 0) != 0;
+}
+
+static int
+vnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Visual", VISUAL_MODE, 1) != 0;
+}
+
+static int
+do_map(const cmd_info_t *cmd_info, const char map_type[], int mode,
+		int no_remap)
+{
+	wchar_t *keys, *mapping;
+	char *raw_rhs, *rhs;
+	char t;
+	int result;
+
+	if(cmd_info->argc <= 1)
+	{
+		keys = substitute_specs(cmd_info->args);
+		show_map_menu(curr_view, map_type, list_cmds(mode), keys);
+		free(keys);
+		return 0;
+	}
+
+	raw_rhs = skip_non_whitespace(cmd_info->args);
+	t = *raw_rhs;
+	*raw_rhs = '\0';
+
+	rhs = skip_whitespace(raw_rhs + 1);
+	keys = substitute_specs(cmd_info->args);
+	mapping = substitute_specs(rhs);
+	result = add_user_keys(keys, mapping, mode, no_remap);
+	free(mapping);
+	free(keys);
+
+	*raw_rhs = t;
+
+	if(result == -1)
+		show_error_msg("Mapping Error", "Unable to allocate enough memory");
+
+	return 0;
+}
+
+#ifdef _WIN32
+static int
+volumes_cmd(const cmd_info_t *cmd_info)
+{
+	show_volumes_menu(curr_view);
+	return 0;
+}
+#endif
+
+static int
+vsplit_cmd(const cmd_info_t *cmd_info)
+{
+	return do_split(cmd_info, VSPLIT);
+}
+
+static int
+do_split(const cmd_info_t *cmd_info, SPLIT orientation)
+{
+	if(cmd_info->emark && cmd_info->argc != 0)
+	{
+		status_bar_error("No arguments are allowed if you use \"!\"");
+		return 1;
+	}
+
+	if(cmd_info->emark)
+	{
+		if(curr_stats.number_of_windows == 1)
+			comm_split(orientation);
+		else
+			comm_only();
+	}
+	else
+	{
+		if(cmd_info->argc == 1)
+			cd(other_view, curr_view->curr_dir, cmd_info->argv[0]);
+		comm_split(orientation);
+	}
+	return 0;
+}
+
+static int
+vunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], VISUAL_MODE);
+}
+
+static int
+do_unmap(const char *keys, int mode)
+{
+	int result;
+	wchar_t *subst;
+
+	subst = substitute_specs(keys);
+	result = remove_user_keys(subst, mode);
+	free(subst);
+
+	if(result != 0)
+	{
+		status_bar_error("No such mapping");
+		return 1;
+	}
+	return 0;
+}
+
+static int
+windo_cmd(const cmd_info_t *cmd_info)
+{
+	int result = 0;
+
+	if(cmd_info->argc == 0)
+		return 0;
+
+	result += winrun(&lwin, cmd_info->args) != 0;
+	result += winrun(&rwin, cmd_info->args) != 0;
+
+	update_screen(UT_FULL);
+
+	return result;
+}
+
+static int
+winrun_cmd(const cmd_info_t *cmd_info)
+{
+	int result = 0;
+	const char *cmd;
+
+	if(cmd_info->argc == 0)
+		return 0;
+
+	if(cmd_info->argv[0][1] != '\0' ||
+			!char_is_one_of("^$%.,", cmd_info->argv[0][0]))
+		return CMDS_ERR_INVALID_ARG;
+
+	if(cmd_info->argc == 1)
+		return 0;
+
+	cmd = cmd_info->args + 2;
+	switch(cmd_info->argv[0][0])
+	{
+		case '^':
+			result += winrun(&lwin, cmd) != 0;
+			break;
+		case '$':
+			result += winrun(&rwin, cmd) != 0;
+			break;
+		case '%':
+			result += winrun(&lwin, cmd) != 0;
+			result += winrun(&rwin, cmd) != 0;
+			break;
+		case '.':
+			result += winrun(curr_view, cmd) != 0;
+			break;
+		case ',':
+			result += winrun(other_view, cmd) != 0;
+			break;
+	}
+
+	update_screen(UT_FULL);
+
+	return result;
+}
+
+/* Executes cmd command-line command for a specific view. */
+static int
+winrun(FileView *view, const char cmd[])
+{
+	int result;
+	FileView *tmp_curr = curr_view;
+	FileView *tmp_other = other_view;
+
+	curr_view = view;
+	other_view = (view == tmp_curr) ? tmp_other : tmp_curr;
+
+	load_local_options(curr_view);
+	result = exec_commands(cmd, curr_view, GET_COMMAND);
+
+	curr_view = tmp_curr;
+	other_view = tmp_other;
+	return result;
+}
+
+static int
+write_cmd(const cmd_info_t *cmd_info)
+{
+	write_info_file();
+	return 0;
+}
+
+static int
+quit_cmd(const cmd_info_t *cmd_info)
+{
+	comm_quit(!cmd_info->emark, cmd_info->emark);
+	return 0;
+}
+
+static int
+wq_cmd(const cmd_info_t *cmd_info)
+{
+	comm_quit(1, cmd_info->emark);
+	return 0;
+}
+
+static int
+yank_cmd(const cmd_info_t *cmd_info)
+{
+	int reg;
+	int result;
+
+	result = get_reg_and_count(cmd_info, &reg);
+	if(result == 0)
+		result = yank_files(curr_view, DEFAULT_REG_NAME, 0, NULL) != 0;
+	return result;
+}
+
+/* Returns zero on success */
+static int
+get_reg_and_count(const cmd_info_t *cmd_info, int *reg)
+{
+	if(cmd_info->argc == 2)
+	{
+		int count;
+
+		if(cmd_info->argv[0][1] != '\0')
+			return CMDS_ERR_TRAILING_CHARS;
+		if(find_register(cmd_info->argv[0][0]) == NULL)
+			return CMDS_ERR_TRAILING_CHARS;
+		*reg = cmd_info->argv[0][0];
+
+		if(!isdigit(cmd_info->argv[1][0]))
+			return CMDS_ERR_TRAILING_CHARS;
+
+		count = atoi(cmd_info->argv[1]);
+		if(count == 0)
+			return CMDS_ERR_ZERO_COUNT;
+		select_count(cmd_info, count);
+	}
+	else if(cmd_info->argc == 1)
+	{
+		if(isdigit(cmd_info->argv[0][0]))
+		{
+			int count = atoi(cmd_info->argv[0]);
+			if(count == 0)
+				return CMDS_ERR_ZERO_COUNT;
+			select_count(cmd_info, count);
+		}
+		else
+		{
+			if(cmd_info->argv[0][1] != '\0')
+				return CMDS_ERR_TRAILING_CHARS;
+			if(find_register(cmd_info->argv[0][0]) == NULL)
+				return CMDS_ERR_TRAILING_CHARS;
+			*reg = cmd_info->argv[0][0];
+		}
+	}
+	return 0;
+}
+
+static int
+usercmd_cmd(const cmd_info_t *cmd_info)
+{
+	/* TODO: Refactor this function usercmd_cmd() */
+
+	char *expanded_com = NULL;
+	MacroFlags flags;
+	size_t len;
+	int external = 1;
+	int bg;
+
+	/* Expand macros in a binded command. */
+	expanded_com = expand_macros(curr_view, cmd_info->cmd, cmd_info->args,
+			&flags);
+
+	len = trim_right(expanded_com);
+	if((bg = ends_with(expanded_com, " &")))
+	{
+		expanded_com[len - 2] = '\0';
+	}
+
+	if(expanded_com[0] == ':')
+	{
+		int sm = exec_commands(expanded_com, curr_view, GET_COMMAND);
+		free(expanded_com);
+		return sm;
+	}
+
+	clean_selected_files(curr_view);
+
+	if(flags == MACRO_STATUSBAR_OUTPUT)
+	{
+		output_to_statusbar(expanded_com);
+		free(expanded_com);
+		return 1;
+	}
+	else if(flags == MACRO_IGNORE)
+	{
+		output_to_nowhere(expanded_com);
+		free(expanded_com);
+		return 0;
+	}
+	else if(flags == MACRO_MENU_OUTPUT || flags == MACRO_MENU_NAV_OUTPUT)
+	{
+		show_user_menu(curr_view, expanded_com, flags == MACRO_MENU_NAV_OUTPUT);
+	}
+	else if(flags == MACRO_SPLIT)
+	{
+		if(!cfg.use_screen)
+		{
+			free(expanded_com);
+			status_bar_message("The screen program support isn't enabled");
+			return 1;
+		}
+
+		split_screen(curr_view, expanded_com);
+	}
+	else if(strncmp(expanded_com, "filter ", 7) == 0)
+	{
+		curr_view->invert = 1;
+		set_filename_filter(curr_view, strchr(expanded_com, ' ') + 1);
+
+		load_saving_pos(curr_view, 1);
+		external = 0;
+	}
+	else if(expanded_com[0] == '!')
+	{
+		char *com_beginning = expanded_com;
+		int pause = 0;
+		com_beginning++;
+		if(*com_beginning == '!')
+		{
+			pause = 1;
+			com_beginning++;
+		}
+		com_beginning = skip_whitespace(com_beginning);
+
+		if(*com_beginning != '\0' && bg)
+		{
+			start_background_job(com_beginning, 0);
+		}
+		else if(strlen(com_beginning) > 0)
+		{
+			shellout(com_beginning, pause ? 1 : -1, 1);
+		}
+	}
+	else if(expanded_com[0] == '/')
+	{
+		exec_command(expanded_com + 1, curr_view, GET_FSEARCH_PATTERN);
+		external = 0;
+		need_clean_selection = 0;
+	}
+	else if(bg)
+	{
+		start_background_job(expanded_com, 0);
+	}
+	else
+	{
+		shellout(expanded_com, -1, 1);
+	}
+
+	if(external)
+	{
+		cmd_group_continue();
+		add_operation(OP_USR, strdup(expanded_com), NULL, "", "");
+		cmd_group_end();
+	}
+
+	free(expanded_com);
+
+	return 0;
+}
+
+static void
+output_to_statusbar(const char *cmd)
+{
+	FILE *file, *err;
+	char buf[2048];
+	char *lines;
+	size_t len;
+
+	if(background_and_capture((char *)cmd, &file, &err) != 0)
+	{
+		show_error_msgf("Trouble running command", "Unable to run: %s", cmd);
+		return;
+	}
+
+	lines = NULL;
+	len = 0;
+	while(fgets(buf, sizeof(buf), file) == buf)
+	{
+		chomp(buf);
+		lines = realloc(lines, len + 1 + strlen(buf) + 1);
+		len += sprintf(lines + len, "%s%s", (len == 0) ? "": "\n", buf);
+	}
+
+	fclose(file);
+	fclose(err);
+
+	status_bar_message((lines == NULL) ? "" : lines);
+	free(lines);
+}
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

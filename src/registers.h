@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,30 +14,32 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
 #ifndef __REGISTERS_H_
 #define __REGISTERS_H_
 
-#define NUM_REGISTERS 26
-
-typedef struct _Registers
+typedef struct
 {
 	int name;
 	int num_files;
 	char ** files;
-	int deleted;
-
 }registers_t;
 
-registers_t reg[NUM_REGISTERS];
-extern char valid_registers[];
+extern const char valid_registers[];
 
-
-int is_valid_register(int key);
-void load_register(int reg, char *file);
-void append_to_register(int reg, char *file);
+void init_registers(void);
+registers_t * find_register(int key);
+void append_to_register(int reg, const char file[]);
 void clear_register(int reg);
+void pack_register(int reg);
+char ** list_registers_content(const char registers[]);
+void rename_in_registers(const char old[], const char new[]);
+void clean_regs_with_trash(void);
+void update_unnamed_reg(int reg);
 
 #endif
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

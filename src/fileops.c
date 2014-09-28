@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,920 +14,2888 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#define _GNU_SOURCE
 
-#include<ncurses.h>
-#include<unistd.h>
-#include<errno.h> /* errno */
-#include<sys/wait.h> /* waitpid() */
-#include<sys/types.h> /* waitpid() */
-#include<sys/stat.h> /* stat */
-#include<stdio.h>
-#include<string.h>
+#include <regex.h>
 
-#include"background.h"
-#include"color_scheme.h"
-#include"commands.h"
-#include"config.h"
-#include"filelist.h"
-#include"fileops.h"
-#include"filetype.h"
-#include"keys.h"
-#include"menus.h"
-#include"registers.h"
-#include"status.h"
-#include"ui.h"
-#include"utils.h"
+#include <curses.h>
 
+#include <pthread.h>
 
+#include <dirent.h> /* DIR */
+#include <fcntl.h>
+#include <sys/stat.h> /* stat */
+#include <sys/types.h> /* waitpid() */
+#ifdef _WIN32
+#include <windows.h>
+#include <shellapi.h>
+#endif
+#include <unistd.h>
 
-int 
-my_system(char *command)
+#include <assert.h>
+#include <ctype.h> /* isdigit */
+#include <limits.h> /* PATH_MAX */
+#include <signal.h>
+#include <stdint.h> /* uint64_t */
+#include <stdio.h>
+#include <string.h>
+
+#include "cfg/config.h"
+#include "menus/menus.h"
+#include "modes/cmdline.h"
+#ifdef _WIN32
+#include "utils/env.h"
+#endif
+#include "utils/fs.h"
+#include "utils/fs_limits.h"
+#include "utils/path.h"
+#include "utils/str.h"
+#include "utils/string_array.h"
+#include "utils/test_helpers.h"
+#include "utils/utils.h"
+#include "background.h"
+#include "color_scheme.h"
+#include "commands.h"
+#include "commands_completion.h"
+#include "filelist.h"
+#include "fileops.h"
+#include "filetype.h"
+#include "ops.h"
+#include "registers.h"
+#include "running.h"
+#include "status.h"
+#include "ui.h"
+#include "undo.h"
+
+static char rename_file_ext[NAME_MAX];
+
+static struct
 {
-	int pid;
-	int status;
-	extern char **environ;
+	registers_t *reg;
+	FileView *view;
+	int force_move;
+	int x, y;
+	char *name;
+	int overwrite_all;
+	int link; /* 0 - no, 1 - absolute, 2 - relative */
+}put_confirm;
 
-	if(command == 0)
-		return 1;
-
-	pid = fork();
-	if(pid == -1)
-		return -1;
-	if(pid == 0)
-	{
-		char *args[4];
-
-		args[0] = "sh";
-		args[1] = "-c";
-		args[2] = command;
-		args[3] = 0;
-		execve("/bin/sh", args, environ);
-		exit(127);
-	}
-	do
-	{
-		if(waitpid(pid, &status, 0) == -1)
-		{
-			if(errno != EINTR)
-				return -1;
-		}
-		else
-			return status;
-
-	}while(1);
-}
-
-static int
-execute(char **args)
+typedef struct
 {
-	int pid;
+	char **list;
+	int nlines;
+	int move;
+	int force;
+	char **sel_list;
+	size_t sel_list_len;
+	char src[PATH_MAX];
+	char path[PATH_MAX];
+	int from_file;
+	int from_trash;
+	job_t *job;
+}bg_args_t;
 
-	if((pid = fork()) == 0)
+static void delete_file_bg_i(const char curr_dir[], char *list[], int count,
+		int use_trash);
+TSTATIC int is_name_list_ok(int count, int nlines, char *list[], char *files[]);
+TSTATIC int is_rename_list_ok(char *files[], int *is_dup, int len,
+		char *list[]);
+TSTATIC const char * add_to_name(const char filename[], int k);
+TSTATIC int check_file_rename(const char old[], const char new[],
+		SignalType signal_type);
+static void put_confirm_cb(const char *dest_name);
+TSTATIC const char * gen_clone_name(const char normal_name[]);
+static void put_decide_cb(const char *dest_name);
+static int entry_is_dir(const char full_path[], const struct dirent* dentry);
+static int put_files_from_register_i(FileView *view, int start);
+static int have_read_access(FileView *view);
+
+/* returns new value for save_msg */
+int
+yank_files(FileView *view, int reg, int count, int *indexes)
+{
+	int yanked;
+	if(count > 0)
+		get_selected_files(view, count, indexes);
+	else
+		get_all_selected_files(view);
+
+	yank_selected_files(view, reg);
+	yanked = view->selected_files;
+	free_selected_file_array(view);
+	count_selected(view);
+
+	if(count == 0)
 	{
-		/* Run as a separate session */
-		setsid();
-		close(0);
-		execvp(args[0], args);
-		exit(127);
+		clean_selected_files(view);
+		redraw_view(view);
 	}
 
-	return pid;
+	status_bar_messagef("%d %s yanked", yanked, yanked == 1 ? "file" : "files");
+
+	return yanked;
 }
 
 void
-yank_selected_files(FileView *view)
+yank_selected_files(FileView *view, int reg)
 {
 	int x;
-	size_t namelen;
-	int old_list = curr_stats.num_yanked_files;
 
-
-
-	if(curr_stats.yanked_files)
-	{
-		for(x = 0; x < old_list; x++)
-		{
-			if(curr_stats.yanked_files[x])
-			{
-				my_free(curr_stats.yanked_files[x]);
-				curr_stats.yanked_files[x] = NULL;
-			}
-		}
-		my_free(curr_stats.yanked_files);
-		curr_stats.yanked_files = NULL;
-	}
-
-	curr_stats.yanked_files = (char **)calloc(view->selected_files, 
-			sizeof(char *));
-
-	if ((curr_stats.use_register) && (curr_stats.register_saved))
-	{
-		/* A - Z  append to register otherwise replace */
-		if ((curr_stats.curr_register < 65) || (curr_stats.curr_register > 90))
-			clear_register(curr_stats.curr_register);
-		else
-			curr_stats.curr_register = curr_stats.curr_register + 32;
-	}
+	/* A - Z  append to register otherwise replace */
+	if(reg >= 'A' && reg <= 'Z')
+		reg += 'a' - 'A';
+	else
+		clear_register(reg);
 
 	for(x = 0; x < view->selected_files; x++)
 	{
-		if(view->selected_filelist[x])
+		char buf[PATH_MAX];
+		if(view->selected_filelist[x] == NULL)
+			break;
+
+		snprintf(buf, sizeof(buf), "%s%s%s", view->curr_dir,
+				ends_with_slash(view->curr_dir) ? "" : "/", view->selected_filelist[x]);
+		chosp(buf);
+		append_to_register(reg, buf);
+	}
+	update_unnamed_reg(reg);
+}
+
+static void
+progress_msg(const char *text, int ready, int total)
+{
+	char msg[strlen(text) + 32];
+
+	sprintf(msg, "%s %d/%d", text, ready, total);
+	show_progress(msg, 1);
+	curr_stats.save_msg = 2;
+}
+
+/* returns string that needs to be released by caller */
+static char *
+gen_trash_name(const char *name)
+{
+	struct stat st;
+	char buf[PATH_MAX];
+	int i = 0;
+
+	do
+	{
+		snprintf(buf, sizeof(buf), "%s/%03d_%s", cfg.trash_dir, i++, name);
+		chosp(buf);
+	}
+	while(lstat(buf, &st) == 0);
+	return strdup(buf);
+}
+
+/* buf should be at least COMMAND_GROUP_INFO_LEN characters length */
+static void
+get_group_file_list(char **list, int count, char *buf)
+{
+	size_t len;
+	int i;
+
+	len = strlen(buf);
+	for(i = 0; i < count && len < COMMAND_GROUP_INFO_LEN; i++)
+	{
+		if(buf[len - 2] != ':')
 		{
-			char buf[PATH_MAX];
-			namelen = strlen(view->selected_filelist[x]);
-			curr_stats.yanked_files[x] = malloc(namelen +1);
-			strcpy(curr_stats.yanked_files[x], view->selected_filelist[x]);
-			snprintf(buf, sizeof(buf), "%s/%s", view->curr_dir, 
-					view->selected_filelist[x]);
-			append_to_register(curr_stats.curr_register, view->selected_filelist[x]);
+			strncat(buf, ", ", COMMAND_GROUP_INFO_LEN - len - 1);
+			len = strlen(buf);
+		}
+		strncat(buf, list[i], COMMAND_GROUP_INFO_LEN - len - 1);
+		len = strlen(buf);
+	}
+}
+
+/* returns new value for save_msg */
+int
+delete_file(FileView *view, int reg, int count, int *indexes, int use_trash)
+{
+	char buf[MAX(COMMAND_GROUP_INFO_LEN, 8 + PATH_MAX*2)];
+	int x, y;
+	int i;
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	if(cfg.use_trash && use_trash &&
+			path_starts_with(view->curr_dir, cfg.trash_dir))
+	{
+		show_error_msg("Can't perform deletion",
+				"Current directory is under Trash directory");
+		return 0;
+	}
+
+	if(count > 0)
+	{
+		int j;
+		get_selected_files(view, count, indexes);
+		i = view->list_pos;
+		for(j = 0; j < count; j++)
+			if(indexes[j] == i && i < view->list_rows - 1)
+			{
+				i++;
+				j = -1;
+			}
+	}
+	else
+	{
+		get_all_selected_files(view);
+		i = view->list_pos;
+		while(i < view->list_rows - 1 && view->dir_entry[i].selected)
+			i++;
+	}
+	view->list_pos = i;
+
+	if(cfg.use_trash && use_trash)
+	{
+		/* A - Z  append to register otherwise replace */
+		if(reg >= 'A' && reg <= 'Z')
+			reg += 'a' - 'A';
+		else
+			clear_register(reg);
+	}
+
+	if(cfg.use_trash && use_trash)
+		snprintf(buf, sizeof(buf), "delete in %s: ",
+				replace_home_part(view->curr_dir));
+	else
+		snprintf(buf, sizeof(buf), "Delete in %s: ",
+				replace_home_part(view->curr_dir));
+
+	get_group_file_list(view->selected_filelist, view->selected_files, buf);
+	cmd_group_begin(buf);
+
+	y = 0;
+	if(my_chdir(curr_view->curr_dir) != 0)
+	{
+		show_error_msg("Directory return", "Can't chdir() to current directory");
+		return 1;
+	}
+	for(x = 0; x < view->selected_files; x++)
+	{
+		char full_buf[PATH_MAX];
+		int result;
+
+		if(stroscmp(view->selected_filelist[x], "../") == 0)
+		{
+			show_error_msg("Background Process Error",
+					"You cannot delete the ../ directory");
+			continue;
+		}
+
+		snprintf(full_buf, sizeof(full_buf), "%s/%s", view->curr_dir,
+				view->selected_filelist[x]);
+		chosp(full_buf);
+
+		progress_msg("Deleting files", x + 1, view->selected_files);
+		if(cfg.use_trash && use_trash)
+		{
+			if(stroscmp(full_buf, cfg.trash_dir) == 0)
+			{
+				show_error_msg("Background Process Error",
+						"You cannot delete trash directory to trash");
+				result = -1;
+			}
+			else
+			{
+				char *dest;
+
+				dest = gen_trash_name(view->selected_filelist[x]);
+				result = perform_operation(OP_MOVE, NULL, full_buf, dest);
+				if(result == 0)
+				{
+					add_operation(OP_MOVE, NULL, NULL, full_buf, dest);
+					append_to_register(reg, dest);
+				}
+				free(dest);
+			}
 		}
 		else
 		{
-			x--;
-			break;
+			result = perform_operation(OP_REMOVE, NULL, full_buf, NULL);
+			if(result == 0)
+				add_operation(OP_REMOVE, NULL, NULL, full_buf, "");
+		}
+
+		if(result == 0)
+		{
+			y++;
+		}
+		else if(!view->dir_entry[view->list_pos].selected)
+		{
+			int pos = find_file_pos_in_list(view, view->selected_filelist[x]);
+			if(pos >= 0)
+				view->list_pos = pos;
 		}
 	}
-	curr_stats.num_yanked_files = x;
+	free_selected_file_array(view);
+	clean_selected_files(view);
 
-	strncpy(curr_stats.yanked_files_dir, view->curr_dir,
-			sizeof(curr_stats.yanked_files_dir) -1);
+	update_unnamed_reg(reg);
+
+	cmd_group_end();
+
+	load_saving_pos(view, 1);
+
+	status_bar_messagef("%d %s deleted", y, y == 1 ? "file" : "files");
+	return 1;
 }
 
-/* execute command. */
+static void *
+delete_file_stub(void *arg)
+{
+	bg_args_t *args = (bg_args_t *)arg;
+
+	add_inner_bg_job(args->job);
+
+	delete_file_bg_i(args->src, args->sel_list, args->sel_list_len,
+			args->from_trash);
+
+	remove_inner_bg_job();
+
+	free_string_array(args->sel_list, args->sel_list_len);
+	free(args);
+	return NULL;
+}
+
+static void
+delete_file_bg_i(const char curr_dir[], char *list[], int count, int use_trash)
+{
+	int i;
+	for(i = 0; i < count; i++)
+	{
+		char full_buf[PATH_MAX];
+
+		if(stroscmp(list[i], "../") == 0)
+			continue;
+
+		snprintf(full_buf, sizeof(full_buf), "%s/%s", curr_dir, list[i]);
+		chosp(full_buf);
+
+		if(use_trash)
+		{
+			if(strcmp(full_buf, cfg.trash_dir) != 0)
+			{
+				char *dest;
+
+				dest = gen_trash_name(list[i]);
+				(void)perform_operation(OP_MOVE, NULL, full_buf, dest);
+				free(dest);
+			}
+		}
+		else
+		{
+			(void)perform_operation(OP_REMOVE, NULL, full_buf, NULL);
+		}
+		inner_bg_next();
+	}
+}
+
+/* returns new value for save_msg */
 int
-file_exec(char *command)
+delete_file_bg(FileView *view, int use_trash)
 {
-	char *args[4];
-	pid_t pid;
+	pthread_t id;
+	char buf[COMMAND_GROUP_INFO_LEN];
+	int i;
+	bg_args_t *args;
+	
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
 
-	args[0] = "sh";
-	args[1] = "-c";
-	args[2] = command;
-	args[3] = NULL;
+	args = malloc(sizeof(*args));
+	args->from_trash = cfg.use_trash && use_trash;
 
-	pid = execute(args);
-	return pid;
-}
-
-void
-view_file(FileView *view)
-{
-	char command[PATH_MAX + 5] = "";
-	char *filename = escape_filename(get_current_file_name(view), 0);
-
-	snprintf(command, sizeof(command), "%s %s", cfg.vi_command, filename);
-
-	shellout(command, 0);
-	my_free(filename);
-	curs_set(0);
-}
-
-void
-handle_file(FileView *view)
-{
-	if(DIRECTORY == view->dir_entry[view->list_pos].type)
+	if(args->from_trash && path_starts_with(view->curr_dir, cfg.trash_dir))
 	{
-		char *filename = get_current_file_name(view);
-		change_directory(view, filename);
-		load_dir_list(view, 0);
-		moveto_list_pos(view, view->curr_line);
-		return;
+		show_error_msg("Can't perform deletion",
+				"Current directory is under Trash directory");
+		free(args);
+		return 0;
 	}
 
-	if(cfg.vim_filter)
-	{
-		FILE *fp;
-		char filename[PATH_MAX] = "";
+	args->list = NULL;
+	args->nlines = 0;
+	args->move = 0;
+	args->force = 0;
 
-		snprintf(filename, sizeof(filename), "%s/vimfiles", cfg.config_dir);
-		fp = fopen(filename, "w");
-		snprintf(filename, sizeof(filename), "%s/%s",
-				view->curr_dir,
-				view->dir_entry[view->list_pos].name);
-		endwin();
-		fprintf(fp, "%s", filename);
-		fclose(fp);
-		exit(0);
+	get_all_selected_files(view);
+
+	i = view->list_pos;
+	while(i < view->list_rows - 1 && view->dir_entry[i].selected)
+		i++;
+
+	view->list_pos = i;
+
+	args->sel_list = view->selected_filelist;
+	args->sel_list_len = view->selected_files;
+
+	view->selected_filelist = NULL;
+	free_selected_file_array(view);
+	clean_selected_files(view);
+	load_saving_pos(view, 1);
+
+	strcpy(args->src, view->curr_dir);
+
+	if(args->from_trash)
+		snprintf(buf, sizeof(buf), "delete in %s: ",
+				replace_home_part(view->curr_dir));
+	else
+		snprintf(buf, sizeof(buf), "Delete in %s: ",
+				replace_home_part(view->curr_dir));
+
+	get_group_file_list(view->selected_filelist, view->selected_files, buf);
+
+#ifndef _WIN32
+	args->job = add_background_job(-1, buf, -1);
+#else
+	args->job = add_background_job(-1, buf, (HANDLE)-1);
+#endif
+	if(args->job == NULL)
+	{
+		free_string_array(args->sel_list, args->sel_list_len);
+		free(args);
+		return 0;
 	}
 
-	if(EXECUTABLE == view->dir_entry[view->list_pos].type)
-	{
-		if(cfg.auto_execute)
-		{
-			char buf[NAME_MAX];
-			snprintf(buf, sizeof(buf), "./%s", get_current_file_name(view));
-			shellout(buf, 1);
-			return;
-		}
-		else /* Check for a filetype */
-		{
-			char *program = NULL;
+	args->job->total = args->sel_list_len;
+	args->job->done = 0;
 
-			if((program = get_default_program_for_file(
-						view->dir_entry[view->list_pos].name)) != NULL)
-			{
-				if(strchr(program, '%'))
-				{
-					int m = 0;
-					int s = 0;
-					char *command = expand_macros(view, program, NULL, &m, &s);
-					shellout(command, 0);
-					my_free(command);
-					return;
-				}
-				else
-				{
-					char buf[NAME_MAX *2];
-					char *temp = escape_filename(view->dir_entry[view->list_pos].name, 0);
-
-					snprintf(buf, sizeof(buf), "%s %s", program, temp); 
-					shellout(buf, 0);
-					my_free(program);
-					my_free(temp);
-					return;
-				}
-			}
-			else /* vi is set as the default for any extension without a program */
-			{
-				view_file(view);
-			}
-			return;
-		}
-	}
-	if((REGULAR == view->dir_entry[view->list_pos].type) 
-				|| (EXECUTABLE == view->dir_entry[view->list_pos].type))
-	{
-		char *program = NULL;
-
-		if((program = get_default_program_for_file(
-					view->dir_entry[view->list_pos].name)) != NULL)
-		{
-			if(strchr(program, '%'))
-			{
-				int m = 0;
-				int s = 0;
-				char *command = expand_macros(view, program, NULL, &m, &s);
-				shellout(command, 0);
-				my_free(command);
-				return;
-			}
-			else
-			{
-				char buf[NAME_MAX *2];
-				char *temp = escape_filename(view->dir_entry[view->list_pos].name, 0);
-
-				snprintf(buf, sizeof(buf), "%s %s", program, temp); 
-				shellout(buf, 0);
-				my_free(program);
-				my_free(temp);
-				return;
-			}
-		}
-		else /* vi is set as the default for any extension without a program */
-			view_file(view);
-
-		return;
-	}
-	if(LINK == view->dir_entry[view->list_pos].type)
-	{
-		char linkto[PATH_MAX +NAME_MAX];
-		int len;
-		char *filename = strdup(view->dir_entry[view->list_pos].name);
-		len = strlen(filename);
-		if (filename[len - 1] == '/')
-			filename[len - 1] = '\0';
-
-		len = readlink (filename, linkto, sizeof (linkto));
-
-		if (len > 0)
-		{
-			struct stat s;
-			int is_dir = 0;
-			int is_file = 0;
-			char *dir = NULL;
-			char *file = NULL;
-			char *link_dup = strdup(linkto);
-			linkto[len] = '\0';
-			lstat(linkto, &s);
-			
-			if((s.st_mode & S_IFMT) == S_IFDIR)
-			{
-				is_dir = 1;
-				dir = strdup(linkto);
-			}
-			else
-			{
-				int x;
-				for(x = strlen(linkto); x > 0; x--)
-				{
-					if(linkto[x] == '/')
-					{
-						linkto[x] = '\0';
-						lstat(linkto, &s);
-						if((s.st_mode & S_IFMT) == S_IFDIR)
-						{
-							is_dir = 1;
-							dir = strdup(linkto);
-							break;
-						}
-					}
-				}
-				if((file = strrchr(link_dup, '/')))
-				{
-					file++;
-					is_file = 1;
-				}
-			}
-			if(is_dir)
-			{
-				change_directory(view, dir);
-				load_dir_list(view, 0);
-
-				if(is_file)
-				{
-					int pos = find_file_pos_in_list(view, file);
-					if(pos >= 0)
-						moveto_list_pos(view, pos);
-
-				}
-				else
-				{
-					moveto_list_pos(view, 0);
-				}
-			}
-			else
-			{
-				int pos = find_file_pos_in_list(view, link_dup);
-				if(pos >= 0)
-					moveto_list_pos(view, pos);
-			}
-			my_free(link_dup);
-		}
-	  	else
-			status_bar_message("Couldn't Resolve Link");
-	}
-}
-
-
-int
-pipe_and_capture_errors(char *command)
-{
-  int file_pipes[2];
-  int pid;
-	int nread;
-	int error = 0;
-  char *args[4];
-
-  if (pipe (file_pipes) != 0)
-      return 1;
-
-  if ((pid = fork ()) == -1)
-      return 1;
-
-  if (pid == 0)
-    {
-			close(1);
-			close(2);
-			dup(file_pipes[1]);
-      close (file_pipes[0]);
-      close (file_pipes[1]);
-
-      args[0] = "sh";
-      args[1] = "-c";
-      args[2] = command;
-      args[3] = NULL;
-      execvp (args[0], args);
-      exit (127);
-    }
-  else
-    {
-			char buf[1024];
-      close (file_pipes[1]);
-			while((nread = read(*file_pipes, buf, sizeof(buf) -1)) > 0)
-			{
-				buf[nread] = '\0';
-				error = nread;
-			}
-			if(error > 1)
-			{
-				char title[strlen(command) +4];
-				snprintf(title, sizeof(title), " %s ", command);
-				show_error_msg(title, buf);
-				return 1;
-			}
-    }
+	pthread_create(&id, NULL, delete_file_stub, args);
 	return 0;
 }
 
+static int
+mv_file(const char *src, const char *src_path, const char *dst,
+		const char *path, int tmpfile_num)
+{
+	char full_src[PATH_MAX], full_dst[PATH_MAX];
+	int op;
+	int result;
+
+	snprintf(full_src, sizeof(full_src), "%s/%s", src_path, src);
+	chosp(full_src);
+	snprintf(full_dst, sizeof(full_dst), "%s/%s", path, dst);
+	chosp(full_dst);
+
+	/* compare case sensitive strings even on Windows to let user rename file
+	 * changing only case of some characters */
+	if(strcmp(full_src, full_dst) == 0)
+		return 0;
+
+	if(tmpfile_num <= 0)
+		op = OP_MOVE;
+	else if(tmpfile_num == -1)
+		op = OP_MOVETMP0;
+	else if(tmpfile_num == 1)
+		op = OP_MOVETMP1;
+	else if(tmpfile_num == 2)
+		op = OP_MOVETMP2;
+	else if(tmpfile_num == 3)
+		op = OP_MOVETMP3;
+	else if(tmpfile_num == 4)
+		op = OP_MOVETMP4;
+	else
+		op = OP_NONE;
+
+	result = perform_operation(op, NULL, full_src, full_dst);
+	if(result == 0 && tmpfile_num >= 0)
+		add_operation(op, NULL, NULL, full_src, full_dst);
+	return result;
+}
+
+static void
+rename_file_cb(const char *new_name)
+{
+	char *filename = get_current_file_name(curr_view);
+	char buf[MAX(COMMAND_GROUP_INFO_LEN, 10 + NAME_MAX + 1)];
+	char new[NAME_MAX + 1];
+	size_t len;
+	int mv_res;
+	char **filename_ptr;
+
+	if(new_name == NULL || new_name[0] == '\0')
+		return;
+
+	if(contains_slash(new_name))
+	{
+		status_bar_error("Name can not contain slash");
+		curr_stats.save_msg = 1;
+		return;
+	}
+
+	len = strlen(filename);
+	snprintf(new, sizeof(new), "%s%s%s%s", new_name,
+			(rename_file_ext[0] == '\0') ? "" : ".", rename_file_ext,
+			(filename[len - 1] == '/') ? "/" : "");
+
+	if(check_file_rename(filename, new, ST_DIALOG) <= 0)
+	{
+		return;
+	}
+
+	snprintf(buf, sizeof(buf), "rename in %s: %s to %s",
+			replace_home_part(curr_view->curr_dir), filename, new);
+	cmd_group_begin(buf);
+	mv_res = mv_file(filename, curr_view->curr_dir, new, curr_view->curr_dir, 0);
+	cmd_group_end();
+	if(mv_res != 0)
+	{
+		show_error_msg("Rename Error", "Rename operation failed");
+		return;
+	}
+
+	filename_ptr = &curr_view->dir_entry[curr_view->list_pos].name;
+	(void)replace_string(filename_ptr, new);
+
+	load_saving_pos(curr_view, 1);
+}
+
+static int
+complete_filename_only(const char *str)
+{
+	filename_completion(str, CT_FILE_WOE);
+	return 0;
+}
 
 void
-delete_file(FileView *view)
+rename_file(FileView *view, int name_only)
 {
-	char buf[256];
-	int x;
+	char filename[NAME_MAX + 1];
 
-	if(!view->selected_files)
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return;
+
+	snprintf(filename, sizeof(filename), "%s", get_current_file_name(view));
+	if(stroscmp(filename, "../") == 0)
+	{
+		show_error_msg("Rename error",
+				"You can't rename parent directory this way");
+		return;
+	}
+
+	chosp(filename);
+
+	if(name_only)
+	{
+		snprintf(rename_file_ext, sizeof(rename_file_ext), "%s",
+				extract_extension(filename));
+	}
+	else
+	{
+		rename_file_ext[0] = '\0';
+	}
+
+	clean_selected_files(view);
+	enter_prompt_mode(L"New name: ", filename, rename_file_cb,
+			complete_filename_only);
+}
+
+TSTATIC int
+is_name_list_ok(int count, int nlines, char *list[], char *files[])
+{
+	int i;
+
+	if(nlines < count)
+	{
+		status_bar_errorf("Not enough file names (%d/%d)", nlines, count);
+		curr_stats.save_msg = 1;
+		return 0;
+	}
+
+	if(nlines > count)
+	{
+		status_bar_errorf("Too many file names (%d/%d)", nlines, count);
+		curr_stats.save_msg = 1;
+		return 0;
+	}
+
+	for(i = 0; i < count; i++)
+	{
+		chomp(list[i]);
+
+		if(files != NULL)
+		{
+			char *file_s = find_slashr(files[i]);
+			char *list_s = find_slashr(list[i]);
+			if(list_s != NULL || file_s != NULL)
+			{
+				if(list_s - list[i] != file_s - files[i] ||
+						strnoscmp(files[i], list[i], list_s - list[i]) != 0)
+				{
+					if(file_s == NULL)
+						status_bar_errorf("Name \"%s\" contains slash", list[i]);
+					else
+						status_bar_errorf("Won't move \"%s\" file", files[i]);
+					curr_stats.save_msg = 1;
+					return 0;
+				}
+			}
+		}
+
+		if(list[i][0] != '\0' && is_in_string_array(list, i, list[i]))
+		{
+			status_bar_errorf("Name \"%s\" duplicates", list[i]);
+			curr_stats.save_msg = 1;
+			return 0;
+		}
+
+		if(list[i][0] == '\0')
+			continue;
+	}
+
+	return 1;
+}
+
+/* Returns count of renamed files */
+static int
+perform_renaming(FileView *view, char **files, int *is_dup, int len,
+		char **list)
+{
+	char buf[MAX(10 + NAME_MAX, COMMAND_GROUP_INFO_LEN) + 1];
+	size_t buf_len;
+	int i;
+	int renamed = 0;
+
+	buf_len = snprintf(buf, sizeof(buf), "rename in %s: ",
+			replace_home_part(view->curr_dir));
+
+	for(i = 0; i < len && buf_len < COMMAND_GROUP_INFO_LEN; i++)
+	{
+		if(buf[buf_len - 2] != ':')
+		{
+			strncat(buf, ", ", sizeof(buf) - buf_len - 1);
+			buf_len = strlen(buf);
+		}
+		buf_len += snprintf(buf + buf_len, sizeof(buf) - buf_len, "%s to %s",
+				files[i], list[i]);
+	}
+
+	cmd_group_begin(buf);
+
+	for(i = 0; i < len; i++)
+	{
+		const char *unique_name;
+
+		if(list[i][0] == '\0')
+			continue;
+		if(strcmp(list[i], files[i]) == 0)
+			continue;
+		if(!is_dup[i])
+			continue;
+
+		unique_name = make_name_unique(files[i]);
+		if(mv_file(files[i], view->curr_dir, unique_name, view->curr_dir, 2) != 0)
+		{
+			cmd_group_end();
+			if(!last_cmd_group_empty())
+				undo_group();
+			status_bar_error("Temporary rename error");
+			curr_stats.save_msg = 1;
+			return 0;
+		}
+		(void)replace_string(&files[i], unique_name);
+	}
+
+	for(i = 0; i < len; i++)
+	{
+		if(list[i][0] == '\0')
+			continue;
+		if(strcmp(list[i], files[i]) == 0)
+			continue;
+
+		if(mv_file(files[i], view->curr_dir, list[i], view->curr_dir,
+				is_dup[i] ? 1 : 0) == 0)
+		{
+			int pos;
+
+			renamed++;
+
+			pos = find_file_pos_in_list(view, files[i]);
+			if(pos == view->list_pos)
+			{
+				(void)replace_string(&view->dir_entry[pos].name, list[i]);
+			}
+		}
+	}
+
+	cmd_group_end();
+
+	return renamed;
+}
+
+static char **
+read_list_from_file(int count, char **names, int *nlines, int require_change)
+{
+	char rename_file[PATH_MAX];
+	char **list;
+	FILE *f;
+	int i;
+
+	generate_tmp_file_name("vifm.rename", rename_file, sizeof(rename_file));
+
+	if((f = fopen(rename_file, "w")) == NULL)
+	{
+		status_bar_error("Can't create temp file");
+		curr_stats.save_msg = 1;
+		return NULL;
+	}
+
+	for(i = 0; i < count; i++)
+		fprintf(f, "%s\n", names[i]);
+
+	fclose(f);
+
+	if(require_change)
+	{
+		struct stat st_before, st_after;
+
+		stat(rename_file, &st_before);
+
+		view_file(rename_file, -1, 0);
+
+		stat(rename_file, &st_after);
+
+		if(memcmp(&st_after.st_mtime, &st_before.st_mtime,
+				sizeof(st_after.st_mtime)) == 0)
+		{
+			unlink(rename_file);
+			curr_stats.save_msg = 0;
+			return NULL;
+		}
+	}
+	else
+	{
+		view_file(rename_file, -1, 0);
+	}
+
+	if((f = fopen(rename_file, "r")) == NULL)
+	{
+		unlink(rename_file);
+		status_bar_error("Can't open temporary file");
+		curr_stats.save_msg = 1;
+		return NULL;
+	}
+
+	list = read_file_lines(f, nlines);
+	fclose(f);
+	unlink(rename_file);
+
+	curr_stats.save_msg = 0;
+	return list;
+}
+
+static void
+rename_files_ind(FileView *view, char **files, int *is_dup, int len)
+{
+	char **list;
+	int nlines, renamed = -1;
+
+	if(len == 0)
+	{
+		status_bar_message("0 files renamed");
+		return;
+	}
+
+	if((list = read_list_from_file(len, files, &nlines, 1)) == NULL)
+	{
+		status_bar_message("0 files renamed");
+		return;
+	}
+
+	if(is_name_list_ok(len, nlines, list, files) &&
+			is_rename_list_ok(files, is_dup, len, list))
+		renamed = perform_renaming(view, files, is_dup, len, list);
+	free_string_array(list, nlines);
+
+	if(renamed >= 0)
+		status_bar_messagef("%d file%s renamed", renamed,
+				(renamed == 1) ? "" : "s");
+}
+
+static char **
+add_files_to_list(const char *path, char **files, int *len)
+{
+	DIR* dir;
+	struct dirent* dentry;
+	const char* slash = "";
+
+	if(!is_dir(path))
+	{
+		*len = add_to_string_array(&files, *len, 1, path);
+		return files;
+	}
+
+	dir = opendir(path);
+	if(dir == NULL)
+		return files;
+
+	if(path[strlen(path) - 1] != '/')
+		slash = "/";
+
+	while((dentry = readdir(dir)) != NULL)
+	{
+		char buf[PATH_MAX];
+
+		if(stroscmp(dentry->d_name, ".") == 0)
+			continue;
+		else if(stroscmp(dentry->d_name, "..") == 0)
+			continue;
+
+		snprintf(buf, sizeof(buf), "%s%s%s", path, slash, dentry->d_name);
+		files = add_files_to_list(buf, files, len);
+	}
+
+	closedir(dir);
+	return files;
+}
+
+int
+rename_files(FileView *view, char **list, int nlines, int recursive)
+{
+	char **files = NULL;
+	int len;
+	int i;
+	int *is_dup;
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	if(view->selected_files == 0)
 	{
 		view->dir_entry[view->list_pos].selected = 1;
 		view->selected_files = 1;
 	}
 
-	get_all_selected_files(view);
-	yank_selected_files(view);
-
-	for(x = 0; x < view->selected_files; x++)
+	len = 0;
+	for(i = 0; i < view->list_rows; i++)
 	{
-		if(!strcmp("../", view->selected_filelist[x]))
+		if(!view->dir_entry[i].selected)
+			continue;
+		if(stroscmp(view->dir_entry[i].name, "../") == 0)
+			continue;
+		if(recursive)
 		{
-			show_error_msg(" Background Process Error ", 
-					"You cannot delete the ../ directory ");
+			files = add_files_to_list(view->dir_entry[i].name, files, &len);
+		}
+		else
+		{
+			len = add_to_string_array(&files, len, 1, view->dir_entry[i].name);
+			chosp(files[len - 1]);
+		}
+	}
+
+	is_dup = calloc(len, sizeof(*is_dup));
+	if(is_dup == NULL)
+	{
+		free_string_array(files, len);
+		show_error_msg("Memory Error", "Unable to allocate enough memory");
+		return 0;
+	}
+
+	if(nlines == 0)
+	{
+		rename_files_ind(view, files, is_dup, len);
+	}
+	else
+	{
+		int renamed = -1;
+
+		if(is_name_list_ok(len, nlines, list, files) &&
+				is_rename_list_ok(files, is_dup, len, list))
+			renamed = perform_renaming(view, files, is_dup, len, list);
+
+		if(renamed >= 0)
+			status_bar_messagef("%d file%s renamed", renamed,
+					(renamed == 1) ? "" : "s");
+	}
+
+	free_string_array(files, len);
+	free(is_dup);
+
+	clean_selected_files(view);
+	redraw_view(view);
+	curr_stats.save_msg = 1;
+	return 1;
+}
+
+/* Checks rename correctness and forms an array of duplication marks.
+ * Directory names in files array should be without trailing slash. */
+TSTATIC int
+is_rename_list_ok(char *files[], int *is_dup, int len, char *list[])
+{
+	int i;
+	for(i = 0; i < len; i++)
+	{
+		int j;
+		int check_result;
+
+		check_result = check_file_rename(files[i], list[i], ST_STATUS_BAR);
+		if(check_result < 0)
+		{
 			continue;
 		}
 
-		if ((curr_stats.use_register) && (curr_stats.register_saved))
+		for(j = 0; j < len; j++)
 		{
-			strncpy(curr_stats.yanked_files_dir, cfg.trash_dir,
-					sizeof(curr_stats.yanked_files_dir) -1);
-			snprintf(buf, sizeof(buf), "mv \"%s\" %s/%s", 
-					view->selected_filelist[x], cfg.trash_dir, 
-					view->selected_filelist[x]);
-
-			curr_stats.register_saved = 0;
-			curr_stats.use_register = 0;
+			if(strcmp(list[i], files[j]) == 0 && !is_dup[j])
+			{
+				is_dup[j] = 1;
+				break;
+			}
 		}
-		else if(cfg.use_trash)
+		if(j >= len && check_result == 0)
 		{
-			strncpy(curr_stats.yanked_files_dir, cfg.trash_dir,
-					sizeof(curr_stats.yanked_files_dir) -1);
-			snprintf(buf, sizeof(buf), "mv \"%s\" %s",
-				view->selected_filelist[x],  cfg.trash_dir);
+			break;
+		}
+	}
+	return i >= len;
+}
+
+static void
+make_undo_string(FileView *view, char *buf, int nlines, char **list)
+{
+	int i;
+	size_t len = strlen(buf);
+	for(i = 0; i < view->selected_files && len < COMMAND_GROUP_INFO_LEN; i++)
+	{
+		if(buf[len - 2] != ':')
+		{
+			strncat(buf, ", ", COMMAND_GROUP_INFO_LEN - len - 1);
+			len = strlen(buf);
+		}
+		strncat(buf, view->selected_filelist[i], COMMAND_GROUP_INFO_LEN - len - 1);
+		len = strlen(buf);
+		if(nlines > 0)
+		{
+			strncat(buf, " to ", COMMAND_GROUP_INFO_LEN - len - 1);
+			len = strlen(buf);
+			strncat(buf, list[i], COMMAND_GROUP_INFO_LEN - len - 1);
+			len = strlen(buf);
+		}
+	}
+}
+
+/* Returns number of digets in passed number. */
+static int
+count_digits(int number)
+{
+	int result = 0;
+	while(number != 0)
+	{
+		number /= 10;
+		result++;
+	}
+	return MAX(1, result);
+}
+
+/* Returns pointer to a statically allocated buffer */
+TSTATIC const char *
+add_to_name(const char filename[], int k)
+{
+	static char result[NAME_MAX];
+	char format[16];
+	char *b, *e;
+	int i, n;
+
+	if((b = strpbrk(filename, "0123456789")) == NULL)
+		return strcpy(result, filename);
+
+	n = 0;
+	while(b[n] == '0' && isdigit(b[n + 1]))
+		n++;
+
+	if(b != filename && b[-1] == '-')
+		b--;
+
+	i = strtol(b, &e, 10);
+
+	if(i + k < 0)
+		n++;
+
+	snprintf(result, b - filename + 1, "%s", filename);
+	snprintf(format, sizeof(format), "%%0%dd%%s", n + count_digits(i));
+	snprintf(result + (b - filename), sizeof(result) - (b - filename), format,
+			i + k, e);
+
+	return result;
+}
+
+/* Returns new value for save_msg flag. */
+int
+incdec_names(FileView *view, int k)
+{
+	size_t names_len;
+	char **names;
+	size_t tmp_len = 0;
+	char **tmp_names = NULL;
+	char buf[MAX(NAME_MAX, COMMAND_GROUP_INFO_LEN)];
+	int i;
+	int err = 0;
+	int renames = 0;
+
+	get_all_selected_files(view);
+	names_len = view->selected_files;
+	names = copy_string_array(view->selected_filelist, names_len);
+
+	snprintf(buf, sizeof(buf), "<c-a> in %s: ",
+			replace_home_part(view->curr_dir));
+	make_undo_string(view, buf, 0, NULL);
+
+	if(!view->user_selection)
+		clean_selected_files(view);
+
+	for(i = 0; i < names_len; i++)
+	{
+		if(strpbrk(names[i], "0123456789") == NULL)
+		{
+			remove_from_string_array(names, names_len--, i--);
+			continue;
+		}
+		chosp(names[i]);
+		tmp_len = add_to_string_array(&tmp_names, tmp_len, 1,
+				make_name_unique(names[i]));
+	}
+
+	for(i = 0; i < names_len; i++)
+	{
+		const char *p = add_to_name(names[i], k);
+#ifndef _WIN32
+		if(is_in_string_array(names, names_len, p))
+#else
+		if(is_in_string_array_case(names, names_len, p))
+#endif
+			continue;
+		if(check_file_rename(names[i], p, ST_STATUS_BAR) != 0)
+			continue;
+
+		err = -1;
+		break;
+	}
+
+	cmd_group_begin(buf);
+	for(i = 0; i < names_len && !err; i++)
+	{
+		if(mv_file(names[i], view->curr_dir, tmp_names[i], view->curr_dir, 4) != 0)
+		{
+			err = 1;
+			break;
+		}
+		renames++;
+	}
+	for(i = 0; i < names_len && !err; i++)
+	{
+		if(mv_file(tmp_names[i], view->curr_dir, add_to_name(names[i], k),
+				view->curr_dir, 3) != 0)
+		{
+			err = 1;
+			break;
+		}
+		renames++;
+	}
+	cmd_group_end();
+
+	free_string_array(names, names_len);
+	free_string_array(tmp_names, tmp_len);
+
+	if(err)
+	{
+		if(err > 0 && !last_cmd_group_empty())
+			undo_group();
+	}
+	else if(view->dir_entry[view->list_pos].selected || !view->user_selection)
+	{
+		char **filename = &view->dir_entry[view->list_pos].name;
+		(void)replace_string(filename, add_to_name(*filename, k));
+	}
+
+	clean_selected_files(view);
+	if(renames > 0)
+	{
+		load_saving_pos(view, 0);
+	}
+
+	if(err > 0)
+	{
+		status_bar_error("Rename error");
+	}
+	else if(err == 0)
+	{
+		status_bar_messagef("%d file%s renamed", names_len,
+				(names_len == 1) ? "" : "s");
+	}
+
+	return 1;
+}
+
+/* Returns value > 0 if rename is correct, < 0 if rename isn't needed and 0
+ * when rename operation should be aborted. silent parameter controls whether
+ * error dialog or status bar message should be shown, 0 means dialog. */
+TSTATIC int
+check_file_rename(const char old[], const char new[], SignalType signal_type)
+{
+	/* Filename unchanged */
+	if(new[0] == '\0' || strcmp(old, new) == 0)
+		return -1;
+
+	if(path_exists(new) && stroscmp(old, new) != 0)
+	{
+		if(signal_type == ST_STATUS_BAR)
+		{
+			status_bar_errorf("File \"%s\" already exists", new);
+			curr_stats.save_msg = 1;
 		}
 		else
-			snprintf(buf, sizeof(buf), "rm -fr '%s'",
-					 view->selected_filelist[x]);
-
-		background_and_wait_for_errors(buf);
+		{
+			show_error_msg("File exists",
+					"That file already exists. Will not overwrite.");
+		}
+		return 0;
 	}
+
+	return 1;
+}
+
+#ifndef _WIN32
+void
+chown_files(int u, int g, uid_t uid, gid_t gid)
+{
+	char buf[COMMAND_GROUP_INFO_LEN + 1];
+	int i;
+
+	snprintf(buf, sizeof(buf), "ch%s in %s: ", ((u && g) || u) ? "own" : "grp",
+			replace_home_part(curr_view->curr_dir));
+
+	get_group_file_list(curr_view->saved_selection, curr_view->nsaved_selection,
+			buf);
+	cmd_group_begin(buf);
+	for(i = 0; i < curr_view->nsaved_selection; i++)
+	{
+		char *filename = curr_view->saved_selection[i];
+		int pos = find_file_pos_in_list(curr_view, filename);
+
+		if(u && perform_operation(OP_CHOWN, (void *)(long)uid, filename, NULL) == 0)
+			add_operation(OP_CHOWN, (void *)(long)uid,
+					(void *)(long)curr_view->dir_entry[pos].uid, filename, "");
+		if(g && perform_operation(OP_CHGRP, (void *)(long)gid, filename, NULL) == 0)
+			add_operation(OP_CHGRP, (void *)(long)gid,
+					(void *)(long)curr_view->dir_entry[pos].gid, filename, "");
+	}
+	cmd_group_end();
+
+	load_dir_list(curr_view, 1);
+	move_to_list_pos(curr_view, curr_view->list_pos);
+}
+#endif
+
+static void
+change_owner_cb(const char *new_owner)
+{
+#ifndef _WIN32
+	uid_t uid;
+
+	if(new_owner == NULL || new_owner[0] == '\0')
+		return;
+
+	if(get_uid(new_owner, &uid) != 0)
+	{
+		status_bar_errorf("Invalid user name: \"%s\"", new_owner);
+		curr_stats.save_msg = 1;
+		return;
+	}
+
+	chown_files(1, 0, uid, 0);
+#endif
+}
+
+#ifndef _WIN32
+static int
+complete_owner(const char *str)
+{
+	complete_user_name(str);
+	return 0;
+}
+#endif
+
+void
+change_owner(void)
+{
+	if(curr_view->selected_filelist == 0)
+	{
+		curr_view->dir_entry[curr_view->list_pos].selected = 1;
+		curr_view->selected_files = 1;
+	}
+	clean_selected_files(curr_view);
+#ifndef _WIN32
+	enter_prompt_mode(L"New owner: ", "", change_owner_cb, &complete_owner);
+#else
+	enter_prompt_mode(L"New owner: ", "", change_owner_cb, NULL);
+#endif
+}
+
+static void
+change_group_cb(const char *new_group)
+{
+#ifndef _WIN32
+	gid_t gid;
+
+	if(new_group == NULL || new_group[0] == '\0')
+		return;
+
+	if(get_gid(new_group, &gid) != 0)
+	{
+		status_bar_errorf("Invalid group name: \"%s\"", new_group);
+		curr_stats.save_msg = 1;
+		return;
+	}
+
+	chown_files(0, 1, 0, gid);
+#endif
+}
+
+#ifndef _WIN32
+static int
+complete_group(const char *str)
+{
+	complete_group_name(str);
+	return 0;
+}
+#endif
+
+void
+change_group(void)
+{
+	if(curr_view->selected_filelist == 0)
+	{
+		curr_view->dir_entry[curr_view->list_pos].selected = 1;
+		curr_view->selected_files = 1;
+	}
+	clean_selected_files(curr_view);
+#ifndef _WIN32
+	enter_prompt_mode(L"New group: ", "", change_group_cb, &complete_group);
+#else
+	enter_prompt_mode(L"New group: ", "", change_group_cb, NULL);
+#endif
+}
+
+static void
+change_link_cb(const char *new_target)
+{
+	char buf[MAX(COMMAND_GROUP_INFO_LEN, PATH_MAX)];
+	char linkto[PATH_MAX];
+	const char *filename;
+
+	if(new_target == NULL || new_target[0] == '\0')
+		return;
+
+	curr_stats.confirmed = 1;
+
+	filename = curr_view->dir_entry[curr_view->list_pos].name;
+	if(get_link_target(filename, linkto, sizeof(linkto)) != 0)
+	{
+		show_error_msg("Error", "Can't read link");
+		return;
+	}
+
+	snprintf(buf, sizeof(buf), "cl in %s: on %s from \"%s\" to \"%s\"",
+			replace_home_part(curr_view->curr_dir), filename, linkto, new_target);
+	cmd_group_begin(buf);
+
+	snprintf(buf, sizeof(buf), "%s/%s", curr_view->curr_dir, filename);
+	chosp(buf);
+
+	if(perform_operation(OP_REMOVESL, NULL, buf, NULL) == 0)
+		add_operation(OP_REMOVESL, NULL, NULL, buf, linkto);
+	if(perform_operation(OP_SYMLINK2, NULL, new_target, buf) == 0)
+		add_operation(OP_SYMLINK2, NULL, NULL, new_target, buf);
+
+	cmd_group_end();
+}
+
+static int
+complete_filename(const char *str)
+{
+	const char *name_begin = after_last(str, '/');
+	filename_completion(str, CT_ALL_WOE);
+	return name_begin - str;
+}
+
+int
+change_link(FileView *view)
+{
+	char linkto[PATH_MAX];
+
+	if(!symlinks_available())
+	{
+		show_error_msg("Symbolic Links Error",
+				"Your OS doesn't support symbolic links");
+		return 0;
+	}
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	if(view->dir_entry[view->list_pos].type != LINK)
+	{
+		status_bar_error("File isn't a symbolic link");
+		return 1;
+	}
+
+	if(get_link_target(view->dir_entry[view->list_pos].name, linkto,
+			sizeof(linkto)) != 0)
+	{
+		show_error_msg("Error", "Can't read link");
+		return 0;
+	}
+
+	enter_prompt_mode(L"Link target: ", linkto, change_link_cb,
+			&complete_filename);
+	return 0;
+}
+
+static void
+prompt_dest_name(const char *src_name)
+{
+	wchar_t buf[256];
+
+	my_swprintf(buf, ARRAY_LEN(buf), L"New name for %" WPRINTF_MBSTR L": ",
+			src_name);
+	enter_prompt_mode(buf, src_name, put_confirm_cb, NULL);
+}
+
+static void
+prompt_what_to_do(const char *src_name)
+{
+	wchar_t buf[NAME_MAX];
+
+	if(src_name != put_confirm.name)
+	{
+		(void)replace_string(&put_confirm.name, src_name);
+	}
+	my_swprintf(buf, ARRAY_LEN(buf), L"Name conflict for %" WPRINTF_MBSTR
+			L". [r]ename/[s]kip/[o]verwrite/overwrite [a]ll: ", src_name);
+	enter_prompt_mode(buf, "", put_decide_cb, NULL);
+}
+
+/* Returns 0 on success */
+static int
+put_next(const char *dest_name, int override)
+{
+	char *filename;
+	struct stat st;
+	char src_buf[PATH_MAX], dst_buf[PATH_MAX];
+	int from_trash;
+	int op;
+	int move;
+
+	/* TODO: refactor this function (put_next()) */
+
+	override = override || put_confirm.overwrite_all;
+
+	filename = put_confirm.reg->files[put_confirm.x];
+	chosp(filename);
+	if(lstat(filename, &st) != 0)
+		return 0;
+
+	from_trash = strnoscmp(filename, cfg.trash_dir, strlen(cfg.trash_dir)) == 0;
+	move = from_trash || put_confirm.force_move;
+
+	if(dest_name[0] == '\0')
+		dest_name = find_slashr(filename) + 1;
+
+	strcpy(src_buf, filename);
+	chosp(src_buf);
+
+	if(from_trash)
+	{
+		while(isdigit(*dest_name))
+			dest_name++;
+		dest_name++;
+	}
+
+	snprintf(dst_buf, sizeof(dst_buf), "%s/%s", put_confirm.view->curr_dir,
+			dest_name);
+	chosp(dst_buf);
+
+	if(path_exists(dst_buf) && !override)
+	{
+		prompt_what_to_do(dest_name);
+		return 1;
+	}
+
+	if(override)
+	{
+		struct stat st;
+		if(lstat(dst_buf, &st) == 0)
+		{
+			if(perform_operation(OP_REMOVESL, NULL, dst_buf, NULL) != 0)
+				return 0;
+		}
+
+		request_view_update(put_confirm.view);
+	}
+
+	if(put_confirm.link)
+	{
+		op = OP_SYMLINK;
+		if(put_confirm.link == 2)
+			strcpy(src_buf, make_rel_path(filename, put_confirm.view->curr_dir));
+	}
+	else if(move)
+	{
+		op = OP_MOVE;
+	}
+	else
+	{
+		op = OP_COPY;
+	}
+
+	progress_msg("Putting files", put_confirm.x + 1, put_confirm.reg->num_files);
+	if(perform_operation(op, NULL, src_buf, dst_buf) == 0)
+	{
+		char *msg, *p;
+		size_t len;
+
+		cmd_group_continue();
+
+		msg = replace_group_msg(NULL);
+		len = strlen(msg);
+		p = realloc(msg, COMMAND_GROUP_INFO_LEN);
+		if(p == NULL)
+			len = COMMAND_GROUP_INFO_LEN;
+		else
+			msg = p;
+
+		snprintf(msg + len, COMMAND_GROUP_INFO_LEN - len, "%s%s",
+				(msg[len - 2] != ':') ? ", " : "", dest_name);
+		replace_group_msg(msg);
+		free(msg);
+
+		add_operation(op, NULL, NULL, src_buf, dst_buf);
+
+		cmd_group_end();
+		put_confirm.y++;
+		if(move)
+		{
+			free(put_confirm.reg->files[put_confirm.x]);
+			put_confirm.reg->files[put_confirm.x] = NULL;
+		}
+	}
+
+	return 0;
+}
+
+static void
+put_confirm_cb(const char *dest_name)
+{
+	if(dest_name == NULL || dest_name[0] == '\0')
+		return;
+
+	if(put_next(dest_name, 0) == 0)
+	{
+		put_confirm.x++;
+		curr_stats.save_msg = put_files_from_register_i(put_confirm.view, 0);
+	}
+}
+
+static void
+put_decide_cb(const char *choice)
+{
+	if(choice == NULL || choice[0] == '\0' || strcmp(choice, "r") == 0)
+	{
+		prompt_dest_name(put_confirm.name);
+	}
+	else if(strcmp(choice, "s") == 0)
+	{
+		put_confirm.x++;
+		curr_stats.save_msg = put_files_from_register_i(put_confirm.view, 0);
+	}
+	else if(strcmp(choice, "o") == 0)
+	{
+		if(put_next("", 1) == 0)
+		{
+			put_confirm.x++;
+			curr_stats.save_msg = put_files_from_register_i(put_confirm.view, 0);
+		}
+	}
+	else if(strcmp(choice, "a") == 0)
+	{
+		put_confirm.overwrite_all = 1;
+		if(put_next("", 1) == 0)
+		{
+			put_confirm.x++;
+			curr_stats.save_msg = put_files_from_register_i(put_confirm.view, 0);
+		}
+	}
+	else
+	{
+		prompt_what_to_do(put_confirm.name);
+	}
+}
+
+/* Returns new value for save_msg flag. */
+int
+put_files_from_register(FileView *view, int name, int force_move)
+{
+	registers_t *reg;
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	reg = find_register(tolower(name));
+
+	if(reg == NULL || reg->num_files < 1)
+	{
+		status_bar_error("Register is empty");
+		return 1;
+	}
+
+	put_confirm.reg = reg;
+	put_confirm.force_move = force_move;
+	put_confirm.x = 0;
+	put_confirm.y = 0;
+	put_confirm.view = view;
+	put_confirm.overwrite_all = 0;
+	put_confirm.link = 0;
+	return put_files_from_register_i(view, 1);
+}
+
+TSTATIC const char *
+gen_clone_name(const char normal_name[])
+{
+	static char result[NAME_MAX];
+
+	char extension[NAME_MAX];
+	int i;
+	size_t len;
+	char *p;
+
+	snprintf(result, sizeof(result), "%s", normal_name);
+	chosp(result);
+
+	snprintf(extension, sizeof(extension), "%s", extract_extension(result));
+
+	len = strlen(result);
+	i = 1;
+	if(result[len - 1] == ')' && (p = strrchr(result, '(')) != NULL)
+	{
+		char *t;
+		long l;
+		if((l = strtol(p + 1, &t, 10)) > 0 && t[1] == '\0')
+		{
+			len = p - result;
+			i = l + 1;
+		}
+	}
+
+	do
+	{
+		snprintf(result + len, sizeof(result) - len, "(%d)%s%s", i++,
+				(extension[0] == '\0') ? "" : ".", extension);
+	}
+	while(path_exists(result));
+
+	return result;
+}
+
+static void
+clone_file(FileView* view, const char *filename, const char *path,
+		const char *clone)
+{
+	char full[PATH_MAX];
+	char clone_name[PATH_MAX];
+	
+	if(stroscmp(filename, "./") == 0)
+		return;
+	if(stroscmp(filename, "../") == 0)
+		return;
+
+	snprintf(clone_name, sizeof(clone_name), "%s/%s", path, clone);
+	chosp(clone_name);
+	if(path_exists(clone_name))
+	{
+		if(perform_operation(OP_REMOVESL, NULL, clone_name, NULL) != 0)
+			return;
+	}
+
+	snprintf(full, sizeof(full), "%s/%s", view->curr_dir, filename);
+	chosp(full);
+
+	if(perform_operation(OP_COPY, NULL, full, clone_name) == 0)
+		add_operation(OP_COPY, NULL, NULL, full, clone_name);
+}
+
+static int
+is_clone_list_ok(int count, char **list)
+{
+	int i;
+	for(i = 0; i < count; i++)
+	{
+		if(path_exists(list[i]))
+		{
+			status_bar_errorf("File \"%s\" already exists", list[i]);
+			return 0;
+		}
+	}
+	return 1;
+}
+
+static int
+is_dir_path(FileView *view, const char *path, char *buf)
+{
+	strcpy(buf, view->curr_dir);
+
+	if(path[0] == '/' || path[0] == '~')
+	{
+		char *expanded_path = expand_tilde(strdup(path));
+		strcpy(buf, expanded_path);
+		free(expanded_path);
+	}
+	else
+	{
+		strcat(buf, "/");
+		strcat(buf, path);
+	}
+
+	if(is_dir(buf))
+		return 1;
+
+	strcpy(buf, view->curr_dir);
+	return 0;
+}
+
+/* returns new value for save_msg */
+int
+clone_files(FileView *view, char **list, int nlines, int force, int copies)
+{
+	int i;
+	char buf[COMMAND_GROUP_INFO_LEN + 1];
+	char path[PATH_MAX];
+	int with_dir = 0;
+	int from_file;
+	char **sel;
+	int sel_len;
+
+	if(!have_read_access(view))
+		return 0;
+
+	if(nlines == 1)
+	{
+		if((with_dir = is_dir_path(view, list[0], path)))
+			nlines = 0;
+	}
+	else
+	{
+		strcpy(path, view->curr_dir);
+	}
+	if(!check_if_dir_writable(with_dir ? DR_DESTINATION : DR_CURRENT, path))
+		return 0;
+
+	get_all_selected_files(view);
+
+	from_file = nlines < 0;
+	if(from_file)
+	{
+		list = read_list_from_file(view->selected_files, view->selected_filelist,
+				&nlines, 1);
+		if(list == NULL)
+		{
+			free_selected_file_array(view);
+			return curr_stats.save_msg;
+		}
+	}
+
+	if(nlines > 0 &&
+			(!is_name_list_ok(view->selected_files, nlines, list, NULL) ||
+			(!force && !is_clone_list_ok(nlines, list))))
+	{
+		clean_selected_files(view);
+		redraw_view(view);
+		if(from_file)
+			free_string_array(list, nlines);
+		return 1;
+	}
+
+	if(with_dir)
+		snprintf(buf, sizeof(buf), "clone in %s to %s: ", view->curr_dir, list[0]);
+	else
+		snprintf(buf, sizeof(buf), "clone in %s: ", view->curr_dir);
+	make_undo_string(view, buf, nlines, list);
+
+	sel_len = view->selected_files;
+	sel = copy_string_array(view->selected_filelist, sel_len);
+	if(!view->user_selection)
+	{
+		free_selected_file_array(view);
+		for(i = 0; i < view->list_rows; i++)
+			view->dir_entry[i].selected = 0;
+		view->selected_files = 0;
+	}
+
+	cmd_group_begin(buf);
+	for(i = 0; i < sel_len; i++)
+	{
+		int j;
+		const char * clone_name;
+		if(nlines > 0)
+		{
+			clone_name = list[i];
+		}
+		else
+		{
+			clone_name = path_exists_at(path, sel[i]) ? gen_clone_name(sel[i]) :
+				sel[i];
+		}
+		progress_msg("Cloning files", i + 1, sel_len);
+
+		for(j = 0; j < copies; j++)
+		{
+			if(path_exists_at(path, clone_name))
+				clone_name = gen_clone_name((nlines > 0) ? list[i] : sel[i]);
+			clone_file(view, sel[i], path, clone_name);
+		}
+
+		if(find_file_pos_in_list(view, sel[i]) == view->list_pos)
+		{
+			free(view->dir_entry[view->list_pos].name);
+			view->dir_entry[view->list_pos].name = malloc(strlen(clone_name) + 2);
+			strcpy(view->dir_entry[view->list_pos].name, clone_name);
+			if(ends_with_slash(sel[i]))
+				strcat(view->dir_entry[view->list_pos].name, "/");
+		}
+	}
+	cmd_group_end();
+	free_selected_file_array(view);
+	free_string_array(sel, sel_len);
+
+	clean_selected_files(view);
+	load_saving_pos(view, 1);
+	load_saving_pos(other_view, 1);
+	if(from_file)
+		free_string_array(list, nlines);
+	return 0;
+}
+
+static void
+set_dir_size(const char *path, uint64_t size)
+{
+	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+
+	pthread_mutex_lock(&mutex);
+	tree_set_data(curr_stats.dirsize_cache, path, size);
+	pthread_mutex_unlock(&mutex);
+}
+
+uint64_t
+calc_dirsize(const char *path, int force_update)
+{
+	DIR* dir;
+	struct dirent* dentry;
+	const char* slash = "";
+	uint64_t size;
+
+	dir = opendir(path);
+	if(dir == NULL)
+		return 0;
+
+	if(path[strlen(path) - 1] != '/')
+		slash = "/";
+
+	size = 0;
+	while((dentry = readdir(dir)) != NULL)
+	{
+		char buf[PATH_MAX];
+
+		if(stroscmp(dentry->d_name, ".") == 0)
+			continue;
+		else if(stroscmp(dentry->d_name, "..") == 0)
+			continue;
+
+		snprintf(buf, sizeof(buf), "%s%s%s", path, slash, dentry->d_name);
+		if(entry_is_dir(buf, dentry))
+		{
+			uint64_t dir_size = 0;
+			if(tree_get_data(curr_stats.dirsize_cache, buf, &dir_size) != 0
+					|| force_update)
+				dir_size = calc_dirsize(buf, force_update);
+			size += dir_size;
+		}
+		else
+		{
+			size += get_file_size(buf);
+		}
+	}
+
+	closedir(dir);
+
+	set_dir_size(path, size);
+	return size;
+}
+
+/* Uses dentry to check file type and fallbacks to lstat() if dentry contains
+ * unknown type. */
+static int
+entry_is_dir(const char full_path[], const struct dirent* dentry)
+{
+#ifndef _WIN32
+		struct stat s;
+		if(dentry->d_type != DT_UNKNOWN)
+		{
+			return dentry->d_type == DT_DIR;
+		}
+		if(lstat(full_path, &s) == 0 && s.st_ino != 0)
+		{
+			return (s.st_mode&S_IFMT) == S_IFDIR;
+		}
+		return 0;
+#else
+		return is_dir(full_path);
+#endif
+}
+
+/* Returns new value for save_msg flag. */
+int
+put_links(FileView *view, int reg_name, int relative)
+{
+	registers_t *reg;
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	reg = find_register(reg_name);
+
+	if(reg == NULL || reg->num_files < 1)
+	{
+		status_bar_error("Register is empty");
+		return 1;
+	}
+
+	put_confirm.reg = reg;
+	put_confirm.force_move = 0;
+	put_confirm.x = 0;
+	put_confirm.y = 0;
+	put_confirm.view = view;
+	put_confirm.overwrite_all = 0;
+	put_confirm.link = relative ? 2 : 1;
+	return put_files_from_register_i(view, 1);
+}
+
+/* Returns new value for save_msg flag. */
+static int
+put_files_from_register_i(FileView *view, int start)
+{
+	if(start)
+	{
+		char buf[MAX(COMMAND_GROUP_INFO_LEN, PATH_MAX + NAME_MAX*2 + 4)];
+		const char *op = "UNKNOWN";
+		int from_trash = strnoscmp(put_confirm.reg->files[0], cfg.trash_dir,
+				strlen(cfg.trash_dir)) == 0;
+		if(put_confirm.link == 0)
+			op = (put_confirm.force_move || from_trash) ? "Put" : "put";
+		else if(put_confirm.link == 1)
+			op = "put absolute links";
+		else if(put_confirm.link == 2)
+			op = "put relative links";
+		snprintf(buf, sizeof(buf), "%s in %s: ", op,
+				replace_home_part(view->curr_dir));
+		cmd_group_begin(buf);
+		cmd_group_end();
+	}
+
+	if(my_chdir(view->curr_dir) != 0)
+	{
+		show_error_msg("Directory Return", "Can't chdir() to current directory");
+		return 1;
+	}
+	while(put_confirm.x < put_confirm.reg->num_files)
+	{
+		if(put_next("", 0) != 0)
+			return 0;
+		put_confirm.x++;
+	}
+
+	pack_register(put_confirm.reg->name);
+
+	status_bar_messagef("%d file%s inserted", put_confirm.y,
+			(put_confirm.y == 1) ? "" : "s");
+
+	load_saving_pos(put_confirm.view, 1);
+
+	return 1;
+}
+
+/* off can be NULL */
+static const char *
+substitute_regexp(const char *src, const char *sub, const regmatch_t *matches,
+		int *off)
+{
+	static char buf[NAME_MAX];
+	char *dst = buf;
+	int i;
+
+	for(i = 0; i < matches[0].rm_so; i++)
+		*dst++ = src[i];
+
+	while(*sub != '\0')
+	{
+		if(*sub == '\\')
+		{
+			if(sub[1] == '\0')
+				break;
+			else if(isdigit(sub[1]))
+			{
+				int n = sub[1] - '0';
+				for(i = matches[n].rm_so; i < matches[n].rm_eo; i++)
+					*dst++ = src[i];
+				sub += 2;
+				continue;
+			}
+			else
+				sub++;
+		}
+		*dst++ = *sub++;
+	}
+	if(off != NULL)
+		*off = dst - buf;
+
+	for(i = matches[0].rm_eo; src[i] != '\0'; i++)
+		*dst++ = src[i];
+
+	*dst = '\0';
+
+	return buf;
+}
+
+static const char *
+gsubstitute_regexp(regex_t *re, const char *src, const char *sub,
+		regmatch_t *matches)
+{
+	static char buf[NAME_MAX];
+	int off = 0;
+	strcpy(buf, src);
+	do
+	{
+		int i;
+		for(i = 0; i < 10; i++)
+		{
+			matches[i].rm_so += off;
+			matches[i].rm_eo += off;
+		}
+
+		src = substitute_regexp(buf, sub, matches, &off);
+		strcpy(buf, src);
+
+		if(matches[0].rm_eo == matches[0].rm_so)
+			break;
+	}while(regexec(re, buf + off, 10, matches, 0) == 0);
+	return buf;
+}
+
+const char *
+substitute_in_name(const char *name, const char *pattern, const char *sub,
+		int glob)
+{
+	static char buf[PATH_MAX];
+	regex_t re;
+	regmatch_t matches[10];
+	const char *dst;
+
+	strcpy(buf, name);
+
+	if(regcomp(&re, pattern, REG_EXTENDED) != 0)
+	{
+		regfree(&re);
+		return buf;
+	}
+
+	if(regexec(&re, name, ARRAY_LEN(matches), matches, 0) != 0)
+	{
+		regfree(&re);
+		return buf;
+	}
+
+	if(glob && pattern[0] != '^')
+		dst = gsubstitute_regexp(&re, name, sub, matches);
+	else
+		dst = substitute_regexp(name, sub, matches, NULL);
+	strcpy(buf, dst);
+
+	regfree(&re);
+	return buf;
+}
+
+static int
+change_in_names(FileView *view, char c, const char *pattern, const char *sub,
+		char **dest)
+{
+	int i, j;
+	int n;
+	char buf[COMMAND_GROUP_INFO_LEN + 1];
+	size_t len;
+
+	len = snprintf(buf, sizeof(buf), "%c/%s/%s/ in %s: ", c, pattern, sub,
+			replace_home_part(view->curr_dir));
+
+	for(i = 0; i < view->selected_files && len < COMMAND_GROUP_INFO_LEN; i++)
+	{
+		if(!view->dir_entry[i].selected)
+			continue;
+		if(stroscmp(view->dir_entry[i].name, "../") == 0)
+			continue;
+
+		if(buf[len - 2] != ':')
+		{
+			strncat(buf, ", ", sizeof(buf) - len - 1);
+			len = strlen(buf);
+		}
+		strncat(buf, view->dir_entry[i].name, sizeof(buf) - len - 1);
+		len = strlen(buf);
+	}
+	cmd_group_begin(buf);
+	n = 0;
+	j = -1;
+	for(i = 0; i < view->list_rows; i++)
+	{
+		char buf[NAME_MAX];
+
+		if(!view->dir_entry[i].selected)
+			continue;
+		if(stroscmp(view->dir_entry[i].name, "../") == 0)
+			continue;
+
+		strncpy(buf, view->dir_entry[i].name, sizeof(buf));
+		chosp(buf);
+		j++;
+		if(strcmp(buf, dest[j]) == 0)
+			continue;
+
+		if(i == view->list_pos)
+		{
+			(void)replace_string(&view->dir_entry[i].name, dest[j]);
+		}
+
+		if(mv_file(buf, view->curr_dir, dest[j], view->curr_dir, 0) == 0)
+			n++;
+	}
+	cmd_group_end();
+	free_string_array(dest, j + 1);
+	status_bar_messagef("%d file%s renamed", n, (n == 1) ? "" : "s");
+	return 1;
+}
+
+/* Returns new value for save_msg flag. */
+int
+substitute_in_names(FileView *view, const char *pattern, const char *sub,
+		int ic, int glob)
+{
+	int i;
+	regex_t re;
+	char **dest = NULL;
+	int n = 0;
+	int cflags;
+	int err;
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	if(view->selected_files == 0)
+	{
+		view->dir_entry[view->list_pos].selected = 1;
+		view->selected_files = 1;
+	}
+
+	if(ic == 0)
+		cflags = get_regexp_cflags(pattern);
+	else if(ic > 0)
+		cflags = REG_EXTENDED | REG_ICASE;
+	else
+		cflags = REG_EXTENDED;
+	if((err = regcomp(&re, pattern, cflags)) != 0)
+	{
+		status_bar_errorf("Regexp error: %s", get_regexp_error(err, &re));
+		regfree(&re);
+		return 1;
+	}
+
+	for(i = 0; i < view->list_rows; i++)
+	{
+		char buf[NAME_MAX];
+		const char *dst;
+		regmatch_t matches[10];
+		struct stat st;
+
+		if(!view->dir_entry[i].selected)
+			continue;
+		if(stroscmp(view->dir_entry[i].name, "../") == 0)
+			continue;
+
+		strncpy(buf, view->dir_entry[i].name, sizeof(buf));
+		chosp(buf);
+		if(regexec(&re, buf, ARRAY_LEN(matches), matches, 0) != 0)
+		{
+			view->dir_entry[i].selected = 0;
+			view->selected_files--;
+			continue;
+		}
+		if(glob)
+			dst = gsubstitute_regexp(&re, buf, sub, matches);
+		else
+			dst = substitute_regexp(buf, sub, matches, NULL);
+		if(strcmp(buf, dst) == 0)
+		{
+			view->dir_entry[i].selected = 0;
+			view->selected_files--;
+			continue;
+		}
+		n = add_to_string_array(&dest, n, 1, dst);
+		if(is_in_string_array(dest, n - 1, dst))
+		{
+			regfree(&re);
+			free_string_array(dest, n);
+			status_bar_errorf("Name \"%s\" duplicates", dst);
+			return 1;
+		}
+		if(dst[0] == '\0')
+		{
+			regfree(&re);
+			free_string_array(dest, n);
+			status_bar_errorf("Destination name of \"%s\" is empty", buf);
+			return 1;
+		}
+		if(contains_slash(dst))
+		{
+			regfree(&re);
+			free_string_array(dest, n);
+			status_bar_errorf("Destination name \"%s\" contains slash", dst);
+			return 1;
+		}
+		if(lstat(dst, &st) == 0)
+		{
+			regfree(&re);
+			free_string_array(dest, n);
+			status_bar_errorf("File \"%s\" already exists", dst);
+			return 1;
+		}
+	}
+	regfree(&re);
+
+	return change_in_names(view, 's', pattern, sub, dest);
+}
+
+static const char *
+substitute_tr(const char *name, const char *pattern, const char *sub)
+{
+	static char buf[NAME_MAX];
+	char *p = buf;
+	while(*name != '\0')
+	{
+		const char *t = strchr(pattern, *name);
+		if(t != NULL)
+			*p++ = sub[t - pattern];
+		else
+			*p++ = *name;
+		name++;
+	}
+	*p = '\0';
+	return buf;
+}
+
+int
+tr_in_names(FileView *view, const char *pattern, const char *sub)
+{
+	int i;
+	char **dest = NULL;
+	int n = 0;
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	if(view->selected_files == 0)
+	{
+		view->dir_entry[view->list_pos].selected = 1;
+		view->selected_files = 1;
+	}
+
+	for(i = 0; i < view->list_rows; i++)
+	{
+		char buf[NAME_MAX];
+		const char *dst;
+		struct stat st;
+
+		if(!view->dir_entry[i].selected)
+			continue;
+		if(stroscmp(view->dir_entry[i].name, "../") == 0)
+			continue;
+
+		strncpy(buf, view->dir_entry[i].name, sizeof(buf));
+		chosp(buf);
+		dst = substitute_tr(buf, pattern, sub);
+		if(strcmp(buf, dst) == 0)
+		{
+			view->dir_entry[i].selected = 0;
+			view->selected_files--;
+			continue;
+		}
+		n = add_to_string_array(&dest, n, 1, dst);
+		if(is_in_string_array(dest, n - 1, dst))
+		{
+			free_string_array(dest, n);
+			status_bar_errorf("Name \"%s\" duplicates", dst);
+			return 1;
+		}
+		if(dst[0] == '\0')
+		{
+			free_string_array(dest, n);
+			status_bar_errorf("Destination name of \"%s\" is empty", buf);
+			return 1;
+		}
+		if(contains_slash(dst))
+		{
+			free_string_array(dest, n);
+			status_bar_errorf("Destination name \"%s\" contains slash", dst);
+			return 1;
+		}
+		if(lstat(dst, &st) == 0)
+		{
+			free_string_array(dest, n);
+			status_bar_errorf("File \"%s\" already exists", dst);
+			return 1;
+		}
+	}
+
+	return change_in_names(view, 't', pattern, sub, dest);
+}
+
+static void
+str_tolower(char *str)
+{
+	while(*str != '\0')
+	{
+		*str = tolower(*str);
+		str++;
+	}
+}
+
+static void
+str_toupper(char *str)
+{
+	while(*str != '\0')
+	{
+		*str = toupper(*str);
+		str++;
+	}
+}
+
+int
+change_case(FileView *view, int toupper, int count, int *indexes)
+{
+	int i;
+	char **dest = NULL;
+	int n = 0, k;
+	char buf[COMMAND_GROUP_INFO_LEN + 1];
+
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
+
+	if(count > 0)
+		get_selected_files(view, count, indexes);
+	else
+		get_all_selected_files(view);
+
+	if(view->selected_files == 0)
+	{
+		status_bar_message("0 files renamed");
+		return 1;
+	}
+
+	for(i = 0; i < view->selected_files; i++)
+	{
+		char buf[NAME_MAX];
+		struct stat st;
+
+		chosp(view->selected_filelist[i]);
+		strcpy(buf, view->selected_filelist[i]);
+		if(toupper)
+			str_toupper(buf);
+		else
+			str_tolower(buf);
+
+		n = add_to_string_array(&dest, n, 1, buf);
+
+		if(is_in_string_array(dest, n - 1, buf))
+		{
+			free_string_array(dest, n);
+			free_selected_file_array(view);
+			view->selected_files = 0;
+			status_bar_errorf("Name \"%s\" duplicates", buf);
+			return 1;
+		}
+		if(strcmp(dest[i], buf) == 0)
+			continue;
+		if(lstat(buf, &st) == 0)
+		{
+			free_string_array(dest, n);
+			free_selected_file_array(view);
+			view->selected_files = 0;
+			status_bar_errorf("File \"%s\" already exists", buf);
+			return 1;
+		}
+	}
+
+	snprintf(buf, sizeof(buf), "g%c in %s: ", toupper ? 'U' : 'u',
+			replace_home_part(view->curr_dir));
+
+	get_group_file_list(view->selected_filelist, view->selected_files, buf);
+	cmd_group_begin(buf);
+	k = 0;
+	for(i = 0; i < n; i++)
+	{
+		int pos;
+		if(strcmp(dest[i], view->selected_filelist[i]) == 0)
+			continue;
+		pos = find_file_pos_in_list(view, view->selected_filelist[i]);
+		if(pos == view->list_pos)
+		{
+			(void)replace_string(&view->dir_entry[pos].name, dest[i]);
+		}
+		if(mv_file(view->selected_filelist[i], view->curr_dir, dest[i],
+				view->curr_dir, 0) == 0)
+			k++;
+	}
+	cmd_group_end();
+
 	free_selected_file_array(view);
 	view->selected_files = 0;
-
-	load_dir_list(view, 1);
-
-	moveto_list_pos(view, view->list_pos);
+	free_string_array(dest, n);
+	status_bar_messagef("%d file%s renamed", k, (k == 1) ? "" : "s");
+	return 1;
 }
 
-void
-file_chmod(FileView *view, char *path, char *mode, int recurse_dirs)
+static int
+is_copy_list_ok(const char *dst, int count, char **list)
 {
-  char cmd[PATH_MAX + 128] = " ";
+	int i;
+	for(i = 0; i < count; i++)
+	{
+		if(path_exists_at(dst, list[i]))
+		{
+			status_bar_errorf("File \"%s\" already exists", list[i]);
+			return 0;
+		}
+	}
+	return 1;
+}
 
-	if (recurse_dirs)
-		snprintf(cmd, sizeof(cmd), "chmod -R %s %s", mode, path);
+/* type:
+ *  <= 0 - copy
+ *  1 - absolute symbolic links
+ *  2 - relative symbolic links
+ */
+static int
+cp_file(const char *src_dir, const char *dst_dir, const char *src,
+		const char *dst, int type)
+{
+	char full_src[PATH_MAX], full_dst[PATH_MAX];
+	int op;
+	int result;
+
+	snprintf(full_src, sizeof(full_src), "%s/%s", src_dir, src);
+	chosp(full_src);
+	snprintf(full_dst, sizeof(full_dst), "%s/%s", dst_dir, dst);
+	chosp(full_dst);
+
+	if(strcmp(full_src, full_dst) == 0)
+		return 0;
+
+	if(type <= 0)
+	{
+		op = OP_COPY;
+	}
 	else
-		snprintf(cmd, sizeof(cmd), "chmod %s %s", mode, path);
-
-	start_background_job(cmd);
-
-	load_dir_list(view, 1);
-	moveto_list_pos(view, view->list_pos);
-  
-}
-
-static void
-reset_change_window(void)
-{
-	curs_set(0);
-	werase(change_win);
-	update_all_windows();
-	if(curr_stats.need_redraw)
-		redraw_window();
-}
-
-void
-change_file_owner(char *file)
-{
-
-}
-
-void
-change_file_group(char *file)
-{
-
-}
-
-void
-set_perm_string(FileView *view, int *perms, char *file)
-{
-	int i = 0;
-	char *add_perm[] = {"u+r", "u+w", "u+x", "u+s", "g+r", "g+w", "g+x", "g+s",
-											"o+r", "o+w", "o+x", "o+t"}; 
-	char *sub_perm[] = { "u-r", "u-w", "u-x", "u-s", "g-r", "g-w", "g-x", "g-s",
-											"o-r", "o-w", "o-x", "o-t"}; 
-	char perm_string[64] = " ";
-
-	for (i = 0; i < 12; i++)
 	{
-		if (perms[i])
-			strcat(perm_string, add_perm[i]);
-		else
-			strcat(perm_string, sub_perm[i]);
-
-		strcat(perm_string, ",");
+		op = OP_SYMLINK;
+		if(type == 2)
+		{
+			snprintf(full_src, sizeof(full_src), "%s", make_rel_path(full_src,
+					dst_dir));
+		}
 	}
-	perm_string[strlen(perm_string) - 1] = '\0'; /* Remove last , */
 
-	file_chmod(view, file, perm_string, perms[12]);
+	result = perform_operation(op, NULL, full_src, full_dst);
+	if(result == 0 && type >= 0)
+		add_operation(op, NULL, NULL, full_src, full_dst);
+	return result;
 }
 
-static void
-permissions_key_cb(FileView *view, int *perms, int isdir)
+static int
+cpmv_prepare(FileView *view, char ***list, int *nlines, int move, int type,
+		int force, char *buf, size_t buf_len, char *path, int *from_file,
+		int *from_trash)
 {
-	int done = 0;
-	int abort = 0;
-	int top = 3;
-	int bottom = 16;
-	int curr = 3;
-	int permnum = 0;
-	int step = 1;
-	int col = 9;
-	char filename[NAME_MAX];
+	int error = 0;
+
+	if(move && !check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return -1;
+
+	if(move == 0 && type == 0 && !have_read_access(view))
+		return -1;
+
+	if(*nlines == 1)
+	{
+		if(is_dir_path(other_view, (*list)[0], path))
+			*nlines = 0;
+	}
+	else
+	{
+		strcpy(path, other_view->curr_dir);
+	}
+	if(!check_if_dir_writable(DR_DESTINATION, path))
+		return -1;
+
+	get_all_selected_files(view);
+
+	*from_file = *nlines < 0;
+	if(*from_file)
+	{
+		*list = read_list_from_file(view->selected_files, view->selected_filelist,
+				nlines, 0);
+		if(*list == NULL)
+			return curr_stats.save_msg;
+	}
+
+	if(*nlines > 0 &&
+			(!is_name_list_ok(view->selected_files, *nlines, *list, NULL) ||
+			(!is_copy_list_ok(path, *nlines, *list) && !force)))
+		error = 1;
+	if(*nlines == 0 && !force &&
+			!is_copy_list_ok(path, view->selected_files, view->selected_filelist))
+		error = 1;
+	if(error)
+	{
+		clean_selected_files(view);
+		redraw_view(view);
+		if(*from_file)
+			free_string_array(*list, *nlines);
+		return 1;
+	}
+
+	if(move)
+		strcpy(buf, "move");
+	else if(type == 0)
+		strcpy(buf, "copy");
+	else if(type == 1)
+		strcpy(buf, "alink");
+	else
+		strcpy(buf, "rlink");
+	snprintf(buf + strlen(buf), buf_len - strlen(buf), " from %s to ",
+			replace_home_part(view->curr_dir));
+	snprintf(buf + strlen(buf), buf_len - strlen(buf), "%s: ",
+			replace_home_part(path));
+	make_undo_string(view, buf, *nlines, *list);
+
+	if(move)
+	{
+		int i = view->list_pos;
+		while(i < view->list_rows - 1 && view->dir_entry[i].selected)
+			i++;
+		view->list_pos = i;
+	}
+
+	*from_trash = path_starts_with(view->curr_dir, cfg.trash_dir);
+	return 0;
+}
+
+static int
+have_read_access(FileView *view)
+{
+	int i;
+
+#ifdef _WIN32
+	if(is_unc_path(view->curr_dir))
+		return 1;
+#endif
+
+	for(i = 0; i < view->list_rows; i++)
+	{
+		if(!view->dir_entry[i].selected)
+			continue;
+		if(access(view->dir_entry[i].name, R_OK) != 0)
+		{
+			show_error_msgf("Access denied",
+					"You don't have read permissions on \"%s\"", view->dir_entry[i].name);
+			clean_selected_files(view);
+			redraw_view(view);
+			return 0;
+		}
+	}
+	return 1;
+}
+
+int
+cpmv_files(FileView *view, char **list, int nlines, int move, int type,
+		int force)
+{
+	int i, processed;
+	char buf[COMMAND_GROUP_INFO_LEN + 1];
 	char path[PATH_MAX];
-	int changed = 0;
+	int from_file;
+	int from_trash;
+	char **sel;
+	int sel_len;
 
-	if (isdir)
-		bottom = 17;
-
-	snprintf(filename, sizeof(filename), "%s", 
-			view->dir_entry[view->list_pos].name);
-	snprintf(path, sizeof(path), "%s/%s", view->curr_dir, 
-			view->dir_entry[view->list_pos].name);
-
-	curs_set(1);
-	wmove(change_win, curr, col);
-	wrefresh(change_win);
-
-	while(!done)
+	if(!move && type != 0 && !symlinks_available())
 	{
-		int key = wgetch(change_win);
+		show_error_msg("Symbolic Links Error",
+				"Your OS doesn't support symbolic links");
+		return 0;
+	}
 
-		switch(key)
+	i = cpmv_prepare(view, &list, &nlines, move, type, force, buf, sizeof(buf),
+			path, &from_file, &from_trash);
+	if(i != 0)
+		return i > 0;
+
+	if(pane_in_dir(curr_view, path) && force)
+	{
+		show_error_msg("Operation Error",
+				"Forcing overwrite when destination and source is same directory will "
+				"lead to losing data");
+		return 0;
+	}
+
+	sel_len = view->selected_files;
+	sel = copy_string_array(view->selected_filelist, sel_len);
+	if(!view->user_selection)
+	{
+		/* Clean selection so that it won't get stored for gs command. */
+		erase_selection(view);
+	}
+
+	processed = 0;
+	cmd_group_begin(buf);
+	for(i = 0; i < sel_len; i++)
+	{
+		char dst_full[PATH_MAX];
+		const char *dst = (nlines > 0) ? list[i] : sel[i];
+		if(from_trash)
 		{
-			case 'j':
-				{
-					curr+= step;
-					permnum++;
+			while(isdigit(*dst))
+				dst++;
+			dst++;
+		}
 
-					if(curr > bottom)
-					{
-						curr-= step;
-						permnum--;
-					}
-					if (curr == 7 || curr == 12)
-						curr++;
+		snprintf(dst_full, sizeof(dst_full), "%s/%s", path, dst);
+		if(path_exists(dst_full))
+		{
+			perform_operation(OP_REMOVESL, NULL, dst_full, NULL);
+		}
 
-					wmove(change_win, curr, col);
-					wrefresh(change_win);
-				}
-				break;
-			case 'k':
-				{
-					curr-= step;
-					permnum--;
-					if(curr < top)
-					{
-						curr+= step;
-						permnum++;
-					}
+		if(move)
+		{
+			progress_msg("Moving files", i + 1, sel_len);
 
-					if (curr == 7 || curr == 12)
-						curr--;
-
-					wmove(change_win, curr, col);
-					wrefresh(change_win);
-				}
-				break;
-			case 't':
-			case 32: /* ascii Spacebar */
-				{
-					changed++;
-					if (perms[permnum])
-					{
-						perms[permnum] = 0;
-						mvwaddch(change_win, curr, col, ' ');
-					}
-					else
-					{
-						perms[permnum] = 1;
-						mvwaddch(change_win, curr, col, '*');
-					}
-
-					wmove(change_win, curr, col);
-					wrefresh(change_win);
-				}
-				break;
-			case 3: /* ascii Ctrl C */
-			case 27: /* ascii Escape */
-				done = 1;
-				abort = 1;
-				break;
-			case 'l': 
-			case 13: /* ascii Return */
-				done = 1;
-				break;
-			default:
-				break;
+			if(mv_file(sel[i], view->curr_dir, dst, path, 0) != 0)
+				view->list_pos = find_file_pos_in_list(view, sel[i]);
+			else
+				processed++;
+		}
+		else
+		{
+			if(type == 0)
+				progress_msg("Copying files", i + 1, sel_len);
+			if(cp_file(view->curr_dir, path, sel[i], dst, type) == 0)
+				processed++;
 		}
 	}
+	cmd_group_end();
 
-	reset_change_window();
+	free_string_array(sel, sel_len);
+	free_selected_file_array(view);
+	clean_selected_files(view);
+	load_saving_pos(view, 1);
+  load_saving_pos(other_view, 1);
+	if(from_file)
+		free_string_array(list, nlines);
 
-	curs_set(0);
+	status_bar_messagef("%d file%s successfully processed", processed,
+			(processed == 1) ? "" : "s");
 
-	if (abort)
+	return 1;
+}
+
+static int
+cpmv_files_bg_i(char **list, int nlines, int move, int force, char **sel_list,
+		int sel_list_len, int from_trash, const char *src, const char *path)
+{
+	int i;
+	for(i = 0; i < sel_list_len; i++)
 	{
-		moveto_list_pos(view, find_file_pos_in_list(view, filename));
-		return;
+		char dst_full[PATH_MAX];
+		const char *dst = (nlines > 0) ? list[i] : sel_list[i];
+		if(from_trash)
+		{
+			while(isdigit(*dst))
+				dst++;
+			dst++;
+		}
+
+		snprintf(dst_full, sizeof(dst_full), "%s/%s", path, dst);
+		if(path_exists(dst_full))
+		{
+			perform_operation(OP_REMOVESL, NULL, dst_full, NULL);
+		}
+
+		if(move)
+			(void)mv_file(sel_list[i], src, dst, path, -1);
+		else
+			(void)cp_file(src, path, sel_list[i], dst, -1);
+
+		inner_bg_next();
+	}
+	return 0;
+}
+
+static void *
+cpmv_stub(void *arg)
+{
+	bg_args_t *args = (bg_args_t *)arg;
+
+	add_inner_bg_job(args->job);
+
+	cpmv_files_bg_i(args->list, args->nlines, args->move, args->force,
+			args->sel_list, args->sel_list_len, args->from_trash, args->src,
+			args->path);
+
+	remove_inner_bg_job();
+
+	free_string_array(args->list, args->nlines);
+	free_string_array(args->sel_list, args->sel_list_len);
+	free(args);
+	return NULL;
+}
+
+int
+cpmv_files_bg(FileView *view, char **list, int nlines, int move, int force)
+{
+	pthread_t id;
+	int i;
+	char buf[COMMAND_GROUP_INFO_LEN];
+	bg_args_t *args = malloc(sizeof(*args));
+	
+	args->list = NULL;
+	args->nlines = nlines;
+	args->move = move;
+	args->force = force;
+
+	i = cpmv_prepare(view, &list, &args->nlines, move, 0, force, buf, sizeof(buf),
+			args->path, &args->from_file, &args->from_trash);
+	if(i != 0)
+	{
+		free(args);
+		return i > 0;
 	}
 
-	if (changed)
+	if(args->from_file)
+		args->list = list;
+	else
+		args->list = copy_string_array(list, nlines);
+
+	args->sel_list = view->selected_filelist;
+	args->sel_list_len = view->selected_files;
+
+	view->selected_filelist = NULL;
+	free_selected_file_array(view);
+	clean_selected_files(view);
+	load_saving_pos(view, 1);
+
+	strcpy(args->src, view->curr_dir);
+
+#ifndef _WIN32
+	args->job = add_background_job(-1, buf, -1);
+#else
+	args->job = add_background_job(-1, buf, (HANDLE)-1);
+#endif
+	if(args->job == NULL)
 	{
-		set_perm_string(view, perms, path);
-		load_dir_list(view, 1);
-		moveto_list_pos(view, view->curr_line);
+		free_string_array(args->list, args->nlines);
+		free_string_array(args->sel_list, args->sel_list_len);
+		free(args);
+		return 0;
 	}
 
+	args->job->total = args->sel_list_len;
+	args->job->done = 0;
+
+	pthread_create(&id, NULL, cpmv_stub, args);
+	return 0;
 }
 
 static void
-change_key_cb(FileView *view, int type)
+go_to_first_file(FileView *view, char **names, int count)
 {
-	int done = 0;
-	int abort = 0;
-	int top = 2;
-	int bottom = 8;
-	int curr = 2;
-	int step = 2;
-	int col = 6;
-	char filename[NAME_MAX];
-
-	snprintf(filename, sizeof(filename), "%s", 
-			view->dir_entry[view->list_pos].name);
-
-	curs_set(0);
-	wmove(change_win, curr, col);
-	wrefresh(change_win);
-
-	while(!done)
+	int i;
+	load_saving_pos(view, 1);
+	for(i = 0; i < view->list_rows; i++)
 	{
-		int key = wgetch(change_win);
-
-		switch(key)
+		char name[PATH_MAX];
+		snprintf(name, sizeof(name), "%s", view->dir_entry[i].name);
+		chosp(name);
+		if(is_in_string_array(names, count, name))
 		{
-			case 'j':
-				{
-					mvwaddch(change_win, curr, col, ' ');
-					curr+= step;
+			view->list_pos = i;
+			break;
+		}
+	}
+	redraw_view(view);
+}
 
-					if(curr > bottom)
-						curr-= step;
+void
+make_dirs(FileView *view, char **names, int count, int create_parent)
+{
+	char buf[COMMAND_GROUP_INFO_LEN + 1];
+	int i;
+	int n;
+	void *cp = (void *)(long)create_parent;
 
-					mvwaddch(change_win, curr, col, '*');
-					wmove(change_win, curr, col);
-					wrefresh(change_win);
-				}
-				break;
-			case 'k':
-				{
-
-					mvwaddch(change_win, curr, col, ' ');
-					curr-= step;
-					if(curr < top)
-						curr+= step;
-
-					mvwaddch(change_win, curr, col, '*');
-					wmove(change_win, curr, col);
-					wrefresh(change_win);
-				}
-				break;
-			case 3: /* ascii Ctrl C */
-			case 27: /* ascii Escape */
-				done = 1;
-				abort = 1;
-				break;
-			case 'l': 
-			case 13: /* ascii Return */
-				done = 1;
-				break;
-			default:
-				break;
+	for(i = 0; i < count; i++)
+	{
+		struct stat st;
+		if(is_in_string_array(names, i, names[i]))
+		{
+			status_bar_errorf("Name \"%s\" duplicates", names[i]);
+			return;
+		}
+		if(names[i][0] == '\0')
+		{
+			status_bar_errorf("Name #%d is empty", i + 1);
+			return;
+		}
+		if(lstat(names[i], &st) == 0)
+		{
+			status_bar_errorf("File \"%s\" already exists", names[i]);
+			return;
 		}
 	}
 
-	reset_change_window();
+	snprintf(buf, sizeof(buf), "mkdir in %s: ",
+			replace_home_part(view->curr_dir));
 
-	if(abort)
+	get_group_file_list(names, count, buf);
+	cmd_group_begin(buf);
+	n = 0;
+	for(i = 0; i < count; i++)
 	{
-		moveto_list_pos(view, find_file_pos_in_list(view, filename));
-		return;
-	}
-
-	switch(type)
-	{
-		case FILE_CHANGE:
+		char full[PATH_MAX];
+		snprintf(full, sizeof(full), "%s/%s", view->curr_dir, names[i]);
+		if(perform_operation(OP_MKDIR, cp, full, NULL) == 0)
 		{
-			if (curr == FILE_NAME)
-				rename_file(view);
-			else
-				show_change_window(view, curr);
-			/*
-			char * filename = get_current_file_name(view);
-			switch(curr)
+			add_operation(OP_MKDIR, cp, NULL, full, "");
+			n++;
+		}
+		else if(i == 0)
+		{
+			i--;
+			names++;
+			count--;
+		}
+	}
+	cmd_group_end();
+
+	if(count > 0)
+	{
+		if(create_parent)
+		{
+			for(i = 0; i < count; i++)
 			{
-				case FILE_NAME: 
-					rename_file(view);
-					break;
-				case FILE_OWNER:
-					change_file_owner(filename);
-					break;
-				case FILE_GROUP:
-					change_file_group(filename);
-					break;
-				case FILE_PERMISSIONS:
-					show_change_window(view, type);
-					break;
-				default:
-					break;
+				break_at(names[i], '/');
 			}
-			*/
 		}
-		break;
-		case FILE_NAME:
-			break;
-		case FILE_OWNER:
-			break;
-		case FILE_GROUP:
-			break;
-		case FILE_PERMISSIONS:
-			break;
-		default:
-			break;
+		go_to_first_file(view, names, count);
 	}
+
+	if(n == 1)
+		status_bar_message("1 directory created");
+	else
+		status_bar_messagef("%d directories created", n);
 }
 
-void
-show_file_permissions_menu(FileView *view, int x)
+int
+make_files(FileView *view, char **names, int count)
 {
-	mode_t mode = view->dir_entry[view->list_pos].mode;
-	char *filename = get_current_file_name(view);
-	int perms[] = {0,0,0,0,0,0,0,0,0,0,0,0,0};
-	int isdir = 0;
+	int i;
+	int n;
+	char buf[COMMAND_GROUP_INFO_LEN + 1];
 
-	if (strlen(filename) > x - 2)
-		filename[x - 4] = '\0';
+	if(!check_if_dir_writable(DR_CURRENT, view->curr_dir))
+		return 0;
 
-	mvwaddnstr(change_win, 1, (x - strlen(filename))/2, filename, x - 2);
-
-	mvwaddstr(change_win, 3, 2, "Owner [ ] Read");
-	if (mode & S_IRUSR)
+	for(i = 0; i < count; i++)
 	{
-		perms[0] = 1;
-		mvwaddch(change_win, 3, 9, '*');
-	}
-	mvwaddstr(change_win, 4, 6, "  [ ] Write");
-
-	if (mode & S_IWUSR)
-	{
-		perms[1] = 1;
-		mvwaddch(change_win, 4, 9, '*');
-	}
-	mvwaddstr(change_win, 5, 6, "  [ ] Execute");
-
-	if (mode & S_IXUSR)
-	{
-		perms[2] = 1;
-		mvwaddch(change_win, 5, 9, '*');
-	}
-
-	mvwaddstr(change_win, 6, 6, "  [ ] SetUID");
-	if (mode & S_ISUID)
-	{
-		perms[3] = 1;
-		mvwaddch(change_win, 6, 9, '*');
-	}
-
-	mvwaddstr(change_win, 8, 2, "Group [ ] Read");
-	if (mode & S_IRGRP)
-	{
-		perms[4] = 1;
-		mvwaddch(change_win, 8, 9, '*');
-	}
-
-	mvwaddstr(change_win, 9, 6, "  [ ] Write");
-	if (mode & S_IWGRP)
-	{
-		perms[5] = 1;
-		mvwaddch(change_win, 9, 9, '*');
-	}
-
-	mvwaddstr(change_win, 10, 6, "  [ ] Execute");
-	if (mode & S_IXGRP)
-	{
-		perms[6] = 1;
-		mvwaddch(change_win, 10, 9, '*');
-	}
-
-	mvwaddstr(change_win, 11, 6, "  [ ] SetGID");
-	if (mode & S_ISGID)
-	{
-		perms[7] = 1;
-		mvwaddch(change_win, 11, 9, '*');
-	}
-
-	mvwaddstr(change_win, 13, 2, "Other [ ] Read");
-	if (mode & S_IROTH)
-	{
-		perms[8] = 1;
-		mvwaddch(change_win, 13, 9, '*');
-	}
-
-	mvwaddstr(change_win, 14, 6, "  [ ] Write");
-	if (mode & S_IWOTH)
-	{
-		perms[9] = 1;
-		mvwaddch(change_win, 14, 9, '*');
-	}
-
-	mvwaddstr(change_win, 15, 6, "  [ ] Execute");
-	if (mode & S_IXOTH)
-	{
-		perms[10] = 1;
-		mvwaddch(change_win, 15, 9, '*');
-	}
-
-	mvwaddstr(change_win, 16, 6, "  [ ] Sticky");
-	if (mode & S_ISVTX)
-	{
-		perms[11] = 1;
-		mvwaddch(change_win, 16, 9, '*');
-	}
-
-	if (is_dir(filename))
-	{
-		mvwaddstr(change_win, 17, 6, "  [ ] Set Recursively");
-		isdir = 1;
-	}
-
-	permissions_key_cb(view, perms, isdir);
-}
-
-
-void
-show_change_window(FileView *view, int type)
-{
-	int x, y;
-
-	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
-	curs_set(0);
-	doupdate();
-	wclear(change_win);
-
-	getmaxyx(stdscr, y, x);
-	mvwin(change_win, (y - 20)/2, (x - 30)/2);
-	box(change_win, ACS_VLINE, ACS_HLINE);
-
-	curs_set(1);
-	wrefresh(change_win);
-
-
-	switch(type)
-	{
-		case FILE_CHANGE:
+		struct stat st;
+		if(is_in_string_array(names, i, names[i]))
 		{
-			mvwaddstr(change_win, 0, (x - 20)/2, " Change Current File ");
-			mvwaddstr(change_win, 2, 4, " [ ] Name");
-			mvwaddstr(change_win, 4, 4, " [ ] Owner");
-			mvwaddstr(change_win, 6, 4, " [ ] Group");
-			mvwaddstr(change_win, 8, 4, " [ ] Permissions");
-			mvwaddch(change_win, 2, 6, '*');
-			change_key_cb(view, type);
+			status_bar_errorf("Name \"%s\" duplicates", names[i]);
+			return 1;
 		}
-			break;
-		case FILE_NAME: 
-			return;
-			break;
-		case FILE_OWNER:
-			return;
-			break;
-		case FILE_GROUP:
-			return;
-			break;
-		case FILE_PERMISSIONS:
-			show_file_permissions_menu(view, x);
-			break;
-		default:
-			break;
+		if(names[i][0] == '\0')
+		{
+			status_bar_errorf("Name #%d is empty", i + 1);
+			return 1;
+		}
+		if(contains_slash(names[i]))
+		{
+			status_bar_errorf("Name \"%s\" contains slash", names[i]);
+			return 1;
+		}
+		if(lstat(names[i], &st) == 0)
+		{
+			status_bar_errorf("File \"%s\" already exists", names[i]);
+			return 1;
+		}
 	}
+
+	snprintf(buf, sizeof(buf), "touch in %s: ",
+			replace_home_part(view->curr_dir));
+
+	get_group_file_list(names, count, buf);
+	cmd_group_begin(buf);
+	n = 0;
+	for(i = 0; i < count; i++)
+	{
+		char full[PATH_MAX];
+		snprintf(full, sizeof(full), "%s/%s", view->curr_dir, names[i]);
+		if(perform_operation(OP_MKFILE, NULL, full, NULL) == 0)
+		{
+			add_operation(OP_MKFILE, NULL, NULL, full, "");
+			n++;
+		}
+	}
+	cmd_group_end();
+
+	if(n > 0)
+		go_to_first_file(view, names, count);
+
+	status_bar_messagef("%d file%s created", n, (n == 1) ? "" : "s");
+	return 1;
 }
+
+int
+check_if_dir_writable(DirRole dir_role, const char *path)
+{
+	if(is_dir_writable(path))
+		return 1;
+
+	if(dir_role == DR_DESTINATION)
+		show_error_msg("Operation error", "Destination directory is not writable");
+	else
+		show_error_msg("Operation error", "Current directory is not writable");
+	return 0;
+}
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

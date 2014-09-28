@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,50 +14,56 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
 #ifndef __BOOKMARKS_H__
 #define __BOOKMARKS_H__
 
-#include"ui.h"
+#include "ui.h"
 
-#define NUM_BOOKMARKS 62
+#define NUM_BOOKMARKS 64
 
-typedef struct
+extern const char valid_bookmarks[];
+
+struct
 {
 	/*
 	 * 'mark' is unnecessary, we already reserve all possible bookmarks,
 	 * therfore we can use the mark as an index:
-	 *	0:  0		( 0=48, ascii)
-	 *	9:  9		( 9=57 )
-	 *	A: 10		( A=65 )
-	 *	...
-	 *	Z: 35
-	 *	a: 36		( a=97 )
-	 *	...
-	 *	z: 61
+	 *  0:  0   ( 0=48, ascii)
+	 *  9:  9   ( 9=57 )
+	 *  <: 10   ( <=60 )
+	 *  >: 11   ( >=62 )
+	 *  A: 12   ( A=65 )
+	 *  ...
+	 *  Z: 37
+	 *  a: 38   ( a=97 )
+	 *  ...
+	 *  z: 63
 	char mark;
-	*/
-	/* use pointers instead of fixed length char arrays -> save space!
-	char file[NAME_MAX];
-	char directory[PATH_MAX];
 	*/
 	char *file;
 	char *directory;
-} bookmarks_t;
+}bookmarks[NUM_BOOKMARKS];
 
-bookmarks_t bookmarks[NUM_BOOKMARKS];
-
-/* array of active bookmarks, populated in menu.c: init_active_bookmarks() */
 int active_bookmarks[NUM_BOOKMARKS];
 
+int mark2index(const char mark);
 char index2mark(const int x);
 int is_bookmark(const int x);
-void add_bookmark(const char mark, const char *directory, const char *file);
-int get_bookmark(FileView *view);
+int is_bookmark_empty(const int x);
+int is_spec_bookmark(const int x);
+int add_bookmark(const char mark, const char *directory, const char *file);
+void set_specmark(const char mark, const char *directory, const char *file);
+int get_bookmark(FileView *view, char key);
+/* Returns new value for save_msg flag. */
 int move_to_bookmark(FileView *view, const char mark);
-void remove_bookmark(const int x);
+int remove_bookmark(const int x);
 int check_mark_directory(FileView *view, char mark);
+int init_active_bookmarks(const char *marks);
 
 #endif
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

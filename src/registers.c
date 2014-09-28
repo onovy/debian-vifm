@@ -1,5 +1,6 @@
 /* vifm
  * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,89 +14,222 @@
  *
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include<unistd.h>
-#include<string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-#include"menus.h"
-#include"registers.h"
-#include"utils.h"
+#include <string.h>
 
-char valid_registers[] = {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i',
-'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x',
-'y', 'z', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 
-'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
+#include "cfg/config.h"
+#include "menus/menus.h"
+#include "utils/fs.h"
+#include "utils/path.h"
+#include "utils/str.h"
+#include "utils/string_array.h"
 
-int
-is_valid_register(int key)
+#include "registers.h"
+
+#define NUM_REGISTERS 27
+
+static registers_t registers[NUM_REGISTERS];
+
+const char valid_registers[] = {
+	'_', '"',
+	'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
+	'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
+	'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+	'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+	'\0',
+};
+
+void
+init_registers(void)
 {
-	int x = 0;
-
-	for (x = 0; x < strlen(valid_registers); x++)
+	int i;
+	for(i = 0; i < NUM_REGISTERS; i++)
 	{
-		if (key == (int)valid_registers[x])
-			return 1;
+		registers[i].name = valid_registers[i];
+		registers[i].num_files = 0;
+		registers[i].files = NULL;
 	}
+}
 
-	return 0;
+registers_t *
+find_register(int key)
+{
+	int i;
+	for(i = 0; i < NUM_REGISTERS; i++)
+	{
+		if(registers[i].name == key)
+			return &registers[i];
+	}
+	return NULL;
 }
 
 static int
-check_for_duplicate_file_names(int pos, char *file)
+check_for_duplicate_file_names(registers_t *reg, const char file[])
 {
-	int z;
-	int x = 0;
-	for (z = 0; z < reg[pos].num_files; z++)
+	int x;
+	for(x = 0; x < reg->num_files; x++)
 	{
-		if (!strcmp(file, reg[pos].files[z]))
-			return ++x;
+		if(stroscmp(file, reg->files[x]) == 0)
+			return 1;
 	}
-	return x;
+	return 0;
 }
 
 void
-append_to_register(int key, char *file)
+append_to_register(int key, const char file[])
 {
-	int i = 0;
+	registers_t *reg;
+	struct stat st;
 
-	if (access(file, F_OK))
+	if(key == '_')
 		return;
 
-	for (i = 0; i < NUM_REGISTERS; i++)
-	{
-		if (reg[i].name == key)
-		{
-			if (check_for_duplicate_file_names(i, file))
-				break;
-			reg[i].num_files++;
-			reg[i].files = (char **)realloc(reg[i].files,
-					reg[i].num_files  * sizeof(char *));
-			reg[i].files[reg[i].num_files - 1] = strdup(file);
-			break;
-		}
+	if((reg = find_register(key)) == NULL)
+		return;
 
-	}
+	if(lstat(file, &st) != 0)
+		return;
+
+	if(check_for_duplicate_file_names(reg, file))
+		return;
+
+	reg->num_files = add_to_string_array(&reg->files, reg->num_files, 1, file);
 }
 
 void
 clear_register(int key)
 {
-	int i = 0;
+	registers_t *reg;
 
-	for (i = 0; i < NUM_REGISTERS; i++)
+	if((reg = find_register(key)) == NULL)
+		return;
+
+	free_string_array(reg->files, reg->num_files);
+	reg->files = NULL;
+	reg->num_files = 0;
+}
+
+void
+pack_register(int key)
+{
+	int x, y;
+	registers_t *reg;
+
+	if((reg = find_register(key)) == NULL)
+		return;
+
+	x = 0;
+	for(y = 0; y < reg->num_files; y++)
+		if(reg->files[y] != NULL)
+			reg->files[x++] = reg->files[y];
+	reg->num_files = x;
+}
+
+char **
+list_registers_content(const char registers[])
+{
+	char **list = NULL;
+	size_t len = 0;
+
+	while(*registers != '\0')
 	{
-		if (reg[i].name == key)
+		registers_t *reg;
+		char buf[56];
+		int y;
+			
+		if((reg = find_register(*registers++)) == NULL)
+			continue;
+
+		if(reg->num_files <= 0)
+			continue;
+
+		snprintf(buf, sizeof(buf), "\"%c", reg->name);
+		len = add_to_string_array(&list, len, 1, buf);
+
+		y = reg->num_files;
+		while(y-- > 0)
 		{
-			int y = reg[i].num_files;
-			while (y)
-			{
-				y--;
-				my_free(reg[i].files[y]);
-			}
-			reg[i].num_files = 0;
-			break;
+			len = add_to_string_array(&list, len, 1, reg->files[y]);
+		}
+	}
+
+	(void)add_to_string_array(&list, len, 1, NULL);
+	return list;
+}
+
+void
+rename_in_registers(const char old[], const char new[])
+{
+	int x;
+	for(x = 0; x < NUM_REGISTERS; x++)
+	{
+		int y, n;
+		n = registers[x].num_files;
+		for(y = 0; y < n; y++)
+		{
+			if(stroscmp(registers[x].files[y], old) != 0)
+				continue;
+
+			(void)replace_string(&registers[x].files[y], new);
+			break; /* registers don't contain duplicates */
 		}
 	}
 }
+
+void
+clean_regs_with_trash(void)
+{
+	int x;
+	int trash_dir_len = strlen(cfg.trash_dir);
+	for(x = 0; x < NUM_REGISTERS; x++)
+	{
+		int y, n, needs_pack = 0;
+		n = registers[x].num_files;
+		for(y = 0; y < n; y++)
+		{
+			if(strnoscmp(registers[x].files[y], cfg.trash_dir, trash_dir_len) != 0)
+				continue;
+			if(!path_exists(registers[x].files[y]))
+				continue;
+
+			free(registers[x].files[y]);
+			registers[x].files[y] = NULL;
+			needs_pack = 1;
+		}
+		if(needs_pack)
+			pack_register(registers[x].name);
+	}
+}
+
+void
+update_unnamed_reg(int key)
+{
+	registers_t *unnamed, *reg;
+	int i;
+
+	if(key == '"')
+		return;
+
+	if((reg = find_register(key)) == NULL)
+		return;
+
+	if((unnamed = find_register('"')) == NULL)
+		return;
+
+	clear_register('"');
+
+	unnamed->num_files = reg->num_files;
+	unnamed->files = (char **)realloc(unnamed->files,
+			unnamed->num_files*sizeof(char *));
+	for(i = 0; i < unnamed->num_files; i++)
+		unnamed->files[i] = strdup(reg->files[i]);
+}
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */
