@@ -206,7 +206,8 @@ show_sort_menu(FileView *view)
 	wattroff(view->win, COLOR_PAIR(CURR_LINE_COLOR) | A_BOLD);
 	mvwaddstr(view->win, view->curr_line, 0, "  ");
 	curs_set(0);
-	doupdate();
+	update_all_windows();
+	//doupdate();
 	werase(sort_win);
 	box(sort_win, ACS_VLINE, ACS_HLINE);
 

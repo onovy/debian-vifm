@@ -46,11 +46,13 @@ enum
 {
 	COM_EXECUTE,
 	COM_APROPOS,
+	COM_CHANGE,
 	COM_CD, 		
 	COM_CMAP,			
 	COM_COMMAND,		
 	COM_DELETE, 		
 	COM_DELCOMMAND,	
+	COM_DISPLAY,
 	COM_EDIT,				
 	COM_EMPTY,
 	COM_FILTER,
@@ -60,15 +62,19 @@ enum
 	COM_INVERT,
 	COM_JOBS,	
 	COM_LOCATE,
+	COM_LS,
 	COM_MAP,
 	COM_MARKS,
 	COM_NMAP,
 	COM_NOH,
+	COM_ONLY,
 	COM_PWD,
 	COM_QUIT,
+	COM_REGISTER,
 	COM_SORT,
 	COM_SCREEN,
 	COM_SHELL,
+	COM_SPLIT,
 	COM_SYNC,
 	COM_UNMAP,
 	COM_VIFM,
@@ -82,11 +88,13 @@ enum
 char *reserved_commands[] = {
 	"!",
 	"apropos",
+	"change",
 	"cd",
 	"cmap",
 	"command",
 	"delete",
 	"delcommand",
+	"display",
 	"edit",
 	"empty",
 	"filter",
@@ -96,15 +104,19 @@ char *reserved_commands[] = {
 	"invert",
 	"jobs",
 	"locate",
+	"ls",
 	"map",
 	"marks",
 	"nmap",
 	"nohlsearch",
+	"only",
 	"pwd",
 	"quit",
+	"register",
 	"sort",
 	"screen",
 	"shell",
+	"split",
 	"sync",
 	"unmap",
 	"vifm",
@@ -112,7 +124,7 @@ char *reserved_commands[] = {
 	"x"
 	};
 
-#define RESERVED 30
+#define RESERVED 35
 
 typedef struct current_command
 {
@@ -126,9 +138,9 @@ typedef struct current_command
 	char *user_args; /* holds %a macro string */
 	char *order; /* holds the order of macros command %a %f or command %f %a */
 	int background;
+	int split;
 	int builtin;
 	int is_user;
-	int use_menu; /* Possible future addition of user menus */
 	int pos;
 	int pause;
 }cmd_t;
@@ -225,7 +237,8 @@ save_command_history(char *command)
 
 /* The string returned needs to be freed in the calling function */
 char *
-expand_macros(FileView *view, char *command, char *args)
+expand_macros(FileView *view, char *command, char *args,
+		int *use_menu, int *split)
 {
 	char * expanded = NULL;
 	int x;
@@ -421,6 +434,13 @@ expand_macros(FileView *view, char *command, char *args)
 					len = strlen(expanded);
 				}
 				break;
+			case 'm': /* use menu */
+				*use_menu = 1;
+				break;
+			case 's': /* split in new screen region */
+				*split = 1;
+				
+				break;
 			default:
 				break;
 		}
@@ -440,6 +460,8 @@ expand_macros(FileView *view, char *command, char *args)
 
 	len++;
 	expanded[len] = '\0';
+	if (len > cfg.max_args/2)
+		show_error_msg("Argument is too long", " FIXME ");
 
 	curr_stats.getting_input = 0;
 	
@@ -610,6 +632,33 @@ set_user_command(char * command, int overwrite, int background)
 	}
 }
 
+static void
+split_screen(FileView *view, char *command)
+{
+	char buf[1024];
+
+	if (command)
+	{
+		snprintf(buf, sizeof(buf), "screen -X eval \'chdir %s\'", view->curr_dir);
+		my_system(buf);
+
+		snprintf(buf,sizeof(buf), "screen-open-region-with-program \"%s\' ",
+				command);
+
+		my_system(buf);
+
+	}
+	else
+	{
+		char *sh = getenv("SHELL");
+		snprintf(buf, sizeof(buf), "screen -X eval \'chdir %s\'", view->curr_dir);
+		my_system(buf);
+
+		snprintf(buf, sizeof(buf), "screen-open-region-with-program %s", sh);
+		my_system(buf);
+	}
+}
+
 void
 shellout(char *command, int pause)
 {
@@ -707,9 +756,9 @@ initialize_command_struct(cmd_t *cmd)
 	cmd->cmd_name = NULL;
 	cmd->args = NULL;
 	cmd->background = 0;
+	cmd->split = 0;
 	cmd->builtin = -1;
 	cmd->is_user = -1;
-	cmd->use_menu = 0;
 	cmd->pos = 0;
 	cmd->pause = 0;
 }
@@ -956,8 +1005,10 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 
 				if (cmd->args)
 				{
+					int m = 0;
+					int s = 0;
 					if(strchr(cmd->args, '%') != NULL)
-						com = expand_macros(view, cmd->args, NULL);
+						com = expand_macros(view, cmd->args, NULL, &m, &s);
 					else
 						com = strdup(cmd->args);
 
@@ -993,6 +1044,9 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 					show_apropos_menu(view, cmd->args);
 				}
 			}
+			break;
+		case COM_CHANGE:
+			show_change_window(view, FILE_CHANGE);
 			break;
 		case COM_CD:
 			{
@@ -1129,6 +1183,10 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 				}
 			}
 			break;
+		case COM_DISPLAY:
+		case COM_REGISTER:
+			show_register_menu(view);
+			break;
 		case COM_EDIT:
 			{
 				if((!view->selected_files) || 
@@ -1147,8 +1205,10 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 				}
 				else
 				{
+					int m = 0;
+					int s = 0;
 					char *buf = NULL;
-					char *files = expand_macros(view, "%f", NULL);
+					char *files = expand_macros(view, "%f", NULL, &m, &s);
 
 					if((buf = (char *)malloc(strlen(cfg.vi_command) + strlen(files) + 2))
 							== NULL)
@@ -1251,6 +1311,11 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 				}
 			}
 			break;
+		case COM_LS:
+			if (!cfg.use_screen)
+				break;
+			my_system("screen -X eval 'windowlist'");
+			break;
 		case COM_MAP:
 			break;
 		case COM_MARKS:
@@ -1271,6 +1336,13 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 					draw_dir_list(view, view->top_line, view->list_pos);
 					moveto_list_pos(view, view->list_pos);
 				}
+			}
+			break;
+		case COM_ONLY:
+			{
+				curr_stats.number_of_windows = 1;
+				redraw_window();
+			//my_system("screen -X eval \"only\"");
 			}
 			break;
 		case COM_PWD:
@@ -1294,9 +1366,9 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 					exit(0);
 				}
 
-				endwin();
 				write_config_file();
-				clear_term_title();
+
+				endwin();
 				system("clear");
 				exit(0);
 			}
@@ -1314,6 +1386,29 @@ execute_builtin_command(FileView *view, cmd_t *cmd)
 			break;
 		case COM_SHELL:
 			shellout(NULL, 0);
+			break;
+		case COM_SPLIT:
+			{
+				curr_stats.number_of_windows = 2;
+				redraw_window();
+				/*
+				char *tmp = NULL;
+
+				if (!cfg.use_screen)
+					break;
+
+				if (cmd->args) 
+				{
+					if (strchr(cmd->args, '%'))
+					{
+						tmp = expand_macros(view, cmd->args, NULL, 0, 0);
+					}
+					else
+						tmp = strdup(cmd->args);
+				}
+				split_screen(view, tmp);
+				*/
+			}
 			break;
 		case COM_SYNC:
 			change_directory(other_view, view->curr_dir);
@@ -1351,10 +1446,12 @@ int
 execute_user_command(FileView *view, cmd_t *cmd)
 {
 	char *expanded_com = NULL;
+	int use_menu = 0;
+	int split = 0;
 
 	if(strchr(command_list[cmd->is_user].action, '%') != NULL)
 		expanded_com = expand_macros(view, command_list[cmd->is_user].action, 
-		cmd->args);
+		cmd->args, &use_menu, &split);
 	else
 		expanded_com = strdup(command_list[cmd->is_user].action);
 
@@ -1368,13 +1465,29 @@ execute_user_command(FileView *view, cmd_t *cmd)
 		cmd->background = 1;
 	}
 
-	/*
-	if (cmd->use_menu)
+	if (use_menu)
 	{
-		show_error_msg("calling show_user_menu", "going for it");
-		show_user_menu(view, expanded_com, NULL);
+		show_user_menu(view, expanded_com);
+
+		if(!cmd->background)
+			my_free(expanded_com);
+
+		return 0;
 	}
-	*/
+
+	if (split)
+	{
+		if (!cfg.use_screen)
+		{
+			my_free(expanded_com);
+			return 0;
+		}
+			
+		split_screen(view, expanded_com);
+		my_free(expanded_com);
+		return 0;
+
+	}
 
 	if(!strncmp(expanded_com, "filter ", 7)) 
 	{

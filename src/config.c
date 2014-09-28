@@ -30,11 +30,13 @@
 #include"bookmarks.h"
 #include"fileops.h"
 #include"filetype.h"
+#include"registers.h"
 #include"status.h"
 #include"commands.h"
 #include"config.h"
 
 #define MAX_LEN 1024
+#define DEFAULT_FILENAME_FILTER "\\.o$"
 
 void
 init_config(void)
@@ -48,6 +50,13 @@ init_config(void)
 		bookmarks[i].file = NULL;
 	}
 	cfg.num_bookmarks = 0;
+	for ( i = 0; i < NUM_REGISTERS; ++i)
+	{
+		reg[i].name = valid_registers[i];
+		reg[i].num_files = 0;
+		reg[i].files = NULL;
+		reg[i].deleted = 0;
+	}
 }
 
 
@@ -84,20 +93,42 @@ load_default_configuration(void)
 	cfg.history_len = 15;
 	cfg.use_vim_help = 0;
 	strncpy(lwin.regexp, "\\..~$", sizeof(lwin.regexp) -1);
+
+	/*
 	lwin.filename_filter = (char *)realloc(lwin.filename_filter, 
 			strlen("\\.o$") +1);
 	strncpy(lwin.filename_filter, "\\.o$", sizeof(lwin.filename_filter));
 	lwin.prev_filter = (char *)realloc(lwin.prev_filter, 
 			strlen("\\.o$") +1);
 	strncpy(lwin.prev_filter, "\\.o$", sizeof(lwin.prev_filter));
+	*/
+
+ 	lwin.filename_filter = (char *)realloc(lwin.filename_filter, 
+ 			strlen(DEFAULT_FILENAME_FILTER) +1);
+ 	strcpy(lwin.filename_filter, DEFAULT_FILENAME_FILTER);
+  	lwin.prev_filter = (char *)realloc(lwin.prev_filter, 
+ 			strlen(DEFAULT_FILENAME_FILTER) +1);
+ 	strcpy(lwin.prev_filter, DEFAULT_FILENAME_FILTER);
+
 	lwin.invert = TRUE;
 	strncpy(rwin.regexp, "\\..~$", sizeof(rwin.regexp) -1);
+
+	/*
 	rwin.filename_filter = (char *)realloc(rwin.filename_filter, 
 			strlen("\\.o$") +1);
 	strncpy(rwin.filename_filter, "\\.o$", sizeof(rwin.filename_filter));
 	rwin.prev_filter = (char *)realloc(rwin.prev_filter, 
 			strlen("\\.o$") +1);
 	strncpy(rwin.prev_filter, "\\.o$", sizeof(rwin.prev_filter));
+	*/
+
+  rwin.filename_filter = (char *)realloc(rwin.filename_filter, 
+ 			strlen(DEFAULT_FILENAME_FILTER) +1);
+ 	strcpy(rwin.filename_filter, DEFAULT_FILENAME_FILTER);
+ 	rwin.prev_filter = (char *)realloc(rwin.prev_filter, 
+ 			strlen(DEFAULT_FILENAME_FILTER) +1);
+ 	strcpy(rwin.prev_filter, DEFAULT_FILENAME_FILTER);
+
 	rwin.invert = TRUE;
 	lwin.sort_type = SORT_BY_NAME;
 	rwin.sort_type = SORT_BY_NAME;
@@ -158,6 +189,7 @@ set_config_dir(void)
 			if((f = fopen(rc_file, "r")) == NULL)
 				create_rc_file();
 		}
+
 	}
 }
 
@@ -188,8 +220,8 @@ colname2int(char col[])
    return 6;
  if(!strcmp(col, "white"))
    return 7;
- /* return black as default */
- return 0;
+ /* return default color */
+ return -1;
 }
 
 
@@ -396,6 +428,11 @@ read_config_file(void)
 				cfg.use_trash = atoi(s1);
 				continue;
 			}
+			if(!strcmp(line, "USE_ONE_WINDOW"))
+			{
+				cfg.show_one_window = atoi(s1);
+				continue;
+			}
 			if(!strcmp(line, "USE_SCREEN"))
 			{
 				cfg.use_screen = atoi(s1);
@@ -449,11 +486,6 @@ read_config_file(void)
 			if(!strcmp(line, "RWIN_INVERT"))
 			{
 				rwin.invert = atoi(s1);
-				continue;
-			}
-			if(!strcmp(line, "SHOW_FULL"))
-			{
-				cfg.show_full = atoi(s1);
 				continue;
 			}
 			if(!strcmp(line, "USE_VIM_HELP"))
@@ -541,6 +573,10 @@ write_config_file(void)
 	fprintf(fp, "# This probably shouldn't be an option.\n");
 	fprintf(fp, "\nUSE_TRASH=%d\n", cfg.use_trash);
 
+	fprintf(fp, "\n# Show only one Window\n");
+	fprintf(fp, "# If you would like to start vifm with only one window set this to 1\n");
+	fprintf(fp, "\nUSE_ONE_WINDOW=%d\n", curr_stats.number_of_windows == 1 ? 1 : 0);
+
 	fprintf(fp, "\n# Screen configuration.  If you would like to use vifm with\n"); 
 	fprintf(fp, "# the screen program set this to 1.\n");
 	fprintf(fp, "\nUSE_SCREEN=%d\n", cfg.use_screen);
@@ -579,12 +615,6 @@ write_config_file(void)
 	fprintf(fp, "RWIN_FILTER=%s\n", rwin.filename_filter);
 	fprintf(fp, "RWIN_INVERT=%d\n", rwin.invert);
 
-	fprintf(fp, "\n# Show the full file information in a  window\n");
-	fprintf(fp, "# Ctrl G will toggle this value in vifm.\n");
-	fprintf(fp, "# 1 will show the file information in a window\n");
-	fprintf(fp, "# 0 will show the file information on the status bar.\n");
-	fprintf(fp, "\nSHOW_FULL=%d\n", cfg.show_full);
-
 	fprintf(fp, "\n# If you installed the vim.txt help file change this to 1.\n");
 	fprintf(fp, "# If would rather use a plain text help file set this to 0.\n");
 	fprintf(fp, "\nUSE_VIM_HELP=%d\n", cfg.use_vim_help);
@@ -620,6 +650,8 @@ write_config_file(void)
 	fprintf(fp, "# %%F the current selected file, or files in the other directoy.\n");
 	fprintf(fp, "# %%d the current directory name.\n");
 	fprintf(fp, "# %%D the other window directory name.\n\n");
+	fprintf(fp, "# %%m run the command in a menu window\n");
+	fprintf(fp, "# %%s run the command in a new screen region\n");
 	for(x = 0; x < cfg.command_num; x++)
 	{
 		fprintf(fp, "COMMAND=%s=%s\n", command_list[x].name, 

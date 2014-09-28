@@ -22,6 +22,7 @@
 #include "fileops.h"
 #include "visual.h"
 #include "status.h"
+#include<string.h>
 
 /* tbrown  
 	move up one position in the window, adding 

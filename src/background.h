@@ -24,7 +24,6 @@ typedef struct Jobs_List {
 	char *cmd;
 	char *error_buf;
 	int running;
-	int stopped;
 	struct Jobs_List *next;
 } Jobs_List;
 
@@ -38,6 +37,7 @@ extern struct Jobs_List *jobs;
 extern struct Finished_Jobs *fjobs;
 
 int start_background_job(char *cmd);
+int background_and_wait_for_errors(char *cmd);
 void add_finished_job(pid_t pid, int status);
 void check_background_jobs(void);
 void update_jobs_list(void);

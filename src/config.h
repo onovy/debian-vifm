@@ -56,7 +56,6 @@ typedef struct _Config {
 	int use_color;
 	int vim_filter;
 	int use_screen;
-	int show_full;
 	int use_vim_help;
 	int command_num;
 	int filetypes_num;
@@ -73,6 +72,8 @@ typedef struct _Config {
 	int auto_execute;
 	Col_attr color[MAXNUM_COLOR];
 	int use_custom_colors;
+	int show_one_window;
+	long max_args;
 } Config;
 
 extern Config cfg;

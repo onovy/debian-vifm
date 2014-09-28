@@ -28,6 +28,7 @@
 #include "ui.h"
 #include "status.h"
 
+
 /* Checks for a NULL pointer before calling free() */
 void
 my_free(void *stuff)
@@ -124,46 +125,3 @@ chomp(char *text)
 		text[strlen(text) -1] = '\0';
 }
 
-
-
-void
-update_term_title(char *title)
-{
-
-
-	/* Check if running in console */ 
-	if(curr_stats.is_console)
-		return;
-
-	/* This length is arbitrary and should be changed. 
-	while(strlen(title) +17 > 50)
-	{
-		str = strchr(title, '/');
-		str++;
-	title = strdup(str);
-	}
-	*/
-
-/*	snprintf(buf, sizeof(buf), "%c]2;vifm - %s%c", 0x1b, title, 0x07);
-
-	printf(buf);
-	my_free(title);
-	fflush(stdout);
-	*/
-}
-
-void
-clear_term_title(void)
-{
-	char buf[50] = "";
-
-
-	/* Check if running in console */ 
-	if(curr_stats.is_console)
-		return;
-
-	snprintf(buf, sizeof(buf), "%c]2;%c", 0x1b, 0x07);
-
-	printf(buf);
-	fflush(stdout);
-}

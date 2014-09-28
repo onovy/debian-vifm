@@ -44,7 +44,6 @@ add_background_job(pid_t pid, char *cmd, int fd)
 	new->fd = fd; 
 	new->error_buf = (char *)calloc(1, sizeof(char));
 	new->running = 1;
-	new->stopped = 0;
 	jobs = new;
 }
 
@@ -87,7 +86,7 @@ check_background_jobs(void)
 	fj = fjobs;
 
 	ts.tv_sec = 0;
-	ts.tv_usec = 100;
+	ts.tv_usec = 1000;
 
 	while (p)
 	{
@@ -185,6 +184,77 @@ check_background_jobs(void)
 	sigprocmask(SIG_UNBLOCK, &new_mask, NULL);
 }
 
+/* Only used for deleting and putting of files so that the changes show 
+ * up immediately in the file lists.
+ */
+int
+background_and_wait_for_errors(char *cmd)
+{
+
+	pid_t pid;
+	char *args[4];
+	int error_pipe[2];
+	int error = 0;
+
+	if (pipe(error_pipe) != 0)
+	{
+		show_error_msg(" File pipe error", 
+				"Error creating pipe in background.c line 84");
+		return -1;
+	}
+
+	if ((pid = fork()) == -1)
+		return -1;
+
+	if (pid == 0)
+	{
+		int nullfd;
+		close(2);        /* Close stderr */
+		dup(error_pipe[1]);  /* Redirect stderr to write end of pipe. */
+		close(error_pipe[0]); /* Close read end of pipe. */
+		close(0); /* Close stdin */
+		close(1); /* Close stdout */ 
+
+		/* Send stdout, stdin to /dev/null */
+		if ((nullfd = open("/dev/null", O_RDONLY)) != -1)
+		{
+			if (dup2(nullfd, 0) == -1)
+				;
+			if (dup2(nullfd, 1) == -1)
+				;
+		}
+
+		args[0] = "sh";
+		args[1] = "-c";
+		args[2] = cmd;
+		args[3] = NULL;
+
+		execvp(args[0], args);
+		exit(-1);
+	}
+	else
+	{
+		char buf[356];
+		int nread = 0;
+
+		close(error_pipe[1]); /* Close write end of pipe. */
+
+    while ((nread = read(error_pipe[0], buf, sizeof(buf)-1)) > 0)
+    {
+			error = 1;
+      buf[nread] = '\0';
+			show_error_msg("Background Process Error", buf);
+    }
+    close(error_pipe[0]);
+	}
+
+	if (error)
+		return -1;
+	else
+	return 0;
+
+}
+
 int 
 start_background_job(char *cmd)
 { 
@@ -230,7 +300,7 @@ start_background_job(char *cmd)
 	}
 	else
 	{
-		close(error_pipe[1]); /* Close write end of pipes. */
+		close(error_pipe[1]); /* Close write end of pipe. */
 
 		add_background_job(pid, cmd, error_pipe[0]);
 	}

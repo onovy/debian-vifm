@@ -297,6 +297,9 @@ my_rl_gets(int type)
 					if (type == MENU_SEARCH || type == MENU_COMMAND)
 						break;
 
+					if(! line_read)
+						break;
+
 					last_word = get_last_word(line_read);
 
 					if (last_word)

@@ -36,6 +36,11 @@ typedef struct
 	time_t config_file_mtime;
 	int search;
 	int save_msg;
+	int use_register;
+	int curr_register;
+	int register_saved;
+	int number_of_windows;
+	int show_full;
 }Status;
 
 extern Status curr_stats;

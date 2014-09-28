@@ -2,12 +2,13 @@
 
 pkgdata_DATA = vifm-0.2.help.txt \
 							 vifm.txt \
-							 vifm.vim \
-	vifmrc0.2
+							 vifm.vim 
 
 bin_PROGRAMS = vifm
 
-bin_SCRIPTS = pauseme
+bin_SCRIPTS = pauseme \
+	screen-run-program-in-region \
+	screen-open-region-with-program
 
 vifm_SOURCES = \
 	vifm.c \
@@ -21,6 +22,7 @@ vifm_SOURCES = \
 	filetype.c filetype.h \
 	keys.c keys.h \
 	menus.c menus.h \
+	registers.c registers.h \
 	rline.c rline.h \
 	search.c search.h \
 	signals.c signals.h \
@@ -28,6 +30,5 @@ vifm_SOURCES = \
 	ui.c ui.h \
 	utils.c utils.h \
 	visual.c visual.h
-
 
 

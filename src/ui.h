@@ -113,6 +113,7 @@ WINDOW *pos_win;
 WINDOW *num_win;
 WINDOW *menu_win;
 WINDOW *sort_win;
+WINDOW *change_win;
 WINDOW *error_win;
 WINDOW *lborder;
 WINDOW *mborder;

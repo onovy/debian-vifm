@@ -23,8 +23,6 @@
 
 void chomp(char *text);
 void * duplicate(void *stuff, int size);
-void update_term_title(char *title);
-void clear_term_title(void);
 void my_free(void *);
 int is_dir(char *file);
 char * escape_filename(const char *string, int quote_percent);

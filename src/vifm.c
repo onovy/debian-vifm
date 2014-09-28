@@ -19,7 +19,7 @@
 
 
 #include<ncurses.h>
-#include<unistd.h> /* getcwd */
+#include<unistd.h> /* getcwd  & sysconf */
 #include<string.h> /* strncpy */
 #include<sys/stat.h> /* stat */
 #include<unistd.h> /* stat */
@@ -38,8 +38,6 @@
 
 Config cfg;
 Status curr_stats;
-
-
 
 static void
 show_help_msg(void)
@@ -93,6 +91,7 @@ main(int argc, char *argv[])
 	cfg.nmapped_num = 0;
 	cfg.vim_filter = 0;
 	cfg.use_custom_colors = 0;
+	cfg.show_one_window = 0;
 	command_list = NULL;
 	filetypes = NULL;
 
@@ -103,6 +102,10 @@ main(int argc, char *argv[])
 	cfg.cmd_history_num = -1;
 	cfg.cmd_history = (char **)calloc(cfg.cmd_history_len, sizeof(char *));
 	cfg.auto_execute = 0;
+
+	/* Maximum argument length to pass to the shell */
+	if (! (cfg.max_args = sysconf(_SC_ARG_MAX)) > 0)
+		cfg.max_args = 4096; /* POSIX MINIMUM */
 
 
 	init_config();
@@ -129,6 +132,15 @@ main(int argc, char *argv[])
 	curr_stats.is_console = 0;
 	curr_stats.search = 0;
 	curr_stats.save_msg = 0;
+	curr_stats.use_register = 0;
+	curr_stats.curr_register = -1;
+	curr_stats.register_saved = 0;
+	curr_stats.show_full = 0;
+
+	if (cfg.show_one_window)
+		curr_stats.number_of_windows = 1;
+	else
+		curr_stats.number_of_windows = 2;
 
 	snprintf(config_dir, sizeof(config_dir), "%s/vifmrc", cfg.config_dir);
 	if(stat(config_dir, &stat_buf) == 0)
@@ -212,7 +224,7 @@ main(int argc, char *argv[])
 
 	load_dir_list(&lwin, 0);
 	moveto_list_pos(&lwin, 0);
-	doupdate();
+	update_all_windows();
 	setup_signals();
 
 	werase(status_bar);
@@ -226,7 +238,7 @@ main(int argc, char *argv[])
 	 */
 	
 	if(cfg.vim_filter)
-		cfg.show_full = 1;
+		curr_stats.number_of_windows = 1;
 
 	/* Enter the main loop. */
 	main_key_press_cb(curr_view);

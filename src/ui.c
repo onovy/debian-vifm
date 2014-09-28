@@ -22,6 +22,7 @@
 #include<sys/stat.h> /* stat */
 #include<dirent.h> /* DIR */
 #include<pwd.h> /* getpwent() */
+#include<string.h>
 #include<time.h>
 #include<termios.h> /* struct winsize */
 #include<sys/ioctl.h>
@@ -122,8 +123,8 @@ status_bar_message(char *message)
 int
 setup_ncurses_interface()
 {
-	int x, y;
 	int screen_x, screen_y;
+	int x, y;
 
 	initscr();
 	noecho();
@@ -137,8 +138,6 @@ setup_ncurses_interface()
 	if(screen_x < 30)
 		finish("Terminal is too small to run vifm\n");
 
-
-
 	/* User did not want colors. */
 	if(cfg.use_color == 0)
 		cfg.use_color = 0;
@@ -147,9 +146,10 @@ setup_ncurses_interface()
 
 	if(cfg.use_color)
 	{
-
 		int i;
+
 		start_color();
+		use_default_colors();
 
 		for (i = 0; i < MAXNUM_COLOR; ++i)
 		{
@@ -157,15 +157,7 @@ setup_ncurses_interface()
 		}
 	}
 	
-	/*
-	if(cfg.use_color)
-		wbkgdset(stdscr, COLOR_PAIR(BORDER_COLOR));
-	else
-		wbkgdset(stdscr, A_REVERSE);
-		*/
-	
 	werase(stdscr);
-
 
 	menu_win = newwin(screen_y - 1, screen_x , 0, 0);
 	wbkgdset(menu_win, COLOR_PAIR(WIN_COLOR));
@@ -175,11 +167,15 @@ setup_ncurses_interface()
 	wbkgdset(sort_win, COLOR_PAIR(WIN_COLOR));
 	werase(sort_win);
 
+	change_win = newwin(20, 30, (screen_y -20)/2, (screen_x -30)/2);
+	wbkgdset(change_win, COLOR_PAIR(WIN_COLOR));
+	werase(change_win);
+
 	error_win = newwin(10, screen_x -2, (screen_y -10)/2, 1);
 	wbkgdset(error_win, COLOR_PAIR(WIN_COLOR));
 	werase(error_win);
 
-	lborder = newwin(screen_y, 1, 0, 0);
+	lborder = newwin(screen_y - 2, 1, 0, 0);
 
 	if(cfg.use_color)
 		wbkgdset(lborder, COLOR_PAIR(BORDER_COLOR));
@@ -188,8 +184,10 @@ setup_ncurses_interface()
 
 	werase(lborder);
 
-
-	lwin.title = newwin(0, screen_x/2 -1, 0, 1);
+	if (curr_stats.number_of_windows == 1)
+		lwin.title = newwin(0, screen_x -2, 0, 1);
+	else
+		lwin.title = newwin(0, screen_x/2 -1, 0, 1);
 		
 	if(cfg.use_color)
 	{
@@ -201,7 +199,11 @@ setup_ncurses_interface()
 
 	werase(lwin.title);
 
-	lwin.win = newwin(screen_y - 3, screen_x/2 -2, 1, 1);
+	if (curr_stats.number_of_windows == 1)
+		lwin.win = newwin(screen_y - 3, screen_x -2, 1, 1);
+	else
+		lwin.win = newwin(screen_y - 3, screen_x/2 -2, 1, 1);
+
 	keypad(lwin.win, TRUE);
 	wbkgdset(lwin.win, COLOR_PAIR(WIN_COLOR));
 	wattrset(lwin.win, A_BOLD);
@@ -220,7 +222,10 @@ setup_ncurses_interface()
 
 	werase(mborder);
 
-	rwin.title = newwin(1, screen_x/2 -1  , 0, screen_x/2 +1);
+	if (curr_stats.number_of_windows == 1)
+		rwin.title = newwin(0, screen_x -2  , 0, 1);
+	else
+		rwin.title = newwin(1, screen_x/2 -1  , 0, screen_x/2 +1);
 
 	if(cfg.use_color)
 	{
@@ -233,7 +238,10 @@ setup_ncurses_interface()
 
 	werase(rwin.title);
 
-	rwin.win = newwin(screen_y - 3, screen_x/2 -2 , 1, screen_x/2 +1);
+	if (curr_stats.number_of_windows == 1)
+		rwin.win = newwin(screen_y - 3, screen_x -2 , 1, 1);
+	else
+		rwin.win = newwin(screen_y - 3, screen_x/2 -2 , 1, screen_x/2 +1);
 
 	keypad(rwin.win, TRUE);
 	wattrset(rwin.win, A_BOLD);
@@ -244,10 +252,13 @@ setup_ncurses_interface()
 	rwin.window_rows = y - 1;
 	rwin.window_width = x -1;
 
+
+	/*
 	if(screen_x % 2)
-		rborder = newwin(screen_y -2, 2, 0, screen_x -2);
+		rborder = newwin(screen_y - 2, 2, 0, screen_x -1);
 	else
-		rborder = newwin(screen_y -2, 1, 0, screen_x -1);
+	*/
+		rborder = newwin(screen_y - 2, 1, 0, screen_x -1);
 
 
 	if(cfg.use_color)
@@ -259,6 +270,7 @@ setup_ncurses_interface()
 	werase(rborder);
 
 	stat_win = newwin(1, screen_x, screen_y -2, 0);
+
 	if(cfg.use_color)
 		wbkgdset(stat_win, COLOR_PAIR(BORDER_COLOR));
 	else
@@ -266,7 +278,7 @@ setup_ncurses_interface()
 
 	werase(stat_win);
 
-	status_bar = newwin(1, screen_x - 20, screen_y -1, 0);
+	status_bar = newwin(1, screen_x - 19, screen_y -1, 0);
 	keypad(status_bar, TRUE);
 	wattrset(status_bar, A_BOLD);
 	wattron(status_bar, A_BOLD);
@@ -312,12 +324,13 @@ redraw_window(void)
 
 	ioctl(0, TIOCGWINSZ, &ws);
 	
-	resizeterm(ws.ws_row, ws.ws_col);
+	resize_term(ws.ws_row, ws.ws_col);
+
 	getmaxyx(stdscr, screen_y, screen_x);
 
-	if(screen_y < 10)
+	if (screen_y < 10)
 		finish("Terminal is too small to run vifm\n");
-	if(screen_x < 30)
+	if (screen_x < 30)
 		finish("Terminal is too small to run vifm\n");
 
 	wclear(stdscr);
@@ -335,33 +348,61 @@ redraw_window(void)
 	
 	wresize(stdscr, screen_y, screen_x);
 	mvwin(sort_win, (screen_y - 14)/2, (screen_x -30)/2);
+	mvwin(change_win, (screen_y - 14)/2, (screen_x -30)/2);
 	wresize(menu_win, screen_y - 1, screen_x);
 	wresize(error_win, (screen_y -10)/2, screen_x -2);
 	mvwin(error_win, (screen_y -10)/2, 1);
 	wresize(lborder, screen_y -2, 1);
-	wresize(lwin.title, 1, screen_x/2 -2);
-	wresize(lwin.win, screen_y -3, screen_x/2 -2);
-	getmaxyx(lwin.win, y, x);
-	lwin.window_width = x -1;
-	lwin.window_rows = y -1;
+
+
+
+	if (curr_stats.number_of_windows == 1)
+	{
+		wresize(lwin.title, 1, screen_x -1);
+		wresize(lwin.win, screen_y -3, screen_x -2);
+		getmaxyx(lwin.win, y, x);
+		lwin.window_width = x -1;
+		lwin.window_rows = y -1;
+
+		wresize(rwin.title, 1, screen_x -1);
+		mvwin(rwin.title, 0, 1);
+		wresize(rwin.win, screen_y -3, screen_x -2);
+		mvwin(rwin.win, 1, 1);
+		getmaxyx(rwin.win, y, x);
+		rwin.window_width = x -1;
+		rwin.window_rows = y -1;
+	}
+	else
+	{
+		wresize(lwin.title, 1, screen_x/2 -2);
+		wresize(lwin.win, screen_y -3, screen_x/2 -2);
+		getmaxyx(lwin.win, y, x);
+		lwin.window_width = x -1;
+		lwin.window_rows = y -1;
+
+		mvwin(mborder, 0, screen_x/2 -1);
+		wresize(mborder, screen_y, 2);
+
+		wresize(rwin.title, 1, screen_x/2 -2);
+		mvwin(rwin.title, 0, screen_x/2 +1);
+
+		wresize(rwin.win, screen_y -3, screen_x/2 -2);
+		mvwin(rwin.win, 1, screen_x/2 +1);
+		getmaxyx(rwin.win, y, x);
+		rwin.window_width = x -1;
+		rwin.window_rows = y -1;
+	}
+
+
 
 	/* For FreeBSD */
 	keypad(lwin.win, TRUE);
 
-	mvwin(mborder, 0, screen_x/2 -1);
-	wresize(mborder, screen_y, 2);
-	wresize(rwin.title, 1, screen_x/2 -2);
-	mvwin(rwin.title, 0, screen_x/2 +1);
-	wresize(rwin.win, screen_y -3, screen_x/2 -2);
-	mvwin(rwin.win, 1, screen_x/2 +1);
-	getmaxyx(rwin.win, y, x);
-	rwin.window_width = x -1;
-	rwin.window_rows = y -1;
 
 	/* For FreeBSD */
 	keypad(rwin.win, TRUE);
 
-	if(screen_x % 2)
+	if (screen_x % 2)
 	{
 		wresize(rborder, screen_y -2, 2);
 		mvwin(rborder, 0, screen_x -2);
@@ -394,12 +435,9 @@ redraw_window(void)
 	load_dir_list(&lwin, 0);
 	change_directory(curr_view, curr_view->curr_dir);
 
-	if(cfg.show_full)
-		show_full_file_properties(curr_view);
-	else
-		update_stat_window(curr_view);
+	update_stat_window(curr_view);
 
-	if(curr_view->selected_files)
+	if (curr_view->selected_files)
 	{
 		char status_buf[24];
 		snprintf(status_buf, sizeof(status_buf), "%d %s Selected",
@@ -410,6 +448,7 @@ redraw_window(void)
 	else
 		status_bar_message(" ");
 
+	
 	update_pos_window(curr_view);
 
 	update_all_windows();
@@ -417,8 +456,9 @@ redraw_window(void)
 	moveto_list_pos(curr_view, curr_view->list_pos);
 	wrefresh(curr_view->win);
 
-	curr_stats.need_redraw = 0;
 	curr_stats.freeze = 0;
+	curr_stats.need_redraw = 0;
+
 }
 
 
