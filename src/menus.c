@@ -813,7 +813,7 @@ reload_bookmarks_menu_list(menu_info *m)
 
 		m->data = (char **)realloc(m->data, sizeof(char *) * (x + 1));
 		m->data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m->data[x], sizeof(buf), buf);
+		snprintf(m->data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}
@@ -1116,7 +1116,7 @@ show_apropos_menu(FileView *view, char *args)
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(len);
 
-		snprintf(m.data[x], len - 2, buf);
+		snprintf(m.data[x], len - 2, "%s", buf);
 
 		x++;
 	}
@@ -1174,7 +1174,7 @@ show_bookmarks_menu(FileView *view)
 
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m.data[x], sizeof(buf), buf);
+		snprintf(m.data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}
@@ -1301,7 +1301,7 @@ show_filetypes_menu(FileView *view)
 			}
 			m.data = (char **)realloc(m.data, sizeof(char *) * (m.len + 1));
 			m.data[x] = (char *)malloc((len + 1) * sizeof(char)); 
-			snprintf(m.data[x], len, prog_copy);
+			snprintf(m.data[x], len, "%s", prog_copy);
 			m.len++;
 
 			free(free_this);
@@ -1345,7 +1345,7 @@ show_history_menu(FileView *view)
 
 		/* Change the current dir to reflect the current file. */ 
 		if(!strcmp(view->history[x].dir, view->curr_dir))
-			snprintf(view->history[x].file, sizeof(view->history[x].file),
+			snprintf(view->history[x].file, sizeof(view->history[x].file), "%s",
 						view->dir_entry[view->list_pos].name);
 
 		if(!strcmp(view->history[x].dir, "/"))
@@ -1353,7 +1353,7 @@ show_history_menu(FileView *view)
 			m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 			m.data[x] = (char *)malloc((strlen(view->history[x].file) + 1) 
 					* sizeof(char));
-			snprintf(m.data[x], strlen(view->history[x].file), 
+			snprintf(m.data[x], strlen(view->history[x].file), "%s",
 						view->history[x].file);
 		}
 		else
@@ -1414,7 +1414,7 @@ show_locate_menu(FileView *view, char *args)
 	{
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m.data[x], sizeof(buf), buf);
+		snprintf(m.data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}
@@ -1485,7 +1485,7 @@ show_user_menu(FileView *view, char *command)
 		show_progress();
 		m.data = (char **)realloc(m.data, sizeof(char *) * (x + 1));
 		m.data[x] = (char *)malloc(sizeof(buf) + 2);
-		snprintf(m.data[x], sizeof(buf), buf);
+		snprintf(m.data[x], sizeof(buf), "%s", buf);
 
 		x++;
 	}

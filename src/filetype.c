@@ -36,7 +36,7 @@ get_filetype_number(char *file)
 	while((ptr = strchr(strptr, '.')) != NULL)
 	{
 		ptr++;
-		snprintf(ext, sizeof(ext), ptr);
+		snprintf(ext, sizeof(ext), "%s", ptr);
 
 		for(x = 0; x < cfg.filetypes_num; x++)
 		{

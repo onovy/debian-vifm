@@ -44,7 +44,7 @@ finish(char *message)
 	endwin();
 	write_config_file();
 	system("clear");
-	printf(message);
+	printf("%s", message);
 	exit(0);
 }
 
@@ -65,7 +65,7 @@ void
 write_stat_win(char *message)
 {
 	werase(stat_win);
-	wprintw(stat_win, message);
+	wprintw(stat_win, "%s", message);
 	wnoutrefresh(stat_win);
 }
 
@@ -80,7 +80,7 @@ update_stat_window(FileView *view)
 	int x, y;
 
 	getmaxyx(stat_win, y, x);
-	snprintf(name_buf, sizeof(name_buf), get_current_file_name(view));
+	snprintf(name_buf, sizeof(name_buf), "%s", get_current_file_name(view));
 	describe_file_size(size_buf, sizeof(size_buf), view);
 	
 	if((pwd_buf = getpwuid(view->dir_entry[view->list_pos].uid)) == NULL)
@@ -115,7 +115,7 @@ void
 status_bar_message(char *message)
 {
 	werase(status_bar);
-	wprintw(status_bar, message);
+	wprintw(status_bar, "%s", message);
 	wnoutrefresh(status_bar);
 }
 

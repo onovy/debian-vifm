@@ -256,7 +256,7 @@ my_rl_gets(int type)
 	/*
 	else if (type == MAPPED_COMMAND || type == MAPPED_SEARCH)
 	{
-		snprintf(buf, sizeof(buf), string);
+		snprintf(buf, sizeof(buf), "%s", string);
 		mvwaddstr(status_bar, 0, 0, string);
 		pos = strlen(string);
 		index = pos -1;

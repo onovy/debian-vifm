@@ -206,7 +206,7 @@ handle_file(FileView *view)
 				view->curr_dir,
 				view->dir_entry[view->list_pos].name);
 		endwin();
-		fprintf(fp, filename);
+		fprintf(fp, "%s", filename);
 		fclose(fp);
 		exit(0);
 	}
@@ -525,7 +525,7 @@ permissions_key_cb(FileView *view, int *perms, int isdir)
 	if (isdir)
 		bottom = 17;
 
-	snprintf(filename, sizeof(filename), view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", view->dir_entry[view->list_pos].name);
 	snprintf(path, sizeof(path), "%s/%s", view->curr_dir, 
 			view->dir_entry[view->list_pos].name);
 
@@ -636,7 +636,7 @@ change_key_cb(FileView *view, int type)
 	int col = 6;
 	char filename[NAME_MAX];
 
-	snprintf(filename, sizeof(filename), view->dir_entry[view->list_pos].name);
+	snprintf(filename, sizeof(filename), "%s", view->dir_entry[view->list_pos].name);
 
 	curs_set(0);
 	wmove(change_win, curr, col);

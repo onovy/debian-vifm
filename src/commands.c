@@ -970,14 +970,14 @@ parse_command(FileView *view, char *command, cmd_t *cmd)
 		cmd->cmd_name = (char *)realloc(cmd->cmd_name, 
 				strlen(reserved_commands[cmd->builtin]) +1);
 		snprintf(cmd->cmd_name, sizeof(reserved_commands[cmd->builtin]),
-				reserved_commands[cmd->builtin]);
+				"%s", reserved_commands[cmd->builtin]);
 	}
 	else if((cmd->is_user = is_user_command(cmd->cmd_name)) > -1)
 	{
 		cmd->cmd_name =(char *)realloc(cmd->cmd_name,
 				strlen(command_list[cmd->is_user].name) + 1);
 		snprintf(cmd->cmd_name, sizeof(command_list[cmd->is_user].name),
-				command_list[cmd->is_user].name);
+				"%s", command_list[cmd->is_user].name);
 	}
 	else
 	{

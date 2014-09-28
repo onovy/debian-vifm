@@ -1,3 +1,8 @@
+0.3 to 0.3a
+
+	Patch by Karsten Schoelz to allow % to be use in file names.
+	Removed symlinks from tarball.
+
 0.2 to 0.3
 	
 	Added error message for shell commands that are too long.  

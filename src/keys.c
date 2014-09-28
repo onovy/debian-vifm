@@ -286,12 +286,12 @@ remove_filename_filter(FileView *view)
 	int found;
 	char file[NAME_MAX];
 
-	snprintf(file, sizeof(file),
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 	view->prev_filter = (char *)realloc(view->prev_filter,
 			strlen(view->filename_filter) +1);
 	snprintf(view->prev_filter, 
-		sizeof(view->prev_filter), view->filename_filter);
+		sizeof(view->prev_filter), "%s", view->filename_filter);
 	view->filename_filter = (char *)realloc(view->filename_filter,
 			strlen("*") +1);
 	snprintf(view->filename_filter, 
@@ -312,13 +312,13 @@ restore_filename_filter(FileView *view)
 	int found;
 	char file[NAME_MAX];
 
-	snprintf(file, sizeof(file), 
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 
 	view->filename_filter = (char *)realloc(view->filename_filter,
 			strlen(view->prev_filter) +1);
 	snprintf(view->filename_filter, 
-		sizeof(view->filename_filter), view->prev_filter);
+		sizeof(view->filename_filter), "%s", view->prev_filter);
 	view->invert = view->prev_invert;
 	load_dir_list(view, 0);
 	found = find_file_pos_in_list(view, file); 
@@ -518,7 +518,7 @@ show_dot_files(FileView *view)
 	int found;
 	char file[256];
 
-	snprintf(file, sizeof(file),
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 	view->hide_dot = 0;
 	load_dir_list(view, 1);
@@ -535,7 +535,7 @@ hide_dot_files(FileView *view)
 {
 	int found;
 	char file[NAME_MAX];
-	snprintf(file, sizeof(file),
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 	view->hide_dot = 1;
 	load_dir_list(view, 1);
@@ -552,7 +552,7 @@ toggle_dot_files(FileView *view)
 {
 	int found;
 	char file[NAME_MAX];
-	snprintf(file, sizeof(file),
+	snprintf(file, sizeof(file), "%s",
 			view->dir_entry[view->list_pos].name);
 	if(view->hide_dot)
 		view->hide_dot = 0;
@@ -580,13 +580,13 @@ change_window(FileView **view)
 		mvwaddstr(other_view->win, other_view->curr_line, 0, "*");
 		erase_current_line_bar(other_view);
 		werase(other_view->title);
-		wprintw(other_view->title, other_view->curr_dir);
+		wprintw(other_view->title, "%s", other_view->curr_dir);
 		wnoutrefresh(other_view->title);
 	}
 
 	wattron(curr_view->title, A_BOLD);
 	werase(curr_view->title);
-	wprintw(curr_view->title, curr_view->curr_dir);
+	wprintw(curr_view->title, "%s", curr_view->curr_dir);
 	wnoutrefresh(curr_view->title);
 
 	wnoutrefresh(other_view->win);
