@@ -24,14 +24,15 @@ static int invert_cmd(const cmd_info_t* cmd_info);
 static int substitute_cmd(const cmd_info_t* cmd_info);
 static int quit_cmd(const cmd_info_t* cmd_info);
 
-static const cmd_add_t commands[] = {
+static const cmd_add_t commands[] =
+{
 	{ .name = "",           .abbr = NULL,  .handler = goto_cmd,       .id = -1,    .range = 1,    .cust_sep = 0,
 		.emark = 0,           .qmark = 0,    .expand = 0,               .regexp = 0, .min_args = 0, .max_args = 0,       .bg = 0,     },
 	{ .name = "!",          .abbr = NULL,  .handler = exec_cmd,       .id = -1,    .range = 0,    .cust_sep = 0,
 		.emark = 1,           .qmark = 1,    .expand = 0,               .regexp = 0, .min_args = 1, .max_args = 1,       .bg = 1,     },
 	{ .name = "call",       .abbr = "cal", .handler = call_cmd,       .id = -1,    .range = 0,    .cust_sep = 0,       .quote = 1,
 		.emark = 0,           .qmark = 2,    .expand = 1,               .regexp = 0, .min_args = 1, .max_args = 1,       .bg = 0,     },
-	{ .name = "delete",     .abbr = "d",   .handler = delete_cmd,     .id =  1,    .range = 1,    .cust_sep = 0,
+	{ .name = "delete",     .abbr = "d",   .handler = delete_cmd,     .id =  1,    .range = 1,    .cust_sep = 0,       .quote = 1,
 		.emark = 1,           .qmark = 0,    .expand = 0,               .regexp = 0, .min_args = 0, .max_args = 1,       .bg = 0,     },
 	{ .name = "edia",       .abbr = NULL,  .handler = edia_cmd,       .id = -1,    .range = 1,    .cust_sep = 0,
 		.emark = 0,           .qmark = 0,    .expand = 0,               .regexp = 0, .min_args = 0, .max_args = NOT_DEF, .bg = 0,     },
@@ -188,7 +189,18 @@ static void
 test_range_acceptance(void)
 {
 	assert_int_equal(0, execute_cmd("%delete"));
+	assert_int_equal(0, execute_cmd(",%delete"));
+	assert_int_equal(0, execute_cmd(";%delete"));
 	assert_int_equal(CMDS_ERR_NO_RANGE_ALLOWED, execute_cmd("%history"));
+	assert_int_equal(CMDS_ERR_NO_RANGE_ALLOWED, execute_cmd("%,history"));
+	assert_int_equal(CMDS_ERR_NO_RANGE_ALLOWED, execute_cmd("%;history"));
+}
+
+static void
+test_single_quote_doubling(void)
+{
+	assert_int_equal(0, execute_cmd("delete 'file''with''single''quotes'"));
+	assert_string_equal("file'with'single'quotes", arg);
 }
 
 static void
@@ -248,6 +260,39 @@ test_range(void)
 }
 
 static void
+test_semicolon_range(void)
+{
+	cmds_conf.begin = 0;
+	cmds_conf.current = 50;
+	cmds_conf.end = 100;
+
+	assert_int_equal(0, execute_cmd(".;$delete!"));
+	assert_int_equal(50, cmdi.begin);
+	assert_int_equal(100, cmdi.end);
+	assert_true(cmdi.emark);
+
+	assert_int_equal(0, execute_cmd(";$delete!"));
+	assert_int_equal(50, cmdi.begin);
+	assert_int_equal(100, cmdi.end);
+	assert_true(cmdi.emark);
+
+	assert_int_equal(0, execute_cmd("$;delete!"));
+	assert_int_equal(50, cmdi.begin);
+	assert_int_equal(100, cmdi.end);
+	assert_true(cmdi.emark);
+
+	assert_int_equal(0, execute_cmd(";;delete!"));
+	assert_int_equal(50, cmdi.begin);
+	assert_int_equal(50, cmdi.end);
+	assert_true(cmdi.emark);
+
+	assert_int_equal(0, execute_cmd("5;6;7delete!"));
+	assert_int_equal(5, cmdi.begin);
+	assert_int_equal(6, cmdi.end);
+	assert_true(cmdi.emark);
+}
+
+static void
 test_range_plus_minus(void)
 {
 	cmds_conf.begin = 0;
@@ -303,6 +348,26 @@ test_range_and_spaces(void)
 	assert_int_equal(50, cmdi.begin);
 	assert_int_equal(100, cmdi.end);
 	assert_true(cmdi.emark);
+}
+
+static void
+test_empty_range_empty_command_called(void)
+{
+	cmds_conf.begin = 10;
+	cmds_conf.current = 50;
+	cmds_conf.end = 100;
+
+	assert_int_equal(0, execute_cmd(""));
+	assert_int_equal(NOT_DEF, cmdi.begin);
+	assert_int_equal(NOT_DEF, cmdi.end);
+
+	assert_int_equal(0, execute_cmd(","));
+	assert_int_equal(50, cmdi.begin);
+	assert_int_equal(50, cmdi.end);
+
+	assert_int_equal(0, execute_cmd(";"));
+	assert_int_equal(50, cmdi.begin);
+	assert_int_equal(50, cmdi.end);
 }
 
 static void
@@ -579,6 +644,35 @@ test_qmark_and_bg(void)
 	assert_true(cmdi.qmark);
 }
 
+static void
+test_extra_long_command_name(void)
+{
+	char cmd_name[1024];
+
+	memset(cmd_name, 'a', sizeof(cmd_name) - 1);
+	cmd_name[sizeof(cmd_name) - 1] = '\0';
+
+	assert_false(execute_cmd(cmd_name) == 0);
+}
+
+static void
+test_emark_is_checked_before_number_of_args(void)
+{
+	assert_int_equal(CMDS_ERR_NO_BANG_ALLOWED, execute_cmd("call!"));
+}
+
+static void
+test_qmark_is_checked_before_number_of_args(void)
+{
+	assert_int_equal(CMDS_ERR_NO_QMARK_ALLOWED, execute_cmd("quit? from here"));
+}
+
+static void
+test_missing_quotes_are_allowed(void)
+{
+	assert_int_equal(CMDS_ERR_INVALID_ARG, execute_cmd("call 'ismissing"));
+}
+
 void
 input_tests(void)
 {
@@ -589,9 +683,12 @@ input_tests(void)
 
 	run_test(test_trimming);
 	run_test(test_range_acceptance);
+	run_test(test_single_quote_doubling);
 	run_test(test_range);
+	run_test(test_semicolon_range);
 	run_test(test_range_plus_minus);
 	run_test(test_range_and_spaces);
+	run_test(test_empty_range_empty_command_called);
 	run_test(test_bang_acceptance);
 	run_test(test_bang);
 	run_test(test_qmark_acceptance);
@@ -612,8 +709,13 @@ input_tests(void)
 	run_test(test_bg_and_no_args);
 	run_test(test_short_forms);
 	run_test(test_qmark_and_bg);
+	run_test(test_extra_long_command_name);
+	run_test(test_emark_is_checked_before_number_of_args);
+	run_test(test_qmark_is_checked_before_number_of_args);
+	run_test(test_missing_quotes_are_allowed);
 
 	test_fixture_end();
 }
 
-/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

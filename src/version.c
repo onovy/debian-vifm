@@ -16,11 +16,13 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "version.h"
+
 #include <assert.h> /* assert() */
 #include <stddef.h> /* NULL */
-#include <stdio.h> /* sprintf() */
-#include <stdlib.h> /* malloc() */
-#include <string.h> /* strlen() strdup() */
+#include <string.h> /* strdup() */
+
+#include "utils/str.h"
 
 /* This variable is automatically updated on building. */
 extern const char GIT_HASH[];
@@ -28,15 +30,16 @@ extern const char GIT_HASH[];
 int
 fill_version_info(char **list)
 {
-	const int LEN = 12;
+	const int LEN = 13;
 	int x = 0;
 
 	if(list == NULL)
+	{
 		return LEN;
+	}
 
 	list[x++] = strdup("Version: " VERSION);
-	list[x] = malloc(sizeof("Git commit hash: ") + strlen(GIT_HASH) + 1);
-	sprintf(list[x++], "Git commit hash: %s", GIT_HASH);
+	list[x++] = format_str("Git commit hash: %s", GIT_HASH);
 	list[x++] = strdup("Compiled at: " __DATE__ " " __TIME__);
 	list[x++] = strdup("");
 
@@ -70,6 +73,12 @@ fill_version_info(char **list)
 	list[x++] = strdup("Without X11 library");
 #endif
 
+#ifdef DYN_X11
+	list[x++] = strdup("With dynamic loading of X11 library");
+#else
+	list[x++] = strdup("Without dynamic loading of X11 library");
+#endif
+
 #ifdef HAVE_FILE_PROG
 	list[x++] = strdup("With file program");
 #else
@@ -82,6 +91,12 @@ fill_version_info(char **list)
 #ifndef _WIN32
 	list[x++] = strdup("With -n option for cp and mv");
 #endif /* _WIN32 */
+#endif
+
+#ifdef ENABLE_REMOTE_CMDS
+	list[x++] = strdup("With remote command execution");
+#else
+	list[x++] = strdup("Without remote command execution");
 #endif
 
 	assert(x <= LEN);

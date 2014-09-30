@@ -1,10 +1,14 @@
-#include <string.h>
+#include <string.h> /* memset() */
 
 #include "seatest.h"
 
 #include "../../src/cfg/config.h"
 #include "../../src/sort.h"
 #include "../../src/ui.h"
+
+#define SIGN(n) ({__typeof(n) _n = (n); (_n < 0) ? -1 : (_n > 0);})
+#define ASSERT_STRCMP_EQUAL(a, b) \
+		do { assert_int_equal(SIGN(a), SIGN(b)); } while(0)
 
 static void
 setup(void)
@@ -14,8 +18,11 @@ setup(void)
 	lwin.list_rows = 3;
 	lwin.dir_entry = calloc(lwin.list_rows, sizeof(*lwin.dir_entry));
 	lwin.dir_entry[0].name = strdup("a");
+	lwin.dir_entry[0].type = REGULAR;
 	lwin.dir_entry[1].name = strdup("_");
+	lwin.dir_entry[1].type = REGULAR;
 	lwin.dir_entry[2].name = strdup("A");
+	lwin.dir_entry[2].type = REGULAR;
 }
 
 static void
@@ -24,18 +31,17 @@ teardown(void)
 	int i;
 
 	for(i = 0; i < lwin.list_rows; i++)
+	{
 		free(lwin.dir_entry[i].name);
+	}
 	free(lwin.dir_entry);
 }
 
 static void
 test_special_chars_ignore_case_sort(void)
 {
-	int i;
-
 	lwin.sort[0] = SORT_BY_INAME;
-	for(i = 1; i < NUM_SORT_OPTIONS; i++)
-		lwin.sort[i] = NUM_SORT_OPTIONS + 1;
+	memset(&lwin.sort[1], NO_SORT_OPTION, sizeof(lwin.sort) - 1);
 
 	sort_view(&lwin);
 
@@ -45,43 +51,39 @@ test_special_chars_ignore_case_sort(void)
 static void
 test_versort_without_numbers(void)
 {
-#define SIGN(n) ({int _n = (n); _n < 0 ? -1 : ((_n > 0) ? 1 : 0);})
-
 	const char *s, *t;
 
 	s = "abc";
 	t = "abcdef";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abcdef";
 	t = "abc";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "";
 	t = "abc";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abc";
 	t = "";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "";
 	t = "";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abcdef";
 	t = "abcdef";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abcdef";
 	t = "abcdeg";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abcdeg";
 	t = "abcdef";
-	assert_int_equal(SIGN(strcmp(s, t)), SIGN(strnumcmp(s, t)));
-
-#undef SIGN
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 }
 
 static void
@@ -91,15 +93,15 @@ test_versort_with_numbers(void)
 
 	s = "abcdef0";
 	t = "abcdef0";
-	assert_int_equal(strcmp(s, t), strnumcmp(s, t));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abcdef0";
 	t = "abcdef1";
-	assert_int_equal(strcmp(s, t), strnumcmp(s, t));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abcdef1";
 	t = "abcdef0";
-	assert_int_equal(strcmp(s, t), strnumcmp(s, t));
+	ASSERT_STRCMP_EQUAL(strcmp(s, t), strnumcmp(s, t));
 
 	s = "abcdef9";
 	t = "abcdef10";
@@ -166,6 +168,14 @@ test_versort_numbers_only(void)
 	s = "100";
 	t = "13";
 	assert_true(strnumcmp(s, t) > 0);
+
+	s = "09";
+	t = "3";
+	assert_true(strnumcmp(s, t) > 0);
+
+	s = "3";
+	t = "10";
+	assert_true(strnumcmp(s, t) < 0);
 }
 
 static void

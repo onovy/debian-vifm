@@ -14,7 +14,8 @@ static int complete_args(int id, const char *args, int argc, char **argv,
 		int arg_pos);
 static int swap_range(void);
 static int resolve_mark(char mark);
-static char * expand_macros(const char *str, int *usr1, int *usr2);
+static char * expand_macros(const char *str, int for_shell, int *usr1,
+		int *usr2);
 static char * expand_envvars(const char *str);
 static void post(int id);
 static void select_range(int id, const cmd_info_t *cmd_info);
@@ -28,6 +29,7 @@ void ids_tests(void);
 void builtin_tests(void);
 void one_number_range(void);
 void last_argument_tests(void);
+void unescape_tests(void);
 
 cmds_conf_t cmds_conf = {
 	.complete_args = complete_args,
@@ -51,6 +53,7 @@ all_tests(void)
 	builtin_tests();
 	one_number_range();
 	last_argument_tests();
+	unescape_tests();
 }
 
 static int
@@ -87,7 +90,7 @@ resolve_mark(char mark)
 }
 
 static char *
-expand_macros(const char *str, int *usr1, int *usr2)
+expand_macros(const char *str, int for_shell, int *usr1, int *usr2)
 {
 	return strdup(str);
 }
@@ -154,4 +157,5 @@ main(int argc, char **argv)
 	return run_tests(all_tests) == 0;
 }
 
-/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

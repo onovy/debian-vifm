@@ -17,57 +17,93 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <stdio.h> /* snprintf() */
+#include "find_menu.h"
+
 #include <stdlib.h> /* free() */
 #include <string.h> /* strdup() */
 
+#include "../cfg/config.h"
+#include "../utils/macros.h"
 #include "../utils/path.h"
+#include "../utils/str.h"
 #include "../macros.h"
 #include "../ui.h"
 #include "menus.h"
 
-#include "find_menu.h"
+#ifdef _WIN32
+#define DEFAULT_PREDICATE "-iname"
+#else
+#define DEFAULT_PREDICATE "-name"
+#endif
+
+static int execute_find_cb(FileView *view, menu_info *m);
 
 int
 show_find_menu(FileView *view, int with_path, const char args[])
 {
-	char cmd_buf[256];
-	char *files;
-	int were_errors;
+	int save_msg;
+	char *custom_args = NULL;
+	char *targets = NULL;
+	char *cmd;
+
+	custom_macro_t macros[] =
+	{
+		{ .letter = 's', .value = NULL, .uses_left = 1, .group = -1 },
+		{ .letter = 'a', .value = NULL, .uses_left = 1, .group =  1 },
+		{ .letter = 'A', .value = NULL, .uses_left = 0, .group =  1 },
+	};
 
 	static menu_info m;
-	init_menu_info(&m, FIND);
+	init_menu_info(&m, FIND_MENU, strdup("No files found"));
 
-	snprintf(cmd_buf, sizeof(cmd_buf), "find %s", args);
-	m.title = strdup(cmd_buf);
+	m.title = format_str(" Find %s ", args);
+	m.execute_handler = &execute_find_cb;
+	m.key_handler = &filelist_khandler;
 
-	if(view->selected_files > 0)
-		files = expand_macros(view, "%f", NULL, NULL);
-	else
-		files = strdup(".");
-
-	if(args[0] == '-')
-		snprintf(cmd_buf, sizeof(cmd_buf), "find %s %s", files, args);
-	else if(with_path)
-		snprintf(cmd_buf, sizeof(cmd_buf), "find %s", args);
+	if(with_path)
+	{
+		macros[0].value = args;
+		macros[1].value = "";
+		macros[2].value = "";
+	}
 	else
 	{
-		char *escaped_args = escape_filename(args, 0);
-		snprintf(cmd_buf, sizeof(cmd_buf),
-				"find %s -type d \\( ! -readable -o ! -executable \\) -prune -o "
-				"-name %s -print", files, escaped_args);
-		free(escaped_args);
+		targets = get_cmd_target();
+		macros[0].value = targets;
+		macros[2].value = args;
+
+		if(args[0] == '-')
+		{
+			macros[1].value = args;
+		}
+		else
+		{
+			char *const escaped_args = escape_filename(args, 0);
+			custom_args = format_str("%s %s", DEFAULT_PREDICATE, escaped_args);
+			macros[1].value = custom_args;
+			free(escaped_args);
+		}
 	}
-	free(files);
 
 	status_bar_message("find...");
 
-	were_errors = capture_output_to_menu(view, cmd_buf, &m);
-	if(!were_errors && m.len < 1)
-	{
-		status_bar_error("No files found");
-		return 1;
-	}
+	cmd = expand_custom_macros(cfg.find_prg, ARRAY_LEN(macros), macros);
+
+	free(targets);
+	free(custom_args);
+
+	save_msg = capture_output_to_menu(view, cmd, &m);
+	free(cmd);
+
+	return save_msg;
+}
+
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
+execute_find_cb(FileView *view, menu_info *m)
+{
+	goto_selected_file(view, m->items[m->pos], 0);
 	return 0;
 }
 

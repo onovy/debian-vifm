@@ -17,25 +17,28 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "color_scheme.h"
+
 #include <curses.h>
 
-#include <dirent.h> /* DIR */
 #include <sys/stat.h>
+#include <dirent.h> /* DIR */
 #include <unistd.h>
 
 #include <ctype.h>
-#include <limits.h> /* PATH_MAX */
-#include <stdio.h>
-#include <string.h>
+#include <stddef.h> /* size_t */
+#include <stdio.h> /* snprintf() */
+#include <string.h> /* strcpy() strlen() */
 
 #include "cfg/config.h"
 #include "engine/completion.h"
 #include "menus/menus.h"
 #include "utils/fs.h"
+#include "utils/fs_limits.h"
 #include "utils/macros.h"
 #include "utils/str.h"
+#include "utils/string_array.h"
 #include "utils/tree.h"
-#include "color_scheme.h"
 #include "filelist.h"
 #include "status.h"
 
@@ -127,41 +130,20 @@ check_color_scheme(col_scheme_t *cs)
 	}
 }
 
-int
-find_color_scheme(const char *name)
+char **
+list_color_schemes(int *len)
 {
 	char colors_dir[PATH_MAX];
-	DIR *dir;
-	struct dirent *d;
-
-	if(name[0] == '\0')
-		return 0;
-
 	snprintf(colors_dir, sizeof(colors_dir), "%s/colors", cfg.config_dir);
+	return list_regular_files(colors_dir, len);
+}
 
-	dir = opendir(colors_dir);
-	if(dir == NULL)
-		return 0;
-
-	while((d = readdir(dir)) != NULL)
-	{
-#ifndef _WIN32
-		if(d->d_type != DT_REG && d->d_type != DT_LNK)
-			continue;
-#endif
-
-		if(d->d_name[0] == '.')
-			continue;
-
-		if(stroscmp(d->d_name, name) == 0)
-		{
-			closedir(dir);
-			return 1;
-		}
-	}
-	closedir(dir);
-
-	return 0;
+int
+color_scheme_exists(const char name[])
+{
+	char full_path[PATH_MAX];
+	snprintf(full_path, sizeof(full_path), "%s/colors/%s", cfg.config_dir, name);
+	return is_regular_file(full_path);
 }
 
 /* This function is called only when colorschemes file doesn't exist */
@@ -228,28 +210,32 @@ write_color_scheme_file(void)
 	for(y = 0; y < MAXNUM_COLOR - 2; y++)
 	{
 		char fg_buf[16], bg_buf[16];
-		int fg = cfg.cs.color[y].fg;
-		int bg = cfg.cs.color[y].bg;
 
-		if(fg == -1)
-			strcpy(fg_buf, "default");
-		else if(fg < ARRAY_LEN(COLOR_NAMES))
-			strcpy(fg_buf, COLOR_NAMES[fg]);
-		else
-			snprintf(fg_buf, sizeof(fg_buf), "%d", fg);
-
-		if(bg == -1)
-			strcpy(bg_buf, "default");
-		else if(bg < ARRAY_LEN(COLOR_NAMES))
-			strcpy(bg_buf, COLOR_NAMES[bg]);
-		else
-			snprintf(bg_buf, sizeof(bg_buf), "%d", bg);
+		color_to_str(cfg.cs.color[y].fg, sizeof(fg_buf), fg_buf);
+		color_to_str(cfg.cs.color[y].bg, sizeof(bg_buf), bg_buf);
 
 		fprintf(fp, "highlight %s cterm=%s ctermfg=%s ctermbg=%s\n", HI_GROUPS[y],
 				attrs_to_str(cfg.cs.color[y].attr), fg_buf, bg_buf);
 	}
 
 	fclose(fp);
+}
+
+void
+color_to_str(int color, size_t buf_len, char str_buf[])
+{
+	if(color == -1)
+	{
+		copy_str(str_buf, buf_len, "default");
+	}
+	else if(color >= 0 && color < ARRAY_LEN(COLOR_NAMES))
+	{
+		copy_str(str_buf, buf_len, COLOR_NAMES[color]);
+	}
+	else
+	{
+		snprintf(str_buf, buf_len, "%d", color);
+	}
 }
 
 void
@@ -332,7 +318,7 @@ check_directory_for_color_scheme(int left, const char *dir)
 		t = *p;
 		*p = '\0';
 
-		if(tree_get_data(dirs, dir, &u.buf) != 0 || !find_color_scheme(u.name))
+		if(tree_get_data(dirs, dir, &u.buf) != 0 || !color_scheme_exists(u.name))
 		{
 			*p = t;
 			if((p = strchr(p + 1, '/')) == NULL)
@@ -366,35 +352,28 @@ load_color_pairs(int base, const col_scheme_t *cs)
 }
 
 void
-complete_colorschemes(const char *name)
+complete_colorschemes(const char name[])
 {
-	char colors_dir[PATH_MAX];
-	DIR *dir;
-	struct dirent *d;
+	int i;
 	size_t len;
-
-	snprintf(colors_dir, sizeof(colors_dir), "%s/colors", cfg.config_dir);
-
-	dir = opendir(colors_dir);
-	if(dir == NULL)
-		return;
+	int schemes_len;
+	char **schemes;
 
 	len = strlen(name);
+	schemes = list_color_schemes(&schemes_len);
 
-	while((d = readdir(dir)) != NULL)
+	for(i = 0; i < schemes_len; i++)
 	{
-#ifndef _WIN32
-		if(d->d_type != DT_REG && d->d_type != DT_LNK)
-			continue;
-#endif
-
-		if(d->d_name[0] == '.')
-			continue;
-
-		if(strncmp(name, d->d_name, len) == 0)
-			add_completion(d->d_name);
+		if(schemes[i][0] != '.' || name[0] == '.')
+		{
+			if(strnoscmp(name, schemes[i], len) == 0)
+			{
+				add_completion(schemes[i]);
+			}
+		}
 	}
-	closedir(dir);
+
+	free_string_array(schemes, schemes_len);
 
 	completion_group_end();
 	add_completion(name);

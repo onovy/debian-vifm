@@ -17,26 +17,37 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <ctype.h> /* tolower() isspace() */
-#include <stdarg.h> /* va_list va_start() va_copy() va_end() */
-#include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* malloc() mbstowcs() wcstombs() */
-#include <string.h> /* strncmp() strlen() strcmp() strchr() strrchr() */
-#include <wchar.h> /* vswprintf() wchar_t */
-
 #include "str.h"
 
+#include <ctype.h> /* tolower() isspace() */
+#include <limits.h> /* INT_MAX INT_MIN LONG_MAX LONG_MIN */
+#include <stdarg.h> /* va_list va_start() va_copy() va_end() */
+#include <stddef.h> /* NULL size_t */
+#include <stdio.h> /* snprintf() */
+#include <stdlib.h> /* free() malloc() mbstowcs() realloc() strtol()
+                       wcstombs() */
+#include <string.h> /* strncmp() strlen() strcmp() strchr() strrchr()
+                       strncpy() */
+#include <wchar.h> /* vswprintf() wchar_t */
+#include <wctype.h> /* towlower() iswupper() */
+
+#include "macros.h"
+#include "utf8.h"
+#include "utils.h"
+
+#include "macros.h"
+
 void
-chomp(char *text)
+chomp(char str[])
 {
-	size_t len;
-
-	if(text[0] == '\0')
-		return;
-
-	len = strlen(text);
-	if(text[len - 1] == '\n')
-		text[len - 1] = '\0';
+	if(str[0] != '\0')
+	{
+		const size_t last_char_pos = strlen(str) - 1;
+		if(str[last_char_pos] == '\n')
+		{
+			str[last_char_pos] = '\0';
+		}
+	}
 }
 
 size_t
@@ -54,34 +65,47 @@ trim_right(char *text)
 }
 
 wchar_t *
-to_wide(const char *s)
+to_wide(const char s[])
 {
-	wchar_t *result;
-	int len;
+	wchar_t *result = NULL;
+	size_t len;
 
 	len = mbstowcs(NULL, s, 0);
-	result = malloc((len + 1)*sizeof(wchar_t));
-	if(result != NULL)
-		mbstowcs(result, s, len + 1);
+	if(len != (size_t)-1)
+	{
+		result = malloc((len + 1)*sizeof(wchar_t));
+		if(result != NULL)
+		{
+			(void)mbstowcs(result, s, len + 1);
+		}
+	}
 	return result;
 }
 
 /* I'm really worry about the portability... */
 wchar_t *
-my_wcsdup(const wchar_t *ws)
+vifm_wcsdup(const wchar_t ws[])
 {
 	const size_t len = wcslen(ws) + 1;
 	wchar_t * const result = malloc(len*sizeof(wchar_t));
 	if(result == NULL)
+	{
 		return NULL;
+	}
 	wcsncpy(result, ws, len);
 	return result;
 }
 
 int
-starts_with(const char *str, const char *prefix)
+starts_with(const char str[], const char prefix[])
 {
 	size_t prefix_len = strlen(prefix);
+	return starts_withn(str, prefix, prefix_len);
+}
+
+int
+starts_withn(const char str[], const char prefix[], size_t prefix_len)
+{
 	return strncmp(str, prefix, prefix_len) == 0;
 }
 
@@ -122,22 +146,34 @@ strtolower(char *s)
 	}
 }
 
-/* Replaces the first found occurrence of c char in str with '\0' */
 void
-break_at(char *str, char c)
+wcstolower(wchar_t s[])
 {
-	char *p = strchr(str, c);
-	if(p != NULL)
-		*p = '\0';
+	while(*s != L'\0')
+	{
+		*s = towlower(*s);
+		s++;
+	}
 }
 
-/* Replaces the last found occurrence of c char in str with '\0' */
 void
-break_atr(char *str, char c)
+break_at(char str[], char c)
 {
-	char *p = strrchr(str, c);
+	char *const p = strchr(str, c);
 	if(p != NULL)
+	{
 		*p = '\0';
+	}
+}
+
+void
+break_atr(char str[], char c)
+{
+	char *const p = strrchr(str, c);
+	if(p != NULL)
+	{
+		*p = '\0';
+	}
 }
 
 /* Skips consecutive non-whitespace characters. */
@@ -202,6 +238,14 @@ until_first(const char str[], char c)
 	return (char *)result;
 }
 
+char *
+after_first(const char str[], char c)
+{
+	const char *result = strchr(str, c);
+	result = (result == NULL) ? (str + strlen(str)) : (result + 1);
+	return (char *)result;
+}
+
 int
 replace_string(char **str, const char with[])
 {
@@ -226,14 +270,14 @@ strcatch(char *str, char c)
 }
 
 int
-my_swprintf(wchar_t *str, size_t len, const wchar_t *format, ...)
+vifm_swprintf(wchar_t str[], size_t len, const wchar_t format[], ...)
 {
 	int result;
 	va_list ap;
 
 	va_start(ap, format);
 
-#ifndef _WIN32
+#if !defined(_WIN32) || defined(_WIN64)
 	result = vswprintf(str, len, format, ap);
 #else
 	result = vswprintf(str, format, ap);
@@ -247,9 +291,28 @@ my_swprintf(wchar_t *str, size_t len, const wchar_t *format, ...)
 const char *
 extract_part(const char str[], char separator, char part_buf[])
 {
-	const char *end = until_first(++str, separator);
-	snprintf(part_buf, end - str + 1, "%s", str);
+	const char *end = NULL;
+	str = skip_char(str, separator);
+	if(str[0] != '\0')
+	{
+		end = until_first(str, separator);
+		snprintf(part_buf, end - str + 1, "%s", str);
+		if(*end != '\0')
+		{
+			end++;
+		}
+	}
 	return end;
+}
+
+char *
+skip_char(const char str[], char c)
+{
+	while(*str == c)
+	{
+		str++;
+	}
+	return (char *)str;
 }
 
 char *
@@ -282,16 +345,6 @@ is_null_or_empty(const char string[])
 }
 
 char *
-skip_all(const char string[], char ch)
-{
-	while(*string == ch)
-	{
-		string++;
-	}
-	return (char *)string;
-}
-
-char *
 format_str(const char format[], ...)
 {
 	va_list ap;
@@ -314,13 +367,120 @@ format_str(const char format[], ...)
 	return result_buf;
 }
 
-#ifdef _WIN32
-char *
-strtok_r(char str[], const char delim[], char *saveptr[])
+const char *
+expand_tabulation(const char line[], size_t max, size_t tab_stops, char buf[])
 {
-	return strtok(str, delim);
+	size_t col = 0;
+	while(col < max && *line != '\0')
+	{
+		const size_t char_width = get_char_width(line);
+		const size_t char_screen_width = wcwidth(get_first_wchar(line));
+		if(char_screen_width != (size_t)-1 && col + char_screen_width > max)
+		{
+			break;
+		}
+
+		if(char_width == 1 && *line == '\t')
+		{
+			const size_t space_count = tab_stops - col%tab_stops;
+
+			memset(buf, ' ', space_count);
+			buf += space_count;
+
+			col += space_count;
+		}
+		else
+		{
+			strncpy(buf, line, char_width);
+			buf += char_width;
+
+			col += char_screen_width;
+		}
+
+		line += char_width;
+	}
+	*buf = '\0';
+	return line;
 }
-#endif
+
+wchar_t
+get_first_wchar(const char str[])
+{
+	wchar_t wc[2];
+	return (mbstowcs(wc, str, ARRAY_LEN(wc)) >= 1) ? wc[0] : str[0];
+}
+
+char *
+extend_string(char str[], const char with[], size_t *len)
+{
+	size_t with_len = strlen(with);
+	char *new = realloc(str, *len + with_len + 1);
+	if(new == NULL)
+	{
+		return str;
+	}
+
+	strncpy(new + *len, with, with_len + 1);
+	*len += with_len;
+	return new;
+}
+
+int
+has_uppercase_letters(const char str[])
+{
+	int has_uppercase = 0;
+	wchar_t *const wstring = to_wide(str);
+	if(wstring != NULL)
+	{
+		const wchar_t *p = wstring - 1;
+		while(*++p != L'\0')
+		{
+			if(iswupper(*p))
+			{
+				has_uppercase = 1;
+				break;
+			}
+		}
+		free(wstring);
+	}
+	return has_uppercase;
+}
+
+void
+copy_str(char dst[], size_t dst_len, const char src[])
+{
+	if(dst != src)
+	{
+		copy_substr(dst, dst_len, src, '\0');
+	}
+}
+
+void
+copy_substr(char dst[], size_t dst_len, const char src[], char terminator)
+{
+	if(dst_len != 0U)
+	{
+		char *past_end;
+		if((past_end = memccpy(dst, src, terminator, dst_len)) == NULL)
+		{
+			dst[dst_len - 1] = '\0';
+		}
+		else
+		{
+			past_end[-1] = '\0';
+		}
+	}
+}
+
+int
+str_to_int(const char str[])
+{
+	const long number = strtol(str, NULL, 10);
+	/* Handle overflow and underflow correctly. */
+	return (number == LONG_MAX)
+	     ? INT_MAX
+	     : ((number == LONG_MIN) ? INT_MIN : number);
+}
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

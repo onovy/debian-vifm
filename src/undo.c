@@ -16,25 +16,27 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "undo.h"
+
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <assert.h>
-#include <limits.h> /* PATH_MAX */
+#include <assert.h> /* assert() */
+#include <stddef.h> /* size_t */
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <stdlib.h> /* free() */
+#include <string.h> /* strcpy() strdup() */
 
 #include "cfg/config.h"
 #include "utils/fs.h"
+#include "utils/fs_limits.h"
 #include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "ops.h"
 #include "registers.h"
-
-#include "undo.h"
+#include "trash.h"
 
 typedef struct
 {
@@ -72,9 +74,10 @@ static OPS undo_op[] = {
 	OP_NONE,     /* OP_USR */
 	OP_NONE,     /* OP_REMOVE */
 	OP_SYMLINK,  /* OP_REMOVESL */
-	OP_REMOVE,   /* OP_COPY   */
+	OP_REMOVE,   /* OP_COPY */
+	OP_REMOVE,   /* OP_COPYF */
 	OP_MOVE,     /* OP_MOVE */
-	OP_MOVETMP0, /* OP_MOVETMP0 */
+	OP_MOVE,     /* OP_MOVEF */
 	OP_MOVETMP1, /* OP_MOVETMP1 */
 	OP_MOVETMP2, /* OP_MOVETMP2 */
 	OP_MOVETMP3, /* OP_MOVETMP1 */
@@ -91,7 +94,7 @@ static OPS undo_op[] = {
 	OP_REMOVE,   /* OP_SYMLINK */
 	OP_REMOVESL, /* OP_SYMLINK2 */
 	OP_RMDIR,    /* OP_MKDIR */
-	OP_NONE,     /* OP_RMDIR */
+	OP_MKDIR,    /* OP_RMDIR */
 	OP_REMOVE,   /* OP_MKFILE */
 };
 ARRAY_GUARD(undo_op, OP_COUNT);
@@ -113,10 +116,12 @@ static enum
 	  OPER_2ND, OPER_1ST, OPER_NON, OPER_NON, }, /* undo OP_SYMLINK2 */
 	{ OPER_1ST, OPER_2ND, OPER_1ST, OPER_2ND,    /* do   OP_COPY   */
 		OPER_2ND, OPER_NON, OPER_2ND, OPER_NON, }, /* undo OP_REMOVE */
+	{ OPER_1ST, OPER_2ND, OPER_1ST, OPER_2ND,    /* do   OP_COPYF  */
+		OPER_2ND, OPER_NON, OPER_2ND, OPER_NON, }, /* undo OP_REMOVE */
 	{ OPER_1ST, OPER_2ND, OPER_1ST, OPER_2ND,    /* do   OP_MOVE */
 		OPER_2ND, OPER_1ST, OPER_2ND, OPER_1ST, }, /* undo OP_MOVE */
-	{ OPER_1ST, OPER_2ND, OPER_2ND, OPER_NON,    /* do   OP_MOVETMP0 */
-		OPER_2ND, OPER_1ST, OPER_2ND, OPER_NON, }, /* undo OP_MOVETMP0 */
+	{ OPER_1ST, OPER_2ND, OPER_1ST, OPER_2ND,    /* do   OP_MOVEF */
+		OPER_2ND, OPER_1ST, OPER_2ND, OPER_1ST, }, /* undo OP_MOVE  */
 	{ OPER_1ST, OPER_2ND, OPER_2ND, OPER_NON,    /* do   OP_MOVETMP1 */
 		OPER_2ND, OPER_1ST, OPER_2ND, OPER_NON, }, /* undo OP_MOVETMP1 */
 	{ OPER_1ST, OPER_2ND, OPER_1ST, OPER_NON,    /* do   OP_MOVETMP2 */
@@ -147,7 +152,7 @@ static enum
 	{ OPER_1ST, OPER_NON, OPER_NON, OPER_1ST,    /* do   OP_MKDIR */
 		OPER_1ST, OPER_NON, OPER_1ST, OPER_NON, }, /* undo OP_RMDIR */
 	{ OPER_1ST, OPER_NON, OPER_1ST, OPER_NON,    /* do   OP_RMDIR */
-		OPER_NON, OPER_NON, OPER_NON, OPER_NON, }, /* undo OP_NONE  */
+		OPER_1ST, OPER_NON, OPER_NON, OPER_1ST, }, /* undo OP_MKDIR */
 	{ OPER_1ST, OPER_NON, OPER_NON, OPER_1ST,    /* do   OP_MKFILE */
 		OPER_1ST, OPER_NON, OPER_1ST, OPER_NON, }, /* undo OP_REMOVE  */
 };
@@ -158,9 +163,10 @@ static int data_is_ptr[] = {
 	1, /* OP_USR */
 	0, /* OP_REMOVE */
 	0, /* OP_REMOVESL */
-	0, /* OP_COPY   */
+	0, /* OP_COPY */
+	0, /* OP_COPYF */
 	0, /* OP_MOVE */
-	0, /* OP_MOVETMP0 */
+	0, /* OP_MOVEF */
 	0, /* OP_MOVETMP1 */
 	0, /* OP_MOVETMP2 */
 	0, /* OP_MOVETMP3 */
@@ -187,6 +193,8 @@ static perform_func do_func;
 /* External function, which corrects operation availability and influence on
  * operation checks. */
 static op_available_func op_avail_func;
+/* External optional callback to abort execution of compound operations. */
+static undo_cancel_requested cancel_func;
 /* Number of undo levels, which are not groups but operations. */
 static const int *undo_levels;
 
@@ -195,8 +203,6 @@ static cmd_t cmds = {
 };
 static cmd_t *current = &cmds;
 
-static size_t trash_dir_len;
-
 static int group_opened;
 static long long next_group;
 static group_t *last_group;
@@ -204,6 +210,7 @@ static char *group_msg;
 
 static int command_count;
 
+static int no_function(void);
 static void init_cmd(cmd_t *cmd, OPS op, void *do_data, void *undo_data);
 static void init_entry(cmd_t *cmd, const char **e, int type);
 static void remove_cmd(cmd_t *cmd);
@@ -211,22 +218,28 @@ static int is_undo_group_possible(void);
 static int is_redo_group_possible(void);
 static int is_op_possible(const op_t *op);
 static void change_filename_in_trash(cmd_t *cmd, const char *filename);
-static void update_entry(const char **e, const char *old, const char *new);
+static void update_entry(const char **e, const char old[], const char new[]);
 static char ** fill_undolist_detail(char **list);
 static const char * get_op_desc(op_t op);
 static char **fill_undolist_nondetail(char **list);
 
 void
 init_undo_list(perform_func exec_func, op_available_func op_avail,
-		const int* max_levels)
+		undo_cancel_requested cancel, const int* max_levels)
 {
 	assert(exec_func != NULL);
 
 	do_func = exec_func;
 	op_avail_func = op_avail;
+	cancel_func = (cancel != NULL) ? cancel : &no_function;
 	undo_levels = max_levels;
+}
 
-	trash_dir_len = strlen(cfg.trash_dir);
+/* Always says no.  Returns zero. */
+static int
+no_function(void)
+{
+	return 0;
 }
 
 void
@@ -297,7 +310,17 @@ add_operation(OPS op, void *do_data, void *undo_data, const char *buf1,
 		remove_cmd(cmds.next);
 
 	if(*undo_levels <= 0)
+	{
+		if(data_is_ptr[op])
+		{
+			free(do_data);
+		}
+		if(data_is_ptr[undo_op[op]])
+		{
+			free(undo_data);
+		}
 		return 0;
+	}
 
 	command_count++;
 
@@ -439,6 +462,7 @@ undo_group(void)
 {
 	int errors, disbalance, cant_undone;
 	int skip;
+	int cancelled;
 	assert(!group_opened);
 
 	if(current == &cmds)
@@ -484,12 +508,21 @@ undo_group(void)
 		}
 		current = current->prev;
 	}
-	while(current != &cmds && current->group == current->next->group);
+	while(!(cancelled = cancel_func()) && current != &cmds &&
+			current->group == current->next->group);
 
-	if(skip)
+	if(cancelled)
+	{
+		return -7;
+	}
+	else if(skip)
+	{
 		return -6;
-
-	return errors ? -2 : 0;
+	}
+	else
+	{
+		return errors ? -2 : 0;
+	}
 }
 
 static int
@@ -515,6 +548,7 @@ redo_group(void)
 {
 	int errors, disbalance;
 	int skip;
+	int cancelled;
 	assert(!group_opened);
 
 	if(current->next == NULL)
@@ -557,12 +591,21 @@ redo_group(void)
 			}
 		}
 	}
-	while(current->next != NULL && current->group == current->next->group);
+	while(!(cancelled = cancel_func()) && current->next != NULL &&
+			current->group == current->next->group);
 
-	if(skip)
+	if(cancelled)
+	{
+		return -7;
+	}
+	else if(skip)
+	{
 		return -6;
-
-	return errors ? -2 : 0;
+	}
+	else
+	{
+		return errors ? -2 : 0;
+	}
 }
 
 static int
@@ -607,7 +650,7 @@ is_op_possible(const op_t *op)
 		return 0;
 	if(op->dont_exist != NULL && lstat(op->dont_exist, &st) == 0)
 	{
-		if(strnoscmp(op->dst, cfg.trash_dir, trash_dir_len) == 0)
+		if(is_under_trash(op->dst))
 			return -1;
 		return 0;
 	}
@@ -617,23 +660,23 @@ is_op_possible(const op_t *op)
 static void
 change_filename_in_trash(cmd_t *cmd, const char *filename)
 {
-	char *p;
-	int i;
-	char buf[PATH_MAX];
+	const char *name_tail;
+	char *new;
 	char *old;
+	char *const base_dir = strdup(filename);
 
-	p = strchr(filename + trash_dir_len, '_') + 1;
+	remove_last_path_component(base_dir);
 
-	i = -1;
-	do
-	{
-		snprintf(buf, sizeof(buf), "%s/%03i_%s", cfg.trash_dir, ++i, p);
-	}
-	while(path_exists(buf));
-	rename_in_registers(filename, buf);
+	name_tail = get_real_name_from_trash_name(filename);
+	new = gen_trash_name(base_dir, name_tail);
+	assert(new != NULL && "Should always get trash name here.");
+
+	free(base_dir);
 
 	old = cmd->buf2;
-	(void)replace_string(&cmd->buf2, buf);
+	cmd->buf2 = new;
+
+	rename_in_registers(filename, new);
 
 	update_entry(&cmd->do_op.src, old, cmd->buf2);
 	update_entry(&cmd->do_op.dst, old, cmd->buf2);
@@ -643,13 +686,18 @@ change_filename_in_trash(cmd_t *cmd, const char *filename)
 	update_entry(&cmd->undo_op.dst, old, cmd->buf2);
 	update_entry(&cmd->undo_op.exists, old, cmd->buf2);
 	update_entry(&cmd->undo_op.dont_exist, old, cmd->buf2);
+
+	free(old);
 }
 
+/* Checks whether *e equals old and updates it to new if so. */
 static void
-update_entry(const char **e, const char *old, const char *new)
+update_entry(const char **e, const char old[], const char new[])
 {
 	if(*e == old)
+	{
 		*e = new;
+	}
 }
 
 char **
@@ -736,7 +784,7 @@ get_op_desc(op_t op)
 			strcpy(buf, "<no operation>");
 			break;
 		case OP_USR:
-			strcpy(buf, (char *)op.data);
+			copy_str(buf, sizeof(buf), (const char *)op.data);
 			break;
 		case OP_REMOVE:
 		case OP_REMOVESL:
@@ -745,17 +793,22 @@ get_op_desc(op_t op)
 		case OP_COPY:
 			snprintf(buf, sizeof(buf), "cp %s to %s", op.src, op.dst);
 			break;
+		case OP_COPYF:
+			snprintf(buf, sizeof(buf), "cp -f %s to %s", op.src, op.dst);
+			break;
 		case OP_MOVE:
-		case OP_MOVETMP0:
 		case OP_MOVETMP1:
 		case OP_MOVETMP2:
 			snprintf(buf, sizeof(buf), "mv %s to %s", op.src, op.dst);
 			break;
+		case OP_MOVEF:
+			snprintf(buf, sizeof(buf), "mv -f %s to %s", op.src, op.dst);
+			break;
 		case OP_CHOWN:
-			snprintf(buf, sizeof(buf), "chown %ld %s", (long)op.data, op.src);
+			snprintf(buf, sizeof(buf), "chown " PRINTF_SIZE_T " %s", (size_t)op.data, op.src);
 			break;
 		case OP_CHGRP:
-			snprintf(buf, sizeof(buf), "chown :%ld %s", (long)op.data, op.src);
+			snprintf(buf, sizeof(buf), "chown :" PRINTF_SIZE_T " %s", (size_t)op.data, op.src);
 			break;
 #ifndef _WIN32
 		case OP_CHMOD:
@@ -764,10 +817,10 @@ get_op_desc(op_t op)
 			break;
 #else
 		case OP_ADDATTR:
-			snprintf(buf, sizeof(buf), "attrib +%s", attr_str((DWORD)op.data));
+			snprintf(buf, sizeof(buf), "attrib +%s", attr_str((size_t)op.data));
 			break;
 		case OP_SUBATTR:
-			snprintf(buf, sizeof(buf), "attrib -%s", attr_str((DWORD)op.data));
+			snprintf(buf, sizeof(buf), "attrib -%s", attr_str((size_t)op.data));
 			break;
 #endif
 		case OP_SYMLINK:
@@ -849,14 +902,12 @@ clean_cmds_with_trash(void)
 
 		if(cur->group->balance < 0)
 		{
-			if(cur->do_op.exists != NULL &&
-					strnoscmp(cur->do_op.exists, cfg.trash_dir, trash_dir_len) == 0)
+			if(cur->do_op.exists != NULL && is_under_trash(cur->do_op.exists))
 				remove_cmd(cur);
 		}
 		else
 		{
-			if(cur->undo_op.exists != NULL &&
-					strnoscmp(cur->undo_op.exists, cfg.trash_dir, trash_dir_len) == 0)
+			if(cur->undo_op.exists != NULL && is_under_trash(cur->undo_op.exists))
 				remove_cmd(cur);
 		}
 		cur = prev;

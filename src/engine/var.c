@@ -16,13 +16,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "var.h"
+
 #include <assert.h> /* assert() */
 #include <stddef.h> /* size_t */
-#include <stdio.h> /* sprintf() snprintf() */
-#include <stdlib.h> /* free() */
+#include <stdio.h> /* sprintf() */
+#include <stdlib.h> /* calloc() free() */
 #include <string.h> /* strdup() */
 
-#include "var.h"
+#include "../utils/str.h"
 
 var_t
 var_false(void)
@@ -63,15 +65,27 @@ var_to_string(const var_t var)
 		case VTYPE_STRING:
 			return strdup(var.value.string);
 		case VTYPE_INT:
-			{
-				size_t len = snprintf(NULL, 0, "%d", var.value.integer);
-				char *str = malloc(len + 1);
-				(void)sprintf(str, "%d", var.value.integer);
-				return str;
-			}
+			return format_str("%d", var.value.integer);
 
 		default:
 			assert(0 && "Var -> String function: unhandled variable type");
+			return calloc(1U, 1U);
+	}
+}
+
+int
+var_to_integer(const var_t var)
+{
+	switch(var.type)
+	{
+		case VTYPE_STRING:
+			return str_to_int(var.value.string);
+		case VTYPE_INT:
+			return var.value.integer;
+
+		default:
+			assert(0 && "Var -> Integer function: unhandled variable type");
+			return 0;
 	}
 }
 
@@ -87,6 +101,7 @@ var_to_boolean(const var_t var)
 
 		default:
 			assert(0 && "Var -> Boolean function: unhandled variable type");
+			return 0;
 	}
 }
 

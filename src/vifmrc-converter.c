@@ -22,22 +22,26 @@
 
 #include <curses.h>
 
-#include <limits.h> /* NAME_MAX PATH_MAX */
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <ctype.h>
+#include <errno.h> /* ENOENT */
 #include <locale.h> /* setlocale() */
-#include <stdio.h>
+#include <stdio.h> /* snprintf() */
 #include <stdlib.h>
-#include <string.h>
+#include <string.h> /* strcpy() */
 
-#include "utils/macros.h"
 #include "utils/fs_limits.h"
+#include "utils/macros.h"
 #include "color_scheme.h"
 
 #define MAX_LEN 1024
+
+/* Maximum number of color scheme files to convert supported by the
+ * implementation. */
+#define MAX_COLOR_SCHEMES 8
 
 enum
 {
@@ -83,7 +87,7 @@ static struct
 	.timefmt = " %m/%d %H:%M"
 };
 
-static char *color_scheme = "Default"; /* COLOR_SCHEME */
+static char color_scheme[MAX_LEN] = "Default"; /* COLOR_SCHEME */
 
 typedef struct
 {
@@ -120,23 +124,27 @@ static struct
 	int windows;   /* vnumber of windows */
 	int lwin_sort; /* lleft window sort */
 	int rwin_sort; /* rright window sort */
-}tui = {
+}
+tui =
+{
 	.windows = 2,
 	.lwin_sort = 2, /* by name */
 	.rwin_sort = 2, /* by name */
 };
 
-static char *lwin_dir; /* dleft window directory */
-static char *rwin_dir; /* Dright window directory */
+static char lwin_dir[PATH_MAX]; /* [d] left window directory */
+static char rwin_dir[PATH_MAX]; /* [D] right window directory */
 
 static struct
 {
-	char *lwin_filter; /* fleft window filter */
-	int lwin_inverted; /* ileft window filter inverted */
-	char *rwin_filter; /* Fright window filter */
-	int rwin_inverted; /* Iright window filter inverted */
-	int use_screen;    /* suse screen program */
-}state = {
+	char *lwin_filter; /* [f] left window filter */
+	int lwin_inverted; /* [i] left window filter inverted */
+	char *rwin_filter; /* [F] right window filter */
+	int rwin_inverted; /* [I] right window filter inverted */
+	int use_screen;    /* [s] use screen program */
+}
+state =
+{
 	.lwin_filter = NULL,
 	.lwin_inverted = 1,
 	.rwin_filter = NULL,
@@ -144,7 +152,8 @@ static struct
 	.use_screen = 0,
 };
 
-char *HI_GROUPS[] = {
+char *HI_GROUPS[] =
+{
 	[WIN_COLOR]          = "Win",
 	[DIRECTORY_COLOR]    = "Directory",
 	[LINK_COLOR]         = "Link",
@@ -393,12 +402,12 @@ read_config_file(const char *config_file)
 			}
 			if(!strcmp(line, "LWIN_PATH"))
 			{
-				lwin_dir = strdup(s1);
+				snprintf(lwin_dir, sizeof(lwin_dir), "%s", s1);
 				continue;
 			}
 			if(!strcmp(line, "RWIN_PATH"))
 			{
-				rwin_dir = strdup(s1);
+				snprintf(rwin_dir, sizeof(rwin_dir), "%s", s1);
 				continue;
 			}
 			if(!strcmp(line, "FOLLOW_LINKS"))
@@ -418,7 +427,7 @@ read_config_file(const char *config_file)
 			}
 			if(!strcmp(line, "COLOR_SCHEME"))
 			{
-				color_scheme = strdup(s1);
+				snprintf(color_scheme, sizeof(color_scheme), "%s", s1);
 				continue;
 			}
 			if(!strcmp(line, "TIME_STAMP_FORMAT"))
@@ -486,6 +495,7 @@ main(int argc, char **argv)
 	char colorschemes_file[PATH_MAX], colors_dir[PATH_MAX];
 	int vifm_like;
 	char *vifmrc_arg, *vifminfo_arg;
+	int err;
 
 	(void)setlocale(LC_ALL, "");
 
@@ -567,27 +577,22 @@ main(int argc, char **argv)
 	read_config_file(config_file);
 	read_config_file(vifminfo_file);
 
-	if(access(config_file, F_OK) == 0)
+	(void)unlink(config_file_bak);
+	err = rename(config_file, config_file_bak);
+	if(err != 0 && err != ENOENT)
 	{
-		if(access(config_file_bak, F_OK) == 0)
-			unlink(config_file_bak);
-		if(rename(config_file, config_file_bak) != 0)
-		{
-			fprintf(stderr, "Can't move vifmrc file to make a backup copy "
-					"(from \"%s\" to \"%s\")\n", config_file, config_file_bak);
-			exit(1);
-		}
+		fprintf(stderr, "Can't move vifmrc file to make a backup copy "
+				"(from \"%s\" to \"%s\")\n", config_file, config_file_bak);
+		exit(1);
 	}
-	if(access(vifminfo_file, F_OK) == 0)
+
+	(void)unlink(vifminfo_file_bak);
+	err = rename(vifminfo_file, vifminfo_file_bak);
+	if(err != 0 && err != ENOENT)
 	{
-		if(access(vifminfo_file_bak, F_OK) == 0)
-			unlink(vifminfo_file_bak);
-		if(rename(vifminfo_file, vifminfo_file_bak) != 0)
-		{
-			fprintf(stderr, "Can't move vifminfo file to make a backup copy "
-					"(from \"%s\" to \"%s\")\n", vifminfo_file, vifminfo_file_bak);
-			exit(1);
-		}
+		fprintf(stderr, "Can't move vifminfo file to make a backup copy "
+				"(from \"%s\" to \"%s\")\n", vifminfo_file, vifminfo_file_bak);
+		exit(1);
 	}
 
 	write_vifmrc(vifmrc_arg, vifm_like);
@@ -1083,7 +1088,7 @@ read_color_scheme_file(const char *config_file)
 		return;
 	}
 
-	while(fgets(line, MAX_LEN, fp))
+	while(fgets(line, sizeof(line), fp))
 	{
 		int args;
 
@@ -1328,14 +1333,14 @@ write_color_schemes(const char *colors_dir)
 			if(fg == -1)
 				strcpy(fg_buf, "none");
 			else if(fg < ARRAY_LEN(COLOR_NAMES))
-				strcpy(fg_buf, COLOR_NAMES[fg]);
+				snprintf(fg_buf, sizeof(fg_buf), "%s", COLOR_NAMES[fg]);
 			else
 				snprintf(fg_buf, sizeof(fg_buf), "%d", fg);
 
 			if(bg == -1)
 				strcpy(bg_buf, "none");
 			else if(bg < ARRAY_LEN(COLOR_NAMES))
-				strcpy(bg_buf, COLOR_NAMES[bg]);
+				snprintf(bg_buf, sizeof(bg_buf), "%s", COLOR_NAMES[bg]);
 			else
 				snprintf(bg_buf, sizeof(bg_buf), "%d", bg);
 

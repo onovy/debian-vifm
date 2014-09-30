@@ -17,23 +17,24 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifdef _WIN32
+#include "volumes_menu.h"
+
 #include <windows.h>
-#endif
 
 #include <stdio.h> /* snprintf() */
 #include <string.h> /* strdup() */
 
 #include "../modes/menu.h"
 #include "../utils/fs.h"
+#include "../utils/str.h"
 #include "../utils/string_array.h"
 #include "../filelist.h"
 #include "../ui.h"
 #include "menus.h"
 
-#include "volumes_menu.h"
+static int execute_volumes_cb(FileView *view, menu_info *m);
 
-void
+int
 show_volumes_menu(FileView *view)
 {
 	TCHAR c;
@@ -41,8 +42,9 @@ show_volumes_menu(FileView *view)
 	TCHAR file_buf[MAX_PATH];
 
 	static menu_info m;
-	init_menu_info(&m, VOLUMES);
+	init_menu_info(&m, VOLUMES_MENU, strdup("No volumes mounted"));
 	m.title = strdup(" Mounted Volumes ");
+	m.execute_handler = &execute_volumes_cb;
 
 	for(c = TEXT('a'); c < TEXT('z'); c++)
 	{
@@ -60,23 +62,23 @@ show_volumes_menu(FileView *view)
 		}
 	}
 
-	setup_menu();
-	draw_menu(&m);
-	move_to_menu_pos(0, &m);
-	enter_menu_mode(&m, view);
+	return display_menu(&m, view);
 }
 
-void
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
 execute_volumes_cb(FileView *view, menu_info *m)
 {
 	char path_buf[4];
-	snprintf(path_buf, 4, "%s", m->items[m->pos]);
+	copy_str(path_buf, sizeof(path_buf), m->items[m->pos]);
 
-	if(change_directory(view, path_buf) < 0)
-		return;
-
-	load_dir_list(view, 0);
-	move_to_list_pos(view, 0);
+	if(change_directory(view, path_buf) >= 0)
+	{
+		load_dir_list(view, 0);
+		move_to_list_pos(view, 0);
+	}
+	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

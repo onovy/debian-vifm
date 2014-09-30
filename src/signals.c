@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "signals.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -56,8 +58,6 @@ static void _gnuc_noreturn shutdown_nicely(void);
 #include "status.h"
 #include "term_title.h"
 #include "ui.h"
-
-#include "signals.h"
 
 /* Handle term resizing in X */
 static void
@@ -99,6 +99,9 @@ handle_signal(int sig)
 {
 	switch(sig)
 	{
+		case SIGINT:
+			ui_cancellation_request();
+			break;
 		case SIGCHLD:
 			received_sigchld();
 			break;
@@ -118,6 +121,7 @@ handle_signal(int sig)
 			break;
 	}
 }
+
 #else
 BOOL WINAPI
 ctrl_handler(DWORD dwCtrlType)
@@ -128,6 +132,7 @@ ctrl_handler(DWORD dwCtrlType)
 	{
 		case CTRL_C_EVENT:
 		case CTRL_BREAK_EVENT:
+			ui_cancellation_request();
 			break;
 		case CTRL_CLOSE_EVENT:
 		case CTRL_LOGOFF_EVENT:
@@ -167,6 +172,7 @@ setup_signals(void)
 
 	sigaction(SIGCHLD, &handle_signal_action, NULL);
 	sigaction(SIGHUP, &handle_signal_action, NULL);
+	sigaction(SIGINT, &handle_signal_action, NULL);
 	sigaction(SIGQUIT, &handle_signal_action, NULL);
 	sigaction(SIGCONT, &handle_signal_action, NULL);
 	sigaction(SIGTERM, &handle_signal_action, NULL);
@@ -180,9 +186,8 @@ setup_signals(void)
 	{
 		LOG_WERROR(GetLastError());
 	}
-#endif
-
 	signal(SIGINT, SIG_IGN);
+#endif
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

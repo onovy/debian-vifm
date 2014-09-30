@@ -17,55 +17,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __COLOR_SCHEME_H__
-#define __COLOR_SCHEME_H__
+#ifndef VIFM__COLOR_SCHEME_H__
+#define VIFM__COLOR_SCHEME_H__
 
-#include <limits.h> /* NAME_MAX PATH_MAX */
+#include <stddef.h> /* size_t */
 
+#include "utils/fs_limits.h"
 #ifdef _WIN32
 #include "utils/utils.h"
 #endif
-#include "utils/fs_limits.h"
-
-#define MAX_COLOR_SCHEMES 8
-
-enum
-{
-	WIN_COLOR,
-	DIRECTORY_COLOR,
-	LINK_COLOR,
-	BROKEN_LINK_COLOR,
-	SOCKET_COLOR,
-	DEVICE_COLOR,
-	FIFO_COLOR,
-	EXECUTABLE_COLOR,
-	SELECTED_COLOR,
-	CURR_LINE_COLOR,
-	TOP_LINE_COLOR,
-	TOP_LINE_SEL_COLOR,
-	STATUS_LINE_COLOR,
-	MENU_COLOR,
-	CMD_LINE_COLOR,
-	ERROR_MSG_COLOR,
-	BORDER_COLOR,
-	CURRENT_COLOR,      /* for internal use only */
-	MENU_CURRENT_COLOR, /* for internal use only */
-	MAXNUM_COLOR
-};
-
-enum
-{
-	DCOLOR_BASE = 1,
-	LCOLOR_BASE = DCOLOR_BASE + MAXNUM_COLOR,
-	RCOLOR_BASE = LCOLOR_BASE + MAXNUM_COLOR,
-};
-
-typedef struct
-{
-	int fg;
-	int bg;
-	int attr;
-}col_attr_t;
+#include "colors.h"
 
 typedef struct
 {
@@ -83,16 +44,22 @@ extern char *LIGHT_COLOR_NAMES[8];
 void load_color_scheme_colors(void);
 void load_def_scheme(void);
 int check_directory_for_color_scheme(int left, const char *dir);
-/* Returns value lower than zero when nothing is found */
-int find_color_scheme(const char *name);
-void complete_colorschemes(const char *name);
+/* Lists names of all color schemes.  Allocates an array of strings, which
+ * should be freed by the caller.  Always sets *len.  Returns NULL on error. */
+char ** list_color_schemes(int *len);
+/* Returns non-zero if colorscheme named name exists. */
+int color_scheme_exists(const char name[]);
+void complete_colorschemes(const char name[]);
 const char * attrs_to_str(int attrs);
 void check_color_scheme(col_scheme_t *cs);
 void assoc_dir(const char *name, const char *dir);
 void write_color_scheme_file(void);
+/* Converts color specified by an integer to a string and writes result in a
+ * buffer of length buf_len pointed to by str_buf. */
+void color_to_str(int color, size_t buf_len, char str_buf[]);
 void mix_colors(col_attr_t *base, const col_attr_t *mixup);
 
-#endif
+#endif /* VIFM__COLOR_SCHEME_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

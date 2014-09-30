@@ -17,18 +17,21 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "jobs_menu.h"
+
 #include <signal.h> /* sig* */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* malloc() realloc() */
 #include <string.h> /* strlen() strdup() */
 
 #include "../modes/menu.h"
+#include "../utils/str.h"
 #include "../utils/string_array.h"
 #include "../background.h"
 #include "../ui.h"
 #include "menus.h"
 
-#include "jobs_menu.h"
+static int execute_jobs_cb(FileView *view, menu_info *m);
 
 int
 show_jobs_menu(FileView *view)
@@ -39,7 +42,9 @@ show_jobs_menu(FileView *view)
 #endif
 	int i;
 	static menu_info m;
-	init_menu_info(&m, JOBS);
+	init_menu_info(&m, JOBS_MENU, strdup("No jobs currently running"));
+	m.title = strdup(" Pid --- Command ");
+	m.execute_handler = &execute_jobs_cb;
 
 	/*
 	 * SIGCHLD needs to be blocked anytime the finished_jobs list
@@ -65,7 +70,8 @@ show_jobs_menu(FileView *view)
 				snprintf(item_buf, sizeof(item_buf), " %d/%d %s ", p->done + 1,
 						p->total, p->cmd);
 			else
-				snprintf(item_buf, sizeof(item_buf), " %d %s ", p->pid, p->cmd);
+				snprintf(item_buf, sizeof(item_buf), " " PRINTF_PID_T " %s ", p->pid,
+						p->cmd);
 			i = add_to_string_array(&m.items, i, 1, item_buf);
 		}
 
@@ -79,27 +85,16 @@ show_jobs_menu(FileView *view)
 
 	m.len = i;
 
-	if(m.len < 1)
-	{
-		m.len = add_to_string_array(&m.items, 0, 1, "Press return to continue.");
-		m.title = strdup(" No jobs currently running ");
-	}
-	else
-	{
-		m.title = strdup(" Pid --- Command ");
-	}
-
-	setup_menu();
-	draw_menu(&m);
-	move_to_menu_pos(m.pos, &m);
-	enter_menu_mode(&m, view);
-	return 0;
+	return display_menu(&m, view);
 }
 
-void
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
 execute_jobs_cb(FileView *view, menu_info *m)
 {
 	/* TODO write code for job control */
+	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

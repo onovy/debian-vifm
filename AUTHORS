@@ -1,4 +1,4 @@
-All suggestions or complaints should be sent to xaizek@lavabit.com.
+All suggestions or complaints should be sent to xaizek@openmailbox.org.
 
 Real author is Ken Steen ksteen@users.sourceforge.net.
 
@@ -9,8 +9,8 @@ Some of the code is from emelfm by Michael Clark.
 The screen-open-region-with-program and screen-ren-program-in-region were
 written by Miciah Dashiel Butler Masters.
 
-The file sorting function is from the git program by Tudor Hulubei 
-	and Andrei Pitis.  
+The file sorting function is from the git program by Tudor Hulubei
+	and Andrei Pitis.
 
 A patch for filetypes detection was written by Stefan Walter.
 
@@ -67,3 +67,9 @@ Chris Skalenda wrote a patch to allow setting the trash directory location.
 
 Miles (pkordy) provided a patch to fix opening of tagged (selected) symbolic
 links to a directory.
+
+Gentoo ebuild by Oleg Gordienko (gordio).
+
+Seth VanHeulen (a.k.a. svanheulen) added integration with tmux.
+
+MadMaverick9 provided patches for various fixes.

@@ -17,15 +17,18 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#define _GNU_SOURCE
+#include "sort.h"
 
 #include <curses.h>
 
-#include <fcntl.h> /* access */
 #include <sys/stat.h>
+#include <fcntl.h> /* access() */
 
+#include <assert.h> /* assert() */
 #include <ctype.h>
-#include <string.h> /* strrchr */
+#include <math.h> /* abs() */
+#include <stdlib.h> /* qsort() */
+#include <string.h> /* strrchr() */
 
 #include "cfg/config.h"
 #include "utils/fs_limits.h"
@@ -34,21 +37,26 @@
 #include "utils/str.h"
 #include "utils/test_helpers.h"
 #include "utils/tree.h"
+#include "utils/utils.h"
 #include "filelist.h"
 #include "status.h"
 #include "ui.h"
-
-#include "sort.h"
 
 static FileView* view;
 static int sort_descending;
 static int sort_type;
 
+static void sort_by_key(char key);
 static int sort_dir_list(const void *one, const void *two);
+static int is_directory_entry(const dir_entry_t *entry);
 TSTATIC int strnumcmp(const char s[], const char t[]);
-#if defined(_WIN32) || defined(__APPLE__) || defined(__CYGWIN__)
+#if !defined(HAVE_STRVERSCMP_FUNC) || !HAVE_STRVERSCMP_FUNC
 static int vercmp(const char s[], const char t[]);
+#else
+static char * skip_leading_zeros(const char str[]);
 #endif
+static int compare_file_names(int dirs, const char s[], const char t[],
+		int ignore_case);
 
 void
 sort_view(FileView *v)
@@ -56,67 +64,56 @@ sort_view(FileView *v)
 	int i;
 
 	view = v;
-	i = NUM_SORT_OPTIONS;
+	i = SORT_OPTION_COUNT;
 	while(--i >= 0)
 	{
-		int j;
+		const char sorting_key = view->sort[i];
 
-		if(view->sort[i] > NUM_SORT_OPTIONS)
+		if(abs(sorting_key) > LAST_SORT_OPTION)
+		{
 			continue;
+		}
 
-		sort_descending = (view->sort[i] < 0);
-		sort_type = abs(view->sort[i]);
+		sort_by_key(sorting_key);
+	}
 
-		for(j = 0; j < view->list_rows; j++)
-			view->dir_entry[j].list_num = j;
-
-		qsort(view->dir_entry, view->list_rows, sizeof(dir_entry_t), sort_dir_list);
+	if(!ui_view_sort_list_contains(v->sort, SORT_BY_TYPE))
+	{
+		sort_by_key(SORT_BY_TYPE);
 	}
 }
 
-static int
-compare_file_names(const char *s, const char *t, int ignore_case)
+/* Sorts view by the key in a stable way. */
+static void
+sort_by_key(char key)
 {
-	char s_buf[NAME_MAX];
-	char t_buf[NAME_MAX];
+	int j;
 
-	snprintf(s_buf, sizeof(s_buf), "%s", s);
-	chosp(s_buf);
-	s = s_buf;
-	snprintf(t_buf, sizeof(t_buf), "%s", t);
-	chosp(t_buf);
-	t = t_buf;
+	sort_descending = (key < 0);
+	sort_type = abs(key);
 
-	if(ignore_case)
+	for(j = 0; j < view->list_rows; j++)
 	{
-		strtolower(s_buf);
-		strtolower(t_buf);
+		view->dir_entry[j].list_num = j;
 	}
 
-	return !cfg.sort_numbers ? strcmp(s, t) : strnumcmp(s, t);
+	qsort(view->dir_entry, view->list_rows, sizeof(dir_entry_t), sort_dir_list);
 }
 
 /* Compares file names containing numbers correctly. */
 TSTATIC int
 strnumcmp(const char s[], const char t[])
 {
-#if defined(_WIN32) || defined(__APPLE__) || defined(__CYGWIN__)
-		return vercmp(s, t);
+#if !defined(HAVE_STRVERSCMP_FUNC) || !HAVE_STRVERSCMP_FUNC
+	return vercmp(s, t);
 #else
-		const char *new_s = skip_all(s, '0');
-		const char *new_t = skip_all(t, '0');
-		if(new_s[0] == '\0' || new_t[0] == '\0')
-		{
-			return strverscmp(new_s, new_t);
-		}
-		else
-		{
-			return strverscmp(s, t);
-		}
+	const char *new_s = skip_leading_zeros(s);
+	const char *new_t = skip_leading_zeros(t);
+	return strverscmp(new_s, new_t);
 #endif
 }
 
-#if defined(_WIN32) || defined(__APPLE__) || defined(__CYGWIN__)
+#if !defined(HAVE_STRVERSCMP_FUNC) || !HAVE_STRVERSCMP_FUNC
 static int
 vercmp(const char s[], const char t[])
 {
@@ -150,6 +147,18 @@ vercmp(const char s[], const char t[])
 
 	return *s - *t;
 }
+#else
+/* Skips all zeros in front of numbers (correctly handles zero).  Returns str, a
+ * pointer to '0' or a pointer to non-zero digit. */
+static char *
+skip_leading_zeros(const char str[])
+{
+	while(str[0] == '0' && isdigit(str[1]))
+	{
+		str++;
+	}
+	return (char *)str;
+}
 #endif
 
 static int
@@ -157,28 +166,25 @@ sort_dir_list(const void *one, const void *two)
 {
 	int retval;
 	char *pfirst, *psecond;
-	dir_entry_t *first = (dir_entry_t *) one;
-	dir_entry_t *second = (dir_entry_t *) two;
-	int first_is_dir = 0;
-	int second_is_dir = 0;
+	dir_entry_t *const first = (dir_entry_t *)one;
+	dir_entry_t *const second = (dir_entry_t *)two;
+	int first_is_dir;
+	int second_is_dir;
+	int dirs;
 
-	if(first->type == DIRECTORY)
-		first_is_dir = 1;
-	else if(first->type == LINK)
-		first_is_dir = (first->name[strlen(first->name) - 1] == '/');
-
-	if(second->type == DIRECTORY)
-		second_is_dir = 1;
-	else if(second->type == LINK)
-		second_is_dir = (second->name[strlen(second->name) - 1] == '/');
-
-	if(first_is_dir != second_is_dir)
-		return first_is_dir ? -1 : 1;
-
-	if(stroscmp(first->name, "../") == 0)
+	if(is_parent_dir(first->name))
+	{
 		return -1;
-	else if(stroscmp(second->name, "../") == 0)
+	}
+	else if(is_parent_dir(second->name))
+	{
 		return 1;
+	}
+
+	first_is_dir = is_directory_entry(first);
+	second_is_dir = is_directory_entry(second);
+
+	dirs = first_is_dir || second_is_dir;
 
 	retval = 0;
 	switch(sort_type)
@@ -190,8 +196,15 @@ sort_dir_list(const void *one, const void *two)
 			else if(first->name[0] != '.' && second->name[0] == '.')
 				retval = 1;
 			else
-				retval = compare_file_names(first->name, second->name,
+				retval = compare_file_names(dirs, first->name, second->name,
 						sort_type == SORT_BY_INAME);
+			break;
+
+		case SORT_BY_TYPE:
+			if(first_is_dir != second_is_dir)
+			{
+				retval = first_is_dir ? -1 : 1;
+			}
 			break;
 
 		case SORT_BY_EXTENSION:
@@ -199,11 +212,11 @@ sort_dir_list(const void *one, const void *two)
 			psecond = strrchr(second->name, '.');
 
 			if(pfirst && psecond)
-				retval = compare_file_names(++pfirst, ++psecond, 0);
+				retval = compare_file_names(dirs, ++pfirst, ++psecond, 0);
 			else if(pfirst || psecond)
 				retval = pfirst ? -1 : 1;
 			else
-				retval = compare_file_names(first->name, second->name, 0);
+				retval = compare_file_names(dirs, first->name, second->name, 0);
 			break;
 
 		case SORT_BY_SIZE:
@@ -231,7 +244,6 @@ sort_dir_list(const void *one, const void *two)
 			retval = first->ctime - second->ctime;
 			break;
 #ifndef _WIN32
-
 		case SORT_BY_MODE:
 			retval = first->mode - second->mode;
 			break;
@@ -245,15 +257,77 @@ sort_dir_list(const void *one, const void *two)
 		case SORT_BY_GROUP_ID:
 			retval = first->gid - second->gid;
 			break;
+
+		case SORT_BY_PERMISSIONS:
+			{
+				char first_perm[11], second_perm[11];
+				get_perm_string(first_perm, sizeof(first_perm), first->mode);
+				get_perm_string(second_perm, sizeof(second_perm), second->mode);
+				retval = strcmp(first_perm, second_perm);
+			}
+			break;
 #endif
+
+		default:
+			assert(0 && "All possible sort options should be handled");
+			break;
 	}
 
 	if(retval == 0)
+	{
 		retval = first->list_num - second->list_num;
+	}
 	else if(sort_descending)
+	{
 		retval = -retval;
+	}
 
 	return retval;
+}
+
+/* Checks whether entry corresponds to a directory.  Returns non-zero if so,
+ * otherwise zero is returned. */
+static int
+is_directory_entry(const dir_entry_t *entry)
+{
+	return (entry->type == DIRECTORY)
+	    || (entry->type == LINK && ends_with_slash(entry->name));
+}
+
+/* Compares two filenames.  Returns positive value if s greater than t, zero if
+ * they are equal, otherwise negative value is returned. */
+static int
+compare_file_names(int dirs, const char s[], const char t[], int ignore_case)
+{
+	char s_buf[NAME_MAX];
+	char t_buf[NAME_MAX];
+
+	/* TODO: FIXME: get rid of this when slash is removed from directory names. */
+	if(dirs)
+	{
+		copy_substr(s_buf, sizeof(s_buf), s, '/');
+		s = s_buf;
+
+		copy_substr(t_buf, sizeof(t_buf), t, '/');
+		t = t_buf;
+	}
+
+	if(ignore_case)
+	{
+		if(!dirs)
+		{
+			copy_str(s_buf, sizeof(s_buf), s);
+			s = s_buf;
+
+			copy_str(t_buf, sizeof(t_buf), t);
+			t = t_buf;
+		}
+
+		strtolower(s_buf);
+		strtolower(t_buf);
+	}
+
+	return cfg.sort_numbers ? strnumcmp(s, t) : strcmp(s, t);
 }
 
 int
@@ -267,6 +341,7 @@ get_secondary_key(int primary_key)
 		case SORT_BY_GROUP_NAME:
 		case SORT_BY_GROUP_ID:
 		case SORT_BY_MODE:
+		case SORT_BY_PERMISSIONS:
 #endif
 		case SORT_BY_TIME_MODIFIED:
 		case SORT_BY_TIME_ACCESSED:

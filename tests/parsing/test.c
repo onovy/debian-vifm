@@ -8,6 +8,8 @@ void double_quoted_tests(void);
 void envvar_tests(void);
 void functions_tests(void);
 void statements_tests(void);
+void numbers_tests(void);
+void ampersand_tests(void);
 
 void
 all_tests(void)
@@ -18,6 +20,8 @@ all_tests(void)
 	envvar_tests();
 	functions_tests();
 	statements_tests();
+	numbers_tests();
+	ampersand_tests();
 }
 
 int

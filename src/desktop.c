@@ -25,10 +25,10 @@
 #endif
 #include <dirent.h> /* DIR */
 
-#include <limits.h> /* PATH_MAX */
 #include <stdio.h> /* snprintf() */
 #include <string.h> /* strstr() strchr() strlen() strcpy() */
 
+#include "utils/fs_limits.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/utils.h"
@@ -74,8 +74,7 @@ parse_desktop_files_internal(const char *path, const char *mime_type,
 	{
 		char buf[PATH_MAX];
 
-		if(stroscmp(dentry->d_name, ".") == 0 ||
-				stroscmp(dentry->d_name, "..") == 0)
+		if(is_builtin_dir(dentry->d_name))
 		{
 			continue;
 		}

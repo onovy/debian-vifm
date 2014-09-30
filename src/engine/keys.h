@@ -16,8 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __KEYS_H__
-#define __KEYS_H__
+#ifndef VIFM__ENGINE__KEYS_H__
+#define VIFM__ENGINE__KEYS_H__
 
 #include <wchar.h>
 
@@ -199,6 +199,12 @@ wchar_t ** list_cmds(int mode);
  */
 size_t get_key_counter(void);
 
+/*
+ * Checks whether a mapping handler is currently been executed.
+ * Returns non-zero if so, otherwise zero is returned.
+ */
+int is_inside_mapping(void);
+
 TSTATIC_DEFS(
 	/*
 	 * Returns NULL on error
@@ -211,7 +217,7 @@ TSTATIC_DEFS(
 	key_conf_t* add_selector(const wchar_t keys[], int mode);
 )
 
-#endif
+#endif /* VIFM__ENGINE__KEYS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
 /* vim: set cinoptions+=t0 : */

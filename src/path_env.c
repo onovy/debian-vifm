@@ -16,9 +16,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "path_env.h"
+
 #include <dirent.h> /* DIR opendir() readdir() closedir() DT_DIR */
 
-#include <limits.h> /* PATH_MAX */
 #include <stdlib.h> /* malloc() free() */
 #include <string.h> /* strchr() strlen() */
 
@@ -26,11 +27,10 @@
 #include "engine/variables.h"
 #include "utils/env.h"
 #include "utils/fs.h"
+#include "utils/fs_limits.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/string_array.h"
-
-#include "path_env.h"
 
 static int path_env_was_changed(int force);
 static void append_scripts_dirs(void);
@@ -110,10 +110,10 @@ add_dirs_to_path(const char *path)
 	{
 		char buf[PATH_MAX];
 
-		if(stroscmp(dentry->d_name, ".") == 0)
+		if(is_builtin_dir(dentry->d_name))
+		{
 			continue;
-		else if(stroscmp(dentry->d_name, "..") == 0)
-			continue;
+		}
 
 		snprintf(buf, sizeof(buf), "%s%s%s", path, slash, dentry->d_name);
 #ifndef _WIN32
@@ -209,10 +209,14 @@ split_path_list(void)
 
 		s = expand_tilde(s);
 
-		if(!path_exists(s))
+		/* No need to check "." path for existence. */
+		if(strcmp(s, ".") != 0)
 		{
-			free(s);
-			continue;
+			if(!path_exists(s))
+			{
+				free(s);
+				continue;
+			}
 		}
 
 		paths[i++] = s;

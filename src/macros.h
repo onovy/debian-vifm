@@ -17,8 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __MACROS_H__
-#define __MACROS_H__
+#ifndef VIFM__MACROS_H__
+#define VIFM__MACROS_H__
 
 #include "utils/test_helpers.h"
 #include "ui.h"
@@ -32,14 +32,30 @@ typedef enum
 	MACRO_STATUSBAR_OUTPUT, /* redirect output to the status bar */
 	MACRO_SPLIT, /* run command in a new screen region */
 	MACRO_IGNORE, /* completely ignore command output */
+	MACRO_NO_TERM_MUX, /* Forbid using of terminal multiplexer, even if active. */
 }
 MacroFlags;
+
+/* Description of a macro for the expand_custom_macros() function. */
+typedef struct
+{
+	char letter;       /* Macro identifier in the pattern. */
+	const char *value; /* A value to replace macro with. */
+	int uses_left;     /* Number of mandatory uses of the macro for group head. */
+	int group;         /* Index of macro group head or -1. */
+}
+custom_macro_t;
 
 /* args and flags parameters can equal NULL. The string returned needs to be
  * freed in the calling function. After executing flags is one of MACRO_*
  * values. */
-char * expand_macros(FileView *view, const char *command, const char *args,
-		MacroFlags *flags);
+char * expand_macros(const char *command, const char *args, MacroFlags *flags,
+		int for_shell);
+
+/* Expands macros of form %x in the pattern (%% is expanded to %) according to
+ * macros specification. */
+char * expand_custom_macros(const char pattern[], size_t nmacros,
+		custom_macro_t macros[]);
 
 #ifdef TEST
 #include "engine/cmds.h"
@@ -50,7 +66,7 @@ TSTATIC_DEFS(
 			int quotes, const char *mod);
 )
 
-#endif
+#endif /* VIFM__MACROS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

@@ -17,15 +17,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#define _GNU_SOURCE /* I don't know how portable this is but it is
-					   needed in Linux for the ncurses wide char
-					   functions
-					   */
-
-#ifdef __APPLE__
-/* Enable wide functions of ncurses for Mac OS. */
-#define _XOPEN_SOURCE_EXTENDED
-#endif
+#include "main_loop.h"
 
 #include <curses.h>
 
@@ -39,7 +31,7 @@
 #include <unistd.h> /* select() */
 
 #include <assert.h>
-#include <string.h> /* strncpy */
+#include <string.h> /* memmove() strncpy() */
 
 #include "cfg/config.h"
 #include "engine/keys.h"
@@ -55,7 +47,7 @@
 #include "status.h"
 #include "ui.h"
 
-#include "main_loop.h"
+static void process_scheduled_redraw(void);
 
 static wchar_t buf[128];
 static int pos;
@@ -83,10 +75,7 @@ read_char(WINDOW *win, wint_t *c, int timeout)
 	{
 		int j;
 
-		if(is_redraw_scheduled())
-		{
-			modes_redraw();
-		}
+		process_scheduled_redraw();
 
 		if(!is_status_bar_multiline() && !is_in_menu_like_mode() &&
 				get_mode() != CMDLINE_MODE)
@@ -106,10 +95,7 @@ read_char(WINDOW *win, wint_t *c, int timeout)
 			if((result = wget_wch(win, c)) != ERR)
 				break;
 
-			if(is_redraw_scheduled())
-			{
-				modes_redraw();
-			}
+			process_scheduled_redraw();
 		}
 		if(result != ERR)
 			break;
@@ -184,7 +170,9 @@ main_loop(void)
 		/* This waits for timeout then skips if no keypress. */
 		ret = read_char(status_bar, (wint_t*)&c, timeout);
 
-		(void)my_chdir(curr_view->curr_dir);
+		/* Ensure that current working directory is set correctly (some pieces of
+		 * code rely on this). */
+		(void)vifm_chdir(curr_view->curr_dir);
 
 		if(ret != ERR && pos != ARRAY_LEN(buf) - 2)
 		{
@@ -261,10 +249,7 @@ main_loop(void)
 
 		timeout = cfg.timeout_len;
 
-		if(is_redraw_scheduled())
-		{
-			modes_redraw();
-		}
+		process_scheduled_redraw();
 
 		pos = 0;
 		buf[0] = L'\0';
@@ -276,7 +261,22 @@ main_loop(void)
 			update_all_windows();
 			continue;
 		}
+
+		/* Ensure that current working directory is set correctly (some pieces of
+		 * code rely on this).  PWD could be changed during command execution, but
+		 * it should be correct for modes_post() in case of preview modes. */
+		(void)vifm_chdir(curr_view->curr_dir);
 		modes_post();
+	}
+}
+
+/* Redraws TUI if it's scheduled. */
+static void
+process_scheduled_redraw(void)
+{
+	if(is_redraw_scheduled())
+	{
+		modes_redraw();
 	}
 }
 

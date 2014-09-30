@@ -2,13 +2,16 @@
 
 #include "seatest.h"
 
+#include "../../src/engine/completion.h"
 #include "../../src/engine/variables.h"
+#include "../../src/utils/env.h"
 #include "../../src/utils/utils.h"
 
 void format_tests(void);
 void clear_tests(void);
 void envvars_tests(void);
 void completion_tests(void);
+void unlet_tests(void);
 
 void
 all_tests(void)
@@ -17,6 +20,7 @@ all_tests(void)
 	clear_tests();
 	envvars_tests();
 	completion_tests();
+	unlet_tests();
 }
 
 static void
@@ -45,4 +49,5 @@ main(int argc, char **argv)
 	return run_tests(all_tests) == 0;
 }
 
-/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

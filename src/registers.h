@@ -17,21 +17,30 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __REGISTERS_H_
-#define __REGISTERS_H_
+#ifndef VIFM__REGISTERS_H__
+#define VIFM__REGISTERS_H__
+
+/* Name of the default register. */
+#define DEFAULT_REG_NAME '"'
 
 typedef struct
 {
 	int name;
 	int num_files;
-	char ** files;
+	char **files;
 }registers_t;
 
+/* Null terminated list of all valid register names. */
 extern const char valid_registers[];
 
 void init_registers(void);
+/* Checks whether register with the key name exists (A-Z will be rejected).
+ * Returns non-zero if it exists, otherwise zero is returned. */
+int register_exists(int key);
 registers_t * find_register(int key);
 void append_to_register(int reg, const char file[]);
+/* Clears all registers. */
+void clear_registers(void);
 void clear_register(int reg);
 void pack_register(int reg);
 char ** list_registers_content(const char registers[]);
@@ -39,7 +48,7 @@ void rename_in_registers(const char old[], const char new[]);
 void clean_regs_with_trash(void);
 void update_unnamed_reg(int reg);
 
-#endif
+#endif /* VIFM__REGISTERS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

@@ -1,3 +1,733 @@
+0.7.7-beta to 0.7.7
+
+	Improved documentation on :file[x]type commands and time sorting keys.
+	Thanks to Stas Malavin.
+
+	Updated zenburn color scheme (by Svyatoslav Mishyn, a.k.a. juef).
+
+	Fixed drawing "*" mark for cursor in inactive pane.  Thanks to Svyatoslav
+	Mishyn, a.k.a. juef.
+
+	Fixed selecting file on navigation from menus with filelists.
+
+	Fixed processing of backward slashes in menus with filelists on Windows.
+
+	Fixed navigation to menu items with full paths on Windows.  Thanks to
+	Robert Sarkozi.
+
+	Fixed following overwrite all option on file operation conflict
+	resolution.  Thanks to Stas Malavin.
+
+0.7.6 to 0.7.7-beta
+
+	Added Ctrl-W z key to normal and view modes, which closes preview pane or
+	view modes.  Thanks to filterfalse.
+
+	Added %A macro to 'findprg' and 'grepprg' options, which is expanded to
+	unmodified list of arguments.  Thanks to Robert Sarkozi.
+
+	Added handling of paths with backward slashes for :find/:locate/:grep/%M
+	menus on Windows.  Thanks to Robert Sarkozi.
+
+	Added sample light color scheme (provided by Daniel R., a.k.a. reicheltd).
+
+	Added :lstrash command-line command, which displays list of files in trash.
+	Thanks to Sergei Shilovsky.
+
+	Added :trashes command-line command, which lists all non-empty trash
+	directories.  Thanks to Sergei Shilovsky.
+
+	Added cancellation handling for file system operations and invocations of
+	external applications (works best on *nix systems).  Thanks to Milan
+	Svoboda, a.k.a. tex.
+
+	Added "type" key to the 'sort' option to allow controlling grouping of
+	directories.  Thanks to Daniel R., a.k.a. reicheltd.
+
+	Added &option syntax for expressions (returns value of an option).
+
+	Added <nop> angle bracket notation.  Thanks to filterfalse.
+
+	Added 'number', 'relativenumber' and 'numberwidth' options to control
+	displaying of file numbers.  Thanks to filterfalse and greye.
+
+	Added "gf" (go to file) and "e" (open in editor) keys to :grep, :find,
+	:locate and user menu with navigation (%M macro).
+
+	Added --enable-remote-cmd switch to configure script disabled by default,
+	as current implementation of the feature is insecure.
+
+	Added Ctrl-X a/c/d/e/m/r/t/= keys to command-line mode that insert parts of
+	file names and values of filters (see related documentation).  Thanks to
+	ranousse and filterfalse.
+
+	Added %n macro which suppresses using of terminal multiplexer in a
+	command (user-defined :command, :!command or :file[x]type action).
+
+	Added sample dark solarized color scheme (provided by Stéphane, a.k.a.
+	istib).
+
+	Added zenburn color scheme (provided by Svyatoslav Mishyn, a.k.a. juef).
+
+	Extended 'trashdir' to handle list of path, some of which can specify
+	location of trash directories local to each mount point.  Thanks to
+	smpolymen and Sergei Shilovsky.
+
+	Extended parser to support integer number constants and unary minus and
+	plus operators.
+
+	Extended parser to support <, <=, >= and > comparison operators for strings
+	and integers.
+
+	Treat semicolon (";") as a valid range separator for command-line
+	commands.
+
+	Allow empty ranges for command without name (as in :4).
+
+	Don't reset view selection on :if and :else commands.
+
+	Optimized file name comparison on sorting.
+
+	Improved documentation on bookmarks (documented special bookmarks).
+
+	Don't select parent directory automatically for local filter.  Thanks to
+	filterfalse and jtbm37.
+
+	Display error message when :delmarks! is followed by arguments.
+
+	Made bookmarks merging smarter by storing timestamps.  Removing bookmarks
+	now works as expected.  Bookmarks overwriting by another instance
+	shouldn't happen anymore. Thanks to Michael Maddern, a.k.a. madders.
+
+	Disabled command-line commands auto-completion in local filter prompt.
+
+	Allowed disabling quickview while its pane is hidden.
+
+	Display value of local filter in the output of :filter? command.
+
+	Handle backspace in preview window as a terminal.  Thanks to Svenn Are
+	Bjerkem, a.k.a. svenn.
+
+	Do not use terminal multiplexer for internal edit operations (editing of
+	file names or command-line).
+
+	Skip empty and whitespace only error messages, they are of no use.
+
+	Highlight environment variables in :unlet command.  Thanks to filterfalse.
+
+	Fixed file descriptor leak on finishing background tasks.  Thanks to
+	anonymous from linux.org.ru.
+
+	Fixed displaying of search messages in menus.
+
+	Fixed check for whether temporary files with list of file names is
+	changed during bulk rename operation.  Thanks to Daniel R., a.k.a.
+	reicheltd.
+
+	Fixed reset of charset options (like 'cpoptions'), which could result in
+	segmentation faults.
+
+	Fixed memory leaks on :restart command.
+
+	Fixed format arguments parsing on displaying "Invalid expression" error
+	message for :echo and :execute commands.
+
+	Fixed overwrite of previously visited directory on view update (made
+	`:cd -` and '' useless after, for instance, switching panes).
+
+	Fixed error message on navigating to a wrong bookmark.
+
+	Fixed possible removing files at destination on restoring files from trash
+	manually.
+
+	Fixed ignoring command-line commands that entered by a mapping: ignore
+	only commands entirely entered by a mapping, not finished by one. Thanks
+	to Евгений Жаров (a.k.a. ezharov).
+
+	Fixed segmentation failure when invalid bookmark name is used with quote
+	command as a motion.
+
+	Fixed processing of some forms of nested :if statements.
+
+	Fixed segmentation fault for operating systems that have gigantic maximum
+	length of argument list.  Thanks to Jiri Wiesner.
+
+	Fixed situation when oldest elements of histories were not available even
+	though they were present in vifminfo file.
+
+	Fixed number of selected files after ":invert s" command.  Thanks to
+	filterfalse.
+
+	Fixed q= which displayed history of search by mistake.  Thanks to
+	filterfalse.
+
+	Fixed merging directories on delete then paste.
+
+	Fixed wrong file name cropping on moving/copying files from trash.  Thanks
+	to kazufukurou.
+
+	Fixed extra escaping on prompt filename completion on Windows.
+
+	Fixed drawing of hidden view in explore mode over active one.  Thanks to
+	filterfalse.
+
+	Fixed missing title of quickview pane after entering view mode (e.g. with
+	Ctrl-W W).
+
+	Fixed titles update when one of panes is in view mode (active and inactive
+	highlighting wasn't always right).
+
+	Fixed segmentation fault caused by uninitialized type field of filelist
+	entry (shared directory in virtual machine in this case).  Thanks to Milan
+	Svoboda, a.k.a. tex.
+
+	Fixed navigation to non-readable directories from a menu.
+
+	Fixed selection borders UI glitch.  Thanks to Svyatoslav Mishyn, a.k.a.
+	juef.
+
+	Fixed issues discovered by cppcheck, Clang static analyzer and Coverity
+	scan tools.
+
+	Fixed updating terminal title for some environments.  Thanks to
+	filterfalse.
+
+	Fixed extending filetypes that are missing macro on Windows when cmd.exe
+	shell is used.  Thanks to Daniel Polanco, a.k.a. dlpolanco.
+
+	Fixed work with filenames contining special symbols on Windows with cmd.exe
+	shell.  Thanks to Daniel Polanco, a.k.a. dlpolanco.
+
+	Fixed testing whether application uses GUI on Windows when path contains
+	spaces.
+
+	Fixed crash on a sequence of :let/:unlet statements.  Thanks to
+	filterfalse.
+
+0.7.6-beta2 to 0.7.6
+
+	Removed check for stdscr from the configure.  Thanks to jtbm37.
+
+	Made command name column of the :command menu automatically expand for
+	long names.  Thanks to MadMaverick9.
+
+	Provided better error messages on entering view mode.
+
+	Made local filter work when 'incsearch' is not set.
+
+	Fixed partial displaying of binary data in view mode.
+
+	Fixed displaying of non-printable characters in preview and view mode.
+
+	Fixed redrawing ruler on terminal resize while being in explore mode.
+
+	Fixed small drawing issue with menu lines containing Control+x characters.
+
+	Fixed search result highlighting of view mode on line edges.
+
+	Fixed backward search in view mode for the first line.
+
+	Fixed view mode highlighting for multi-byte characters.  Thanks to
+	filterfalse.
+
+	Fixed segmentation fault on exploring same file in both views.  Thanks to
+	filterfalse.
+
+	Fixed unexpected view redraw on :sync command with view mode active in the
+	other pane.  Thanks to filterfalse.
+
+0.7.6-beta to 0.7.6-beta2
+
+	Made building for Windows64 platform possible.
+
+	Consider initial filter inversion value in user defined filter command.
+	Thanks to filterfalse.
+
+	Several minor fixes/updates in documentation and sample vifmrc.  Thanks to
+	filterfalse.
+
+	Display error after sourcing file with unmatched :if/:endif statements.
+	Thanks to filterfalse.
+
+	Fixed displaying of barely visible false error messages on the status bar
+	on some rename operations.
+
+	Fixed running executables without specifying their extension on Windows.
+	Thanks to filterfalse.
+
+	Fixed viewing of files with custom viewers on Windows.  Thanks to
+	filterfalse.
+
+	Fixed issues with reading files on Windows.  Thanks to Robert Sarkozi.
+
+0.7.5 to 0.7.6-beta
+
+	Added "f" flag to 'cpoptions' option.  It controls initial state of
+	filename filter inversion for :filter[!] {regex} command (in other words,
+	it inverts meaning of exclamation mark).  Thanks to filterfalse.
+
+	Added helptags for 'cpoptions' flags in documentation in Vim format.
+
+	Added --with-curses-name=NAME option to the configure script to allow
+	specifying name of the curses library to link against.  Thanks to
+	Russell Urquhart.
+
+	Added "Globs" section to the documentation.
+
+	Added 'aproposprg', 'findprg', 'grepprg' and 'locateprg' options to specify
+	external commands format.
+
+	Added optional argument for :invert command.  Thanks to filterfalse.
+
+	Added editing command-line using Vim (like command window in Vim).  Thanks
+	to filterfalse.
+
+	Added Ctrl-G command-line key to start editing command-line in external
+	editor (for editing command, search pattern and new file names).
+
+	Added q:, q/, q? and q= normal and visual modes keys (except q=, which is
+	defined for normal mode only) to prompt for command-line in external
+	editor.
+
+	Added local to directory temporary file name filter.  Thanks to Alexandre
+	Viau and filterfalse.
+
+	Added "=" normal mode key, which activates file name filtering.
+
+	Added "fhistory" to 'vifminfo', which controls storing of local filter
+	history.
+
+	Added "=" and "filter" values for :history command, to show history of
+	local filter.
+
+	Added integration with tmux.  Thanks to Seth VanHeulen (a.k.a. svanheulen).
+
+	Added merge option for name conflict resolution, which allows merging two
+	directories overwriting files with matching names.
+
+	Added desktop entry file.  Thanks to Richard Benson.
+
+	Updated application icon.  Thanks to Richard Benson for making it.
+
+	Updated config.guess and config.sub files to their latest versions.  Thanks
+	to Hendrik Jaeger (a.k.a. henk).
+
+	Removed deprecated acconfig.h file.  Thanks to Hendrik Jaeger (a.k.a.
+	henk).
+
+	Replace compile symbolic link with actual file.
+
+	Distinguish files and directories in filename filter by appending a slash
+	to names of directories.
+
+	Use last search pattern as filename filter when :filter command gets an
+	empty argument (:filter//, :filter"", :filter'').  Thanks to filterfalse.
+
+	Don't complete commands like :filter, :tr, :substitute, etc.
+
+	Match only filename against global in :fileviewer instead of full path.
+
+	Removed check for WINDOW type in curses.h from configure script (didn't
+	work for OS X and cygwin).  Thanks to filterfalse.
+
+	Updated syntax file to ignore non-sense characters in front of some
+	commands (e.g. :set, :let, :highlight).  Thanks to filterfalse.
+
+	Updated syntax file to highlight arguments of the :execute command as
+	expressions.
+
+	Updated syntax file to highlight arguments of all map and for :command
+	commands smarter than before.
+
+	Filter in case insensitive way on Windows.
+
+	Updated syntax file to highlight <home>.  Thanks to filterfalse.
+
+	Updated syntax file to highlight <home> and environment variables in
+	argument list of the :cd command.  Thanks to filterfalse.
+
+	Updated syntax file to highlight :normal when it's not first in the line
+	and treat its arguments as command-line if it starts with a colon.
+	Thanks to filterfalse.
+
+	Updated syntax file to do not highlight anything inside quoted strings
+	except when they are part of an expression.
+
+	Remove escape-codes from generated plain-text documentation on cygwin.
+	Thanks to filterfalse.
+
+	Do not reset selection on search when 'hlsearch' is reset.  Thanks to
+	filterfalse.
+
+	Preserve current cursor position on view resort.
+
+	Don't let completion of the :history command eat all available memory.
+
+	Made all Ctrl-W x keys available in view mode.  Thanks to filterfalse.
+
+	Expand environment variables in values of the 'fusehome' and 'trashdir'
+	options.  Thanks to filterfalse.
+
+	Provided more adequate reaction on setting 'trashdir' variable to wrong
+	value.
+
+	From now on not absolute paths for the 'fusehome' options are rejected.
+
+	Separated file name filter into manual and automatic mainly for
+	convenience.
+
+	Use AC_GNU_SOURCE macro in configure.in, which is the correct way to
+	request for GNU extensions across various operating systems.
+
+	Check whether current directory is writable on :mkdir command.
+
+	Check destination path existence before changing directory to it on :sync
+	command.
+
+	Consider 'classify' option on displaying file name in the statusbar.
+
+	Don't overwrite directory stack stored in vifminfo on exit unless it was
+	changed in current session.
+
+	Better error messages on application run failure on Windows.
+
+	Don't wait finishing of GUI applications on Windows.  Thanks to Robert
+	Sarkozi.
+
+	Store cancelled prompt input in prompt history.
+
+	Better order of command-line command checks.
+
+	Show better error message on unmatched quotes in command arguments.
+
+	Force split-view when two paths are specified on command-line.  Thanks to
+	filterfalse.
+
+	Corrected view switching when vifm gets only one argument on
+	command-line (didn't switch if pane was already at specified path).
+
+	Process [count] passed to gUU, gU<selector>, gUgU, gu<selector>, guu and
+	gugu commands.
+
+	Changed meaning of the R key in view mode from redrawing view to
+	reloading it preserving scroll position.  Thanks to Robert Sarkozi.
+
+	Documented how | is treated on command line by some commands.  Thanks to
+	Roger Bongers.
+
+	Increased performance of (re)loading content for view mode.  Thanks to
+	Robert Sarkozi.
+
+	Fixed configuration when set_escdelay() function is not available.
+	Thanks to Russell Urquhart.
+
+	Fixed building when wcscasecmp() and wcsncasecmp() functions are not
+	available (just don't use those functions).  Thanks to Russell Urquhart.
+
+	Fixed reserving of about 1 GiB piece of memory on 256-color terminals.
+
+	Fixed hanging on previewing files with long lines and code highlighting.
+
+	Fixed running of executable with symbols that require escaping in their
+	name (*nix only).
+
+	Fixed terminal hang after executing several external commands in a row.
+	Thanks to filterfalse.
+
+	Fixed "No matches..." message for :apropos command, which accessed
+	freed memory.
+
+	Fixed displaying of search results message for different combinations of
+	'wrapscan' and 'hlsearch' options states.
+
+	Fixed real/potential issues discovered using Coverity scanner.
+
+	Fixed search of the first element in file list when displaying of parent
+	directory is disabled.
+
+	Fixed small memory leak in expression parser.
+
+	Fixed local options after startup (could be loaded for wrong pane).
+	Thanks to filterfalse.
+
+	Fixed fails on using absolute path to executables when 'fastrun' option
+	is on.  Thanks to MadMaverick9.
+
+	Fixed running external commands with 'fastrun' option set, in case when
+	there are more than one executable with given name.
+
+	Fixed cursor position of the other view after switching quick view off
+	right after startup.
+
+	Fixed storing directories passed as command-line parameters in
+	directory history.  Thanks to filterfalse.
+
+	Fixed compilation for systems, where coreutils doesn't support -n flag.
+
+0.7.5-beta to 0.7.5
+
+	Better Makefile for tests.  Thanks to Hendrik Jaeger (a.k.a. henk).
+
+	Make running tests of color manager depend less on type of terminal.
+	Thanks to Hendrik Jaeger (a.k.a. henk).
+
+	Don't link against libdl when it's not used.  Thanks to Hendrik
+	Jaeger (a.k.a. henk).
+
+	Commit src/Makefile.in file as it is (do not remove odd trailing
+	whitespace characters), it could cause issues with automated building.
+	Thanks to Hendrik Jaeger (a.k.a. henk).
+
+	Set locale for tests that rely on it explicitly.  Thanks to Hendrik
+	Jaeger (a.k.a. henk).
+
+	Don't accept arguments to the :help command when 'vimhelp' option is off.
+
+	Pause on Windows on failed execution of a help command.  Thanks to
+	filterfalse.
+
+	Pause on Windows, when executing of shell command fails.
+
+	Resize terminal window back to its original size after :help on Windows.
+	Thanks to filterfalse.
+
+	Fixed generation of vifm-help.txt file on Windows (all occurrences of the
+	"[m" sequence were removed).  Thanks to Sebastian Cyprych.
+
+	Fixed cd'ing to a directory after showing "Directory Access Error"
+	message.
+
+	Fixed mapping of <c-h> and <bs> on Windows.  Thanks to filterfalse.
+
+	Fixed Tab key description in documentation, the part related to
+	'cpoptions' flag.  Thanks to filterfalse.
+
+	Fixed potential issues pointed out by clang static analyzer.
+
+	Fixed calling Vim on :help command without arguments on Windows.  Thanks
+	to filterfalse.
+
+	Fixed calling Vim on :help command with 'vimhelp' option turned off and a
+	path with spaces in vifm's configuration directory.  Thanks to
+	filterfalse.
+
+	Fixed resetting of 'lines' and 'columns' options to their default values.
+	Thanks to filterfalse.
+
+0.7.4b to 0.7.5-beta
+
+	Added Gentoo ebuild.  Thanks to Oleg Gordienko (a.k.a. gordio).
+
+	Added parsing of escape codes in the preview pane.
+
+	Added parsing of escape codes in explore (less-like) mode.
+
+	Added "perms" sorting key on *nix (proposed by Daniel Dettlaff, a.k.a.
+	dmilith).
+
+	Added sample color schemes (proposed by Daniel Dettlaff, a.k.a. dmilith).
+
+	Added expand() builtin function to expand macros (thanks to Sebastian
+	Cyprych for the use case).
+
+	Allowed exclamation mark for the :sync command (to force synchronization
+	of cursor position when used without arguments).
+
+	Added macros that are expanded to register's content (thanks to Florian
+	Baumann, a.k.a. derflob).
+
+	Added 'shortmess' option and its first flag: "T" to shorten long
+	status-bar messages.
+
+	Added --without/[with]-dyn-X11 flag to the configure script to control
+	static/dynamic linking against libX11 library.  Thanks to Hendrik
+	Jaeger (a.k.a. henk) for the idea.
+
+	Don't use libtool in build process on *nix platforms (thanks to Merovius).
+
+	Less-like mode now highlights multiple matches in a line.
+
+	Less-like mode is now updated immediately when one changes 'wrap' option.
+
+	Don't redraw file list for explore window on resize.
+
+	Less updates for window in explore mode on resize.
+
+	Don't fallback to default colors on try to switch to a colorscheme, which
+	is not supported by terminal.
+
+	Made 'slowfs' option actually work on OS X (thanks to Daniel Dettlaff,
+	a.k.a. dmilith).
+
+	Made :execute process its arguments just like :echo command (thanks to
+	Daniel Dettlaff, a.k.a. dmilith, which made me discover old behaviour).
+
+	Save dot files filter state in vifminfo (thanks to Daniel Dettlaff,
+	a.k.a. dmilith).
+
+	Slightly updated plugin related documentation.
+
+	Don't store last command-line command for the dot normal mode command
+	between sessions.  Also it doesn't depend on command-line history anymore
+	and can be used with completely disabled history.
+
+	Changed the way title of the permissions dialog is composed.
+
+	Fixed configuration on OS X and FreeBSD because of unavailable mntent.h
+	header and strverscmp() function (reported by Daniel R., a.k.a. r1chelt,
+	and Daniel Dettlaff, a.k.a. dmilith).
+
+	Fixed configuration when libmagic is not available, but selected (tried
+	to check its symbols).
+
+	Fixed configuration on OS X when libncursesw is installed as libncurses.
+	Now configure script checks for libncurses if libncursesw is not found.
+	Thanks to Daniel R. (a.k.a. r1chelt).
+
+	Fixed vifminfo file update on Windows (wasn't updated at all).
+
+	Fixed "Press return..." message appearing always on OSX (yes, again; hope
+	this is final fix).  Thanks to Daniel R. (aka r1chelt).
+
+	Fixed buffer overflow on composing very long list of sorting keys.
+	Thanks to Christoph (a.k.a. informationen).
+
+	Fixed reading very long lines from vifminfo file.
+	Thanks to Christoph (a.k.a. informationen).
+
+	Fixed displaying of very long lines correctly in explore mode when 'wrap'
+	is off.
+
+	Fixed displaying of very long lines correctly in menu mode.
+
+	Fixed using of extra memory for menu items that are read from other
+	program's output.
+
+	Fixed segmentation fault on adding new elements to history after decreasing
+	'history' option.  Thanks to Oleg Gordienko (a.k.a. gordio).
+
+	Fixed determining of executable files on Windows (particularly parsing
+	the last item of $PATHEXT environment variable).
+
+	Fixed message displayed on invalid search pattern in explore mode.
+
+	Fixed highlighting of search results that cross virtual line boundary in
+	explorer mode when wrapping is on.
+
+	Fixed file preview pane update on Ctrl-W X.
+
+	Fixed segmentation fault on < or g keys in explore mode when file is fully
+	visible.
+
+	Fixed displaying of last lines in explore mode with wrapping turned on for
+	texts that contain characters taking more than one character position.
+
+	Fixed displaying of pane title for paths that contain characters taking
+	more than one character position.
+
+	Fixed displaying of bookmark menu for paths that contain characters taking
+	more than one character position.
+
+	Fixed displaying of status line for file names that contain characters
+	taking more than one character position.
+
+	Fixed displaying of menus for lines that contain characters taking more
+	than one character position.
+
+	Fixed screen update after v in explore mode.
+
+	Fixed Ctrl-W H/J/K/L keys in less-like mode activated by <s-tab>.
+
+	Fixed Ctrl-W H/J/K/L/X keys in normal mode when explore mode is active in
+	the other pane.
+
+	Fixed initial cursor position in the :colorscheme menu.
+
+	Fixed mappings of sequences containing non-ascii characters (thanks to
+	ksandr1v).
+
+	Fixed strange behaviour of Ctrl-U on top of file list in visual and normal
+	modes.
+
+	Fixed a bug with loading multiline commands containing bars ('|') from a
+	vifmrc file (thanks to Sebastian Cyprych).
+
+	Fixed a bug with trailing characters on loading multiline commands
+	containing bars ('|') from a vifmrc file.
+
+	Fixed a very small issue with positioning of cursor mark in the other
+	pane, which happened after starting vifm with another size of the
+	terminal.
+
+	Fixed a macro expansion in command-line on Windows when 'shell' is set to
+	"cmd" (thanks to Sebastian Cyprych).
+
+	Fixed a typo in configure.in file, which didn't allow to specify custom
+	location of curses library.
+
+	Fixed setting of value of $CPPFLAGS in configure.in, which didn't allow
+	to specify custom location of curses library.
+
+	Fixed cursor position right after entering fuse mount point when old
+	cursor position is recalled from history and view has too few rows.
+
+	Fixed occasional reset of cursor color to default after pane switching
+	operations.
+
+	Fixed displaying of search results message when 'incsearch' option is on.
+
+	Fixed destination file name existence on rename operation.
+
+	Fixed very rare crash on :chmod (thanks to Marton Balazs, a.k.a. balmar).
+
+	Fixed chmod on files with long names (they were truncated and appended by
+	ellipsis).
+
+	Fixed processing of incomplete escape sequences in command-line (used to
+	crash vifm).  Thanks to Denis Protivenskiy.
+
+0.7.4a to 0.7.4b
+
+	Removed screen title forcing for shell commands.
+
+	Fixed 'z' (thus 'Z') register, which was unavailable (apparently since
+	0.6.3).
+
+	Fixed using of register name argument in :yank command (was ignored).
+
+	Fixed error message on command errors in user defined command-line
+	commands (e.g. on `:foo` after `:command foo :bar`).
+
+	Fixed displaying of title of the other pane in one view mode.
+
+	Fixed displaying of file names in Chinese and other languages that can
+	have characters taking more than one position on the screen.
+
+	Fixed command-line cursor positioning for Chinese and other languages that
+	can have characters taking more than one position on the screen.
+
+	Fixed segmentation fault on :colorscheme command with no color schemes
+	installed.
+
+	Fixed enumeration of colorschemes for some file systems.
+
+	Fixed handling of doubled single quote in single quoted command argument.
+
+	Fixed small bug with sorting numbers with and without leading zeroes.
+
+	Fixed applying of 'classify' option to symbolic links to directories.
+
+	Fixed running of external commands using screen on l or Enter key in the
+	normal mode.
+
+	Fixed Meta-. on Windows (didn't work because of pdcurses).
+
+	Fixed `:cd ........` command on Windows (looks more like a Windows issue).
+
+	Fixed silent ignoring issues on running executables on Windows.
+
+	Fixed races on writing vifminfo file.
+
 0.7.4 to 0.7.4a
 
 	Don't redraw statbar until end of :restart command.
@@ -661,6 +1391,9 @@
 	Fixed segfault on small window on Windows.
 
 	Fixed bug with unfinished :s or :gs filename modifier.
+
+	Fixed dumb black screen on :shell command after :screen when vifm is not
+	running inside screen.
 
 0.7.0 to 0.7.1
 

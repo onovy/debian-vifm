@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "dirhistory_menu.h"
+
 #include <stdio.h> /* snprintf() */
 #include <string.h> /* strdup() */
 
@@ -28,23 +30,18 @@
 #include "../ui.h"
 #include "menus.h"
 
-#include "dirhistory_menu.h"
+static int execute_dirhistory_cb(FileView *view, menu_info *m);
 
-/* Returns new value for save_msg flag */
 int
 show_history_menu(FileView *view)
 {
 	int i;
 	static menu_info m;
 
-	if(view->history_num <= 0)
-	{
-		status_bar_message("History is disabled or empty");
-		return 1;
-	}
+	init_menu_info(&m, DIRHISTORY_MENU, strdup("History disabled or empty"));
 
-	init_menu_info(&m, DIRHISTORY);
 	m.title = strdup(" Directory History ");
+	m.execute_handler = &execute_dirhistory_cb;
 
 	for(i = 0; i < view->history_num && i < cfg.history_len; i++)
 	{
@@ -79,11 +76,15 @@ show_history_menu(FileView *view)
 	}
 	m.pos = m.len - 1 - m.pos;
 
-	setup_menu();
-	draw_menu(&m);
-	move_to_menu_pos(m.pos, &m);
-	enter_menu_mode(&m, view);
+	return display_menu(&m, view);
+}
 
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
+execute_dirhistory_cb(FileView *view, menu_info *m)
+{
+	goto_selected_directory(view, m);
 	return 0;
 }
 

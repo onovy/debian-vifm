@@ -19,49 +19,53 @@ VIFM_BIN := ../../src/vifm$(EXE_SUFFIX)
 
 SOURCES += ../seatest/seatest.c
 ifeq ($(OS),Windows_NT)
-    DIALOG := ../../src/modes/dialogs/attr_dialog_nix.c
     SOURCES := $(filter-out ../../src/desktop.c, $(SOURCES))
+    SOURCES := $(filter-out ../../src/utils/mntent.c, $(SOURCES))
+    SOURCES := $(filter-out %_nix.c, $(SOURCES))
 else
-    DIALOG := ../../src/modes/dialogs/attr_dialog_win.c
     SOURCES := $(filter-out ../../src/menus/volumes_menu.c, $(SOURCES))
+    SOURCES := $(filter-out %_win.c, $(SOURCES))
 endif
-SOURCES := $(filter-out $(DIALOG), $(SOURCES))
 LOCAL_SOURCES += $(wildcard *.c)
 
 OBJECTS := $(SOURCES:.c=.o)
 LOCAL_OBJECTS := $(LOCAL_SOURCES:.c=.o)
 LOCAL_OBJECTS := $(addprefix bin/, $(notdir $(LOCAL_OBJECTS)))
 
-CFLAGS := -MD -g -Werror -I../seatest -DTEST -include ../../config.h
+CFLAGS := -MMD -g -Wall -Werror -I../seatest -DTEST -include ../../config.h
 LDFLAGS := -lpthread
 ifneq ($(OS),Windows_NT)
     LDFLAGS += `grep LIBS\ = ../../src/Makefile | sed 's/^[^=]\+=//'`
+    LDFLAGS += `grep LDFLAGS\ = ../../src/Makefile | sed 's/^[^=]\+=//'`
+    CFLAGS += `grep CPPFLAGS\ = ../../src/Makefile | sed 's/^[^=]\+=//'`
 else
     LDFLAGS += `grep LIBS\ := ../../src/Makefile.win | sed 's/^[^=]\+=//'`
 endif
 
-.PHONY: $(VIFM_BIN) clean
+ifneq ($(OS),Windows_NT)
+    ifneq ($(wildcard /usr/include/ncursesw/.),)
+        CFLAGS += -I/usr/include/ncursesw
+    endif
+endif
 
-$(BIN): $(VIFM_BIN) ../bin/dummy $(OBJECTS) $(LOCAL_OBJECTS)
+.PHONY: clean
+
+$(BIN): $(VIFM_BIN) ../bin/.timestamp $(OBJECTS) $(LOCAL_OBJECTS)
 	gcc -o $@ $(OBJECTS) $(LOCAL_OBJECTS) $(LDFLAGS)
 
-$(VIFM_BIN):
+$(VIFM_BIN): $(SOURCES)
 ifneq ($(OS),Windows_NT)
 	$(MAKE) -C ../../src/ vifm
 else
 	$(MAKE) -C ../../src/ -f Makefile.win vifm.exe
 endif
 
-../bin/dummy:
-	-mkdir ../bin
-	touch ../bin/dummy
-
-bin/%.o: %.c bin/dummy
+bin/%.o: %.c bin/.timestamp
 	gcc -c -o $@ $< $(CFLAGS)
 
-bin/dummy:
-	-mkdir bin
-	touch bin/dummy
+../bin/.timestamp bin/.timestamp:
+	mkdir -p $(dir $@)
+	touch $@
 
 ../bin/%.o: ../seatest/%.c
 	gcc -c -o $@ $< $(CFLAGS)

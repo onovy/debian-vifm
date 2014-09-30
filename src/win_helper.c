@@ -16,10 +16,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifdef _WIN32
-#define WINVER 0x0600
+#define REQUIRED_WINVER 0x0600
+#include "utils/windefs.h"
 #include <windows.h>
-#endif
 
 #include <stdio.h>
 #include <string.h>
@@ -49,8 +48,10 @@ create_symlink(const char *link, const char *target)
 
 	flag = is_dir(target) ? SYMBOLIC_LINK_FLAG_DIRECTORY : 0;
 
-	if(!CreateSymbolicLink(link, target, flag))
+	if(!CreateSymbolicLink((char *)link, (char *)target, flag))
+	{
 		return -1;
+	}
 
 	return 0;
 }

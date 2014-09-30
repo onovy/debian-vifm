@@ -17,33 +17,49 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "registers.h"
+
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <stddef.h> /* NULL size_t */
 #include <string.h>
 
 #include "cfg/config.h"
 #include "menus/menus.h"
 #include "utils/fs.h"
+#include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/string_array.h"
+#include "trash.h"
 
-#include "registers.h"
+/* Name of the "unnamed" (the default) register. */
+#define UNNAMED_REG_NAME '"'
+/* Name of the "blackhole" register. */
+#define BLACKHOLE_REG_NAME '_'
+/* Number of registers named as alphabet letters. */
+#define NUM_LETTER_REGISTERS 26
+/* Number of all available registers (excludes 26 uppercase letters). */
+#define NUM_REGISTERS (2 + NUM_LETTER_REGISTERS)
 
-#define NUM_REGISTERS 27
-
+/* Data of all registers. */
 static registers_t registers[NUM_REGISTERS];
 
+/* Names of registers + names of 26 uppercase register names + termination null
+ * character. */
 const char valid_registers[] = {
-	'_', '"',
+	BLACKHOLE_REG_NAME, UNNAMED_REG_NAME,
 	'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm',
 	'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 	'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
 	'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
-	'\0',
+	'\0'
 };
+/* Length should be equal to number of names of existing registers + names of 26
+ * uppercase registers (virtual ones) + termination null character. */
+ARRAY_GUARD(valid_registers, NUM_REGISTERS + NUM_LETTER_REGISTERS + 1);
 
 void
 init_registers(void)
@@ -55,6 +71,20 @@ init_registers(void)
 		registers[i].num_files = 0;
 		registers[i].files = NULL;
 	}
+}
+
+int
+register_exists(int key)
+{
+	int i;
+	for(i = 0; i < NUM_REGISTERS; i++)
+	{
+		if(valid_registers[i] == key)
+		{
+			return 1;
+		}
+	}
+	return 0;
 }
 
 registers_t *
@@ -87,7 +117,7 @@ append_to_register(int key, const char file[])
 	registers_t *reg;
 	struct stat st;
 
-	if(key == '_')
+	if(key == BLACKHOLE_REG_NAME)
 		return;
 
 	if((reg = find_register(key)) == NULL)
@@ -100,6 +130,16 @@ append_to_register(int key, const char file[])
 		return;
 
 	reg->num_files = add_to_string_array(&reg->files, reg->num_files, 1, file);
+}
+
+void
+clear_registers(void)
+{
+	const char *p = valid_registers;
+	while(*p != '\0')
+	{
+		clear_register(*p++);
+	}
 }
 
 void
@@ -159,7 +199,7 @@ list_registers_content(const char registers[])
 		}
 	}
 
-	(void)add_to_string_array(&list, len, 1, NULL);
+	(void)put_into_string_array(&list, len, NULL);
 	return list;
 }
 
@@ -186,14 +226,13 @@ void
 clean_regs_with_trash(void)
 {
 	int x;
-	int trash_dir_len = strlen(cfg.trash_dir);
 	for(x = 0; x < NUM_REGISTERS; x++)
 	{
 		int y, n, needs_pack = 0;
 		n = registers[x].num_files;
 		for(y = 0; y < n; y++)
 		{
-			if(strnoscmp(registers[x].files[y], cfg.trash_dir, trash_dir_len) != 0)
+			if(!is_under_trash(registers[x].files[y]))
 				continue;
 			if(!path_exists(registers[x].files[y]))
 				continue;
@@ -213,16 +252,16 @@ update_unnamed_reg(int key)
 	registers_t *unnamed, *reg;
 	int i;
 
-	if(key == '"')
+	if(key == UNNAMED_REG_NAME)
 		return;
 
 	if((reg = find_register(key)) == NULL)
 		return;
 
-	if((unnamed = find_register('"')) == NULL)
+	if((unnamed = find_register(UNNAMED_REG_NAME)) == NULL)
 		return;
 
-	clear_register('"');
+	clear_register(UNNAMED_REG_NAME);
 
 	unnamed->num_files = reg->num_files;
 	unnamed->files = (char **)realloc(unnamed->files,

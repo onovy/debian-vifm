@@ -16,8 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __INT_STACK_H__
-#define __INT_STACK_H__
+#ifndef VIFM__UTILS__INT_STACK_H__
+#define VIFM__UTILS__INT_STACK_H__
 
 #include <stddef.h> /* NULL, size_t */
 
@@ -34,22 +34,25 @@ typedef struct {
 /* Checks whether stack is empty.  Returns non-zero if it is. */
 int int_stack_is_empty(const int_stack_t *const stack);
 
-/* Returns element at the top of the stack.  The stack have to contain at least
- * one element. */
+/* Returns element at the top of the stack.  The stack must contain at least one
+ * element. */
 int int_stack_get_top(const int_stack_t *const stack);
 
-/* Set element at the top of the stack.  The stack have to contain at least one
+/* Set element at the top of the stack.  The stack must contain at least one
  * element. */
 void int_stack_set_top(const int_stack_t *const stack, const int val);
 
 /* Puts the val at the top of the stack.  Returns non-zero in case of error. */
 int int_stack_push(int_stack_t *const stack, const int val);
 
-/* Removes element from the top of the stack.  The stack have to contain at
- * least one element */
+/* Removes element from the top of the stack.  The stack must contain at least
+ * one element */
 void int_stack_pop(int_stack_t *const stack);
 
-#endif /* __INT_STACK_H__ */
+/* Removes all element from the stack. */
+void int_stack_clear(int_stack_t *const stack);
+
+#endif /* VIFM__UTILS__INT_STACK_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

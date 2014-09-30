@@ -17,17 +17,13 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __NORMAL_H__
-#define __NORMAL_H__
+#ifndef VIFM__MODES__NORMAL_H__
+#define VIFM__MODES__NORMAL_H__
 
 #include "../engine/keys.h"
 #include "../ui.h"
 
 void init_normal_mode(int *key_mode);
-void normal_cmd_ctrl_wH(key_info_t key_info, keys_info_t *keys_info);
-void normal_cmd_ctrl_wJ(key_info_t key_info, keys_info_t *keys_info);
-void normal_cmd_ctrl_wK(key_info_t key_info, keys_info_t *keys_info);
-void normal_cmd_ctrl_wL(key_info_t key_info, keys_info_t *keys_info);
 void normal_cmd_zb(key_info_t key_info, keys_info_t *keys_info);
 void normal_cmd_zt(key_info_t key_info, keys_info_t *keys_info);
 void normal_cmd_zz(key_info_t key_info, keys_info_t *keys_info);
@@ -39,9 +35,9 @@ void normal_cmd_ctrl_wminus(key_info_t key_info, keys_info_t *keys_info);
 void normal_cmd_ctrl_wpipe(key_info_t key_info, keys_info_t *keys_info);
 int ffind(int ch, int backward, int wrap);
 int cmd_paren(int lb, int ub, int inc);
-int find_npattern(FileView *view, const char *pattern, int backward, int move);
+int find_npattern(FileView *view, const char *pattern, int backward);
 
-#endif
+#endif /* VIFM__MODES__NORMAL_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

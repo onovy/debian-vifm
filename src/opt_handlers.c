@@ -16,12 +16,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "opt_handlers.h"
+
 #include <assert.h> /* assert() */
 #include <limits.h> /* INT_MIN */
 #include <math.h> /* abs() */
+#include <stddef.h> /* NULL */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h>
-#include <string.h> /* memcpy() strstr() */
+#include <string.h> /* memcpy() memmove() strstr() */
 
 #include "cfg/config.h"
 #include "engine/options.h"
@@ -39,10 +42,11 @@
 #include "quickview.h"
 #include "sort.h"
 #include "status.h"
+#include "trash.h"
 #include "ui.h"
 #include "viewcolumns_parser.h"
 
-#include "opt_handlers.h"
+/* TODO: provide default primitive type based handlers (see *prg_handler). */
 
 /* Default value of 'viewcolumns' option, used when it's empty. */
 #define DEFAULT_VIEW_COLUMNS "-{name},{}"
@@ -69,22 +73,32 @@ static void init_cpoptions(optval_t *val);
 static void init_timefmt(optval_t *val);
 static void init_trash_dir(optval_t *val);
 static void init_lsview(optval_t *val);
+static void init_shortmess(optval_t *val);
+static void init_number(optval_t *val);
+static void init_numberwidth(optval_t *val);
+static void init_relativenumber(optval_t *val);
 static void init_sort(optval_t *val);
 static void init_sortorder(optval_t *val);
 static void init_viewcolumns(optval_t *val);
 static void load_options_defaults(void);
 static void add_options(void);
+static void aproposprg_handler(OPT_OP op, optval_t val);
 static void autochpos_handler(OPT_OP op, optval_t val);
 static void classify_handler(OPT_OP op, optval_t val);
-static const char * pick_out_decoration(char classify_item[], FileType *type);
+static int str_to_classify(const char str[],
+		char decorations[FILE_TYPE_COUNT][2]);
+static const char * pick_out_decoration(const char classify_item[],
+		FileType *type);
 static void columns_handler(OPT_OP op, optval_t val);
 static void confirm_handler(OPT_OP op, optval_t val);
 static void cpoptions_handler(OPT_OP op, optval_t val);
 static void dotdirs_handler(OPT_OP op, optval_t val);
 static void fastrun_handler(OPT_OP op, optval_t val);
+static void findprg_handler(OPT_OP op, optval_t val);
 static void followlinks_handler(OPT_OP op, optval_t val);
 static void fusehome_handler(OPT_OP op, optval_t val);
 static void gdefault_handler(OPT_OP op, optval_t val);
+static void grepprg_handler(OPT_OP op, optval_t val);
 static void history_handler(OPT_OP op, optval_t val);
 static void hlsearch_handler(OPT_OP op, optval_t val);
 static void iec_handler(OPT_OP op, optval_t val);
@@ -92,18 +106,24 @@ static void ignorecase_handler(OPT_OP op, optval_t val);
 static void incsearch_handler(OPT_OP op, optval_t val);
 static void laststatus_handler(OPT_OP op, optval_t val);
 static void lines_handler(OPT_OP op, optval_t val);
+static void locateprg_handler(OPT_OP op, optval_t val);
 static void scroll_line_down(FileView *view);
 static void rulerformat_handler(OPT_OP op, optval_t val);
 static void runexec_handler(OPT_OP op, optval_t val);
 static void scrollbind_handler(OPT_OP op, optval_t val);
 static void scrolloff_handler(OPT_OP op, optval_t val);
 static void shell_handler(OPT_OP op, optval_t val);
+static void shortmess_handler(OPT_OP op, optval_t val);
 #ifndef _WIN32
 static void slowfs_handler(OPT_OP op, optval_t val);
 #endif
 static void smartcase_handler(OPT_OP op, optval_t val);
 static void sortnumbers_handler(OPT_OP op, optval_t val);
 static void lsview_handler(OPT_OP op, optval_t val);
+static void number_handler(OPT_OP op, optval_t val);
+static void numberwidth_handler(OPT_OP op, optval_t val);
+static void relativenumber_handler(OPT_OP op, optval_t val);
+static void update_num_type(NumberingType num_type, int enable);
 static void sort_handler(OPT_OP op, optval_t val);
 static void sortorder_handler(OPT_OP op, optval_t val);
 static void viewcolumns_handler(OPT_OP op, optval_t val);
@@ -123,6 +143,7 @@ static void vifminfo_handler(OPT_OP op, optval_t val);
 static void vimhelp_handler(OPT_OP op, optval_t val);
 static void wildmenu_handler(OPT_OP op, optval_t val);
 static void wrap_handler(OPT_OP op, optval_t val);
+static void text_option_changed(void);
 static void wrapscan_handler(OPT_OP op, optval_t val);
 
 static const char * sort_enum[] = {
@@ -140,14 +161,26 @@ static const char * sort_enum[] = {
 	"ctime",
 	"mtime",
 	"iname",
+#ifndef _WIN32
+	"perms",
+#endif
+	"type",
 };
-ARRAY_GUARD(sort_enum, NUM_SORT_OPTIONS);
+ARRAY_GUARD(sort_enum, SORT_OPTION_COUNT);
+
+static const char cpoptions_list[] = "fst";
+static const char * cpoptions_vals = cpoptions_list;
+#define cpoptions_count ARRAY_LEN(cpoptions_list)
 
 static const char * dotdirs_vals[] = {
 	"rootparent",
 	"nonrootparent",
 };
 ARRAY_GUARD(dotdirs_vals, NUM_DOT_DIRS);
+
+static const char shortmess_list[] = "T";
+static const char * shortmess_vals = shortmess_list;
+#define shortmess_count ARRAY_LEN(shortmess_list)
 
 static const char * sort_types[] = {
 	"ext",   "+ext",   "-ext",
@@ -164,8 +197,12 @@ static const char * sort_types[] = {
 	"ctime", "+ctime", "-ctime",
 	"mtime", "+mtime", "-mtime",
 	"iname", "+iname", "-iname",
+#ifndef _WIN32
+	"perms", "+perms", "-perms",
+#endif
+	"type", "+type", "-type",
 };
-ARRAY_GUARD(sort_types, NUM_SORT_OPTIONS*3);
+ARRAY_GUARD(sort_types, SORT_OPTION_COUNT*3);
 
 static const char * sortorder_enum[] = {
 	"ascending",
@@ -187,6 +224,7 @@ static const char * vifminfo_set[] = {
 	"dirstack",
 	"registers",
 	"phistory",
+	"fhistory",
 };
 
 static struct
@@ -199,97 +237,219 @@ static struct
 	opt_handler handler;
 	optinit_t initializer;
 	optval_t val;
-}options[] = {
+}
+options[] =
+{
 	/* global options */
-	{ "autochpos",   "",     OPT_BOOL,    0,                          NULL,            &autochpos_handler,
-		{ .ref.bool_val = &cfg.auto_ch_pos }                                                                   },
-	{ "classify",    "",     OPT_STRLIST, 0,                          NULL,            &classify_handler,
-		{ .init = &init_classify }                                                                             },
-	{ "columns",     "co",   OPT_INT,     0,                          NULL,            &columns_handler,
-		{ .ref.int_val = &cfg.columns }                                                                        },
-	{ "confirm",     "cf",   OPT_BOOL,    0,                          NULL,            &confirm_handler,
-		{ .ref.bool_val = &cfg.confirm }                                                                       },
-	{ "cpoptions",   "cpo",  OPT_STR,     0,                          NULL,            &cpoptions_handler,
-		{ .init = &init_cpoptions }                                                                            },
-	{ "dotdirs",     "",     OPT_SET,     ARRAY_LEN(dotdirs_vals),    dotdirs_vals,    &dotdirs_handler,
-		{ .ref.set_items = &cfg.dot_dirs }                                                                     },
-	{ "fastrun",     "",     OPT_BOOL,    0,                          NULL,            &fastrun_handler,
-		{ .ref.bool_val = &cfg.fast_run }                                                                      },
-	{ "followlinks", "",     OPT_BOOL,    0,                          NULL,            &followlinks_handler,
-		{ .ref.bool_val = &cfg.follow_links }                                                                  },
-	{ "fusehome",    "",     OPT_STR,     0,                          NULL,            &fusehome_handler,
-		{ .ref.str_val = &cfg.fuse_home }                                                                      },
-	{ "gdefault",    "gd",   OPT_BOOL,    0,                          NULL,            &gdefault_handler,
-		{ .ref.bool_val = &cfg.gdefault }                                                                      },
-	{ "history",     "hi",   OPT_INT,     0,                          NULL,            &history_handler,
-		{ .ref.int_val = &cfg.history_len }                                                                    },
-	{ "hlsearch",    "hls",  OPT_BOOL,    0,                          NULL,            &hlsearch_handler,
-		{ .ref.bool_val = &cfg.hl_search }                                                                     },
-	{ "iec",         "",     OPT_BOOL,    0,                          NULL,            &iec_handler,
-		{ .ref.bool_val = &cfg.use_iec_prefixes }                                                              },
-	{ "ignorecase",  "ic",   OPT_BOOL,    0,                          NULL,            &ignorecase_handler,
-		{ .ref.bool_val = &cfg.ignore_case }                                                                   },
-	{ "incsearch",   "is",   OPT_BOOL,    0,                          NULL,            &incsearch_handler ,
-		{ .ref.bool_val = &cfg.inc_search }                                                                    },
-	{ "laststatus",  "ls",   OPT_BOOL,    0,                          NULL,            &laststatus_handler,
-		{ .ref.bool_val = &cfg.last_status }                                                                   },
-	{ "lines",       "",     OPT_INT,     0,                          NULL,            &lines_handler,
-		{ .ref.int_val = &cfg.lines }                                                                          },
-	{ "rulerformat", "ruf",  OPT_STR,     0,                          NULL,            &rulerformat_handler,
-		{ .ref.str_val = &cfg.ruler_format }                                                                   },
-	{ "runexec",     "",     OPT_BOOL,    0,                          NULL,            &runexec_handler,
-		{ .ref.bool_val = &cfg.auto_execute }                                                                  },
-	{ "scrollbind",  "scb",  OPT_BOOL,    0,                          NULL,            &scrollbind_handler,
-		{ .ref.bool_val = &cfg.scroll_bind }                                                                   },
-	{ "scrolloff",   "so",   OPT_INT,     0,                          NULL,            &scrolloff_handler,
-		{ .ref.int_val = &cfg.scroll_off }                                                                     },
-	{ "shell",       "sh",   OPT_STR,     0,                          NULL,            &shell_handler,
-		{ .ref.str_val = &cfg.shell }                                                                          },
+	{ "aproposprg", "",
+	  OPT_STR, 0, NULL, &aproposprg_handler,
+	  { .ref.str_val = &cfg.apropos_prg },
+	},
+	{ "autochpos", "",
+	  OPT_BOOL, 0, NULL, &autochpos_handler,
+	  { .ref.bool_val = &cfg.auto_ch_pos },
+	},
+	{ "classify", "",
+	  OPT_STRLIST, 0, NULL, &classify_handler,
+	  { .init = &init_classify },
+	},
+	{ "columns", "co",
+	  OPT_INT, 0, NULL, &columns_handler,
+	  { .ref.int_val = &cfg.columns },
+	},
+	{ "confirm", "cf",
+	  OPT_BOOL, 0, NULL, &confirm_handler,
+	  { .ref.bool_val = &cfg.confirm },
+	},
+	{ "cpoptions", "cpo",
+	  OPT_CHARSET, cpoptions_count, &cpoptions_vals, &cpoptions_handler,
+	  { .init = &init_cpoptions },
+	},
+	{ "dotdirs", "",
+	  OPT_SET, ARRAY_LEN(dotdirs_vals), dotdirs_vals, &dotdirs_handler,
+	  { .ref.set_items = &cfg.dot_dirs },
+	},
+	{ "fastrun", "",
+	  OPT_BOOL, 0, NULL, &fastrun_handler,
+	  { .ref.bool_val = &cfg.fast_run },
+	},
+	{ "findprg", "",
+	  OPT_STR, 0, NULL, &findprg_handler,
+	  { .ref.str_val = &cfg.find_prg },
+	},
+	{ "followlinks", "",
+	  OPT_BOOL, 0, NULL, &followlinks_handler,
+	  { .ref.bool_val = &cfg.follow_links },
+	},
+	{ "fusehome", "",
+	  OPT_STR, 0, NULL, &fusehome_handler,
+	  { .ref.str_val = &cfg.fuse_home },
+	},
+	{ "gdefault", "gd",
+	  OPT_BOOL, 0, NULL, &gdefault_handler,
+	  { .ref.bool_val = &cfg.gdefault },
+	},
+	{ "grepprg", "",
+	  OPT_STR, 0, NULL, &grepprg_handler,
+	  { .ref.str_val = &cfg.grep_prg },
+	},
+	{ "history", "hi",
+	  OPT_INT, 0, NULL, &history_handler,
+	  { .ref.int_val = &cfg.history_len },
+	},
+	{ "hlsearch", "hls",
+	  OPT_BOOL, 0, NULL, &hlsearch_handler,
+	  { .ref.bool_val = &cfg.hl_search },
+	},
+	{ "iec", "",
+	  OPT_BOOL, 0, NULL, &iec_handler,
+	  { .ref.bool_val = &cfg.use_iec_prefixes },
+	},
+	{ "ignorecase", "ic",
+	  OPT_BOOL, 0, NULL, &ignorecase_handler,
+	  { .ref.bool_val = &cfg.ignore_case },
+	},
+	{ "incsearch", "is",
+	  OPT_BOOL, 0, NULL, &incsearch_handler ,
+	  { .ref.bool_val = &cfg.inc_search },
+	},
+	{ "laststatus", "ls",
+	  OPT_BOOL, 0, NULL, &laststatus_handler,
+	  { .ref.bool_val = &cfg.last_status },
+	},
+	{ "lines", "",
+	  OPT_INT, 0, NULL, &lines_handler,
+	  { .ref.int_val = &cfg.lines },
+	},
+	{ "locateprg", "",
+	  OPT_STR, 0, NULL, &locateprg_handler,
+	  { .ref.str_val = &cfg.locate_prg },
+	},
+	{ "rulerformat", "ruf",
+	  OPT_STR, 0, NULL, &rulerformat_handler,
+	  { .ref.str_val = &cfg.ruler_format },
+	},
+	{ "runexec", "",
+	  OPT_BOOL, 0, NULL, &runexec_handler,
+	  { .ref.bool_val = &cfg.auto_execute },
+	},
+	{ "scrollbind", "scb",
+	  OPT_BOOL, 0, NULL, &scrollbind_handler,
+	  { .ref.bool_val = &cfg.scroll_bind },
+	},
+	{ "scrolloff", "so",
+	  OPT_INT, 0, NULL, &scrolloff_handler,
+	  { .ref.int_val = &cfg.scroll_off },
+	},
+	{ "shell", "sh",
+	  OPT_STR, 0, NULL, &shell_handler,
+	  { .ref.str_val = &cfg.shell },
+	},
+	{ "shortmess", "shm",
+	  OPT_CHARSET, shortmess_count, &shortmess_vals, &shortmess_handler,
+	  { .init = &init_shortmess },
+	},
 #ifndef _WIN32
-	{ "slowfs",      "",     OPT_STRLIST, 0,                          NULL,            &slowfs_handler,
-		{ .ref.str_val = &cfg.slow_fs_list }                                                                   },
+	{ "slowfs", "",
+	  OPT_STRLIST, 0, NULL, &slowfs_handler,
+	  { .ref.str_val = &cfg.slow_fs_list },
+	},
 #endif
-	{ "smartcase",   "scs",  OPT_BOOL,    0,                          NULL,            &smartcase_handler,
-		{ .ref.bool_val = &cfg.smart_case }                                                                    },
-	{ "sortnumbers", "",     OPT_BOOL,    0,                          NULL,            &sortnumbers_handler,
-		{ .ref.bool_val = &cfg.sort_numbers }                                                                  },
-	{ "statusline",  "stl",  OPT_STR,     0,                          NULL,            &statusline_handler,
-		{ .ref.str_val = &cfg.status_line }                                                                    },
-	{ "tabstop",     "ts",   OPT_INT,     0,                          NULL,            &tabstop_handler,
-		{ .ref.int_val = &cfg.tab_stop }                                                                       },
-	{ "timefmt",     "",     OPT_STR,     0,                          NULL,            &timefmt_handler,
-		{ .init = &init_timefmt }                                                                              },
-	{ "timeoutlen",  "tm",   OPT_INT,     0,                          NULL,            &timeoutlen_handler,
-		{ .ref.int_val = &cfg.timeout_len }                                                                    },
-	{ "trash",       "",     OPT_BOOL,    0,                          NULL,            &trash_handler,
-		{ .ref.bool_val = &cfg.use_trash }                                                                     },
-	{ "trashdir",    "",     OPT_STR,     0,                          NULL,            &trashdir_handler,
-		{ .init = &init_trash_dir }                                                                            },
-	{ "undolevels",  "ul",   OPT_INT,     0,                          NULL,            &undolevels_handler,
-		{ .ref.int_val = &cfg.undo_levels }                                                                    },
-	{ "vicmd",       "",     OPT_STR,     0,                          NULL,            &vicmd_handler,
-		{ .ref.str_val = &cfg.vi_command }                                                                     },
-	{ "vixcmd",      "",     OPT_STR,     0,                          NULL,            &vixcmd_handler,
-		{ .ref.str_val = &cfg.vi_x_command }                                                                   },
-	{ "vifminfo",    "",     OPT_SET,     ARRAY_LEN(vifminfo_set),    vifminfo_set,    &vifminfo_handler,
-		{ .ref.set_items = &cfg.vifm_info }                                                                    },
-	{ "vimhelp",     "",     OPT_BOOL,    0,                          NULL,            &vimhelp_handler,
-		{ .ref.bool_val = &cfg.use_vim_help }                                                                  },
-	{ "wildmenu",    "wmnu", OPT_BOOL,    0,                          NULL,            &wildmenu_handler,
-		{ .ref.bool_val = &cfg.wild_menu }                                                                     },
-	{ "wrap",        "",     OPT_BOOL,    0,                          NULL,            &wrap_handler,
-		{ .ref.bool_val = &cfg.wrap_quick_view }                                                               },
-	{ "wrapscan",    "ws",   OPT_BOOL,    0,                          NULL,            &wrapscan_handler,
-		{ .ref.bool_val = &cfg.wrap_scan }                                                                     },
-	/* local options */
-	{ "lsview",      "",     OPT_BOOL,    0,                          NULL,            &lsview_handler,
-		{ .init = &init_lsview }                                                                               },
-	{ "sort",        "",     OPT_STRLIST, ARRAY_LEN(sort_types),      sort_types,      &sort_handler,
-		{ .init = &init_sort }                                                                                 },
-	{ "sortorder",   "",     OPT_ENUM,    ARRAY_LEN(sortorder_enum),  sortorder_enum,  &sortorder_handler,
-		{ .init = &init_sortorder }                                                                            },
-	{ "viewcolumns", "",     OPT_STRLIST, 0,                          NULL,            &viewcolumns_handler,
-		{ .init = &init_viewcolumns }                                                                          },
+	{ "smartcase", "scs",
+	  OPT_BOOL, 0, NULL, &smartcase_handler,
+	  { .ref.bool_val = &cfg.smart_case },
+	},
+	{ "sortnumbers", "",
+	  OPT_BOOL, 0, NULL, &sortnumbers_handler,
+	  { .ref.bool_val = &cfg.sort_numbers },
+	},
+	{ "statusline", "stl",
+	  OPT_STR, 0, NULL, &statusline_handler,
+	  { .ref.str_val = &cfg.status_line },
+	},
+	{ "tabstop", "ts",
+	  OPT_INT, 0, NULL, &tabstop_handler,
+	  { .ref.int_val = &cfg.tab_stop },
+	},
+	{ "timefmt", "",
+	  OPT_STR, 0, NULL, &timefmt_handler,
+	  { .init = &init_timefmt },
+	},
+	{ "timeoutlen", "tm",
+	  OPT_INT, 0, NULL, &timeoutlen_handler,
+	  { .ref.int_val = &cfg.timeout_len },
+	},
+	{ "trash", "",
+	  OPT_BOOL, 0, NULL, &trash_handler,
+	  { .ref.bool_val = &cfg.use_trash },
+	},
+	{ "trashdir", "",
+	  OPT_STRLIST, 0, NULL, &trashdir_handler,
+	  { .init = &init_trash_dir },
+	},
+	{ "undolevels", "ul",
+	  OPT_INT, 0, NULL, &undolevels_handler,
+	  { .ref.int_val = &cfg.undo_levels },
+	},
+	{ "vicmd", "",
+	  OPT_STR, 0, NULL, &vicmd_handler,
+	  { .ref.str_val = &cfg.vi_command },
+	},
+	{ "vixcmd", "",
+	  OPT_STR, 0, NULL, &vixcmd_handler,
+	  { .ref.str_val = &cfg.vi_x_command },
+	},
+	{ "vifminfo", "",
+	  OPT_SET, ARRAY_LEN(vifminfo_set), vifminfo_set, &vifminfo_handler,
+	  { .ref.set_items = &cfg.vifm_info },
+	},
+	{ "vimhelp", "",
+	  OPT_BOOL, 0, NULL, &vimhelp_handler,
+	  { .ref.bool_val = &cfg.use_vim_help },
+	},
+	{ "wildmenu", "wmnu",
+	  OPT_BOOL, 0, NULL, &wildmenu_handler,
+	  { .ref.bool_val = &cfg.wild_menu },
+	},
+	{ "wrap", "",
+	  OPT_BOOL, 0, NULL, &wrap_handler,
+	  { .ref.bool_val = &cfg.wrap_quick_view },
+	},
+	{ "wrapscan", "ws",
+	  OPT_BOOL, 0, NULL, &wrapscan_handler,
+	  { .ref.bool_val = &cfg.wrap_scan },
+	},
+
+	/* Local options. */
+
+	{ "lsview", "",
+	  OPT_BOOL, 0, NULL, &lsview_handler,
+	  { .init = &init_lsview },
+	},
+	{ "number", "nu",
+	  OPT_BOOL, 0, NULL, &number_handler,
+	  { .init = &init_number },
+	},
+	{ "numberwidth", "nuw",
+	  OPT_INT, 0, NULL, &numberwidth_handler,
+	  { .init = &init_numberwidth },
+	},
+	{ "relativenumber", "rnu",
+	  OPT_BOOL, 0, NULL, &relativenumber_handler,
+	  { .init = &init_relativenumber },
+	},
+	{ "sort", "",
+	  OPT_STRLIST, ARRAY_LEN(sort_types), sort_types, &sort_handler,
+	  { .init = &init_sort },
+	},
+	{ "sortorder", "",
+	  OPT_ENUM, ARRAY_LEN(sortorder_enum), sortorder_enum, &sortorder_handler,
+	  { .init = &init_sortorder },
+	},
+	{ "viewcolumns", "",
+	  OPT_STRLIST, 0, NULL, &viewcolumns_handler,
+	  { .init = &init_viewcolumns },
+	},
 };
 
 static int error;
@@ -340,8 +500,9 @@ static void
 init_cpoptions(optval_t *val)
 {
 	static char buf[32];
-	snprintf(buf, sizeof(buf), "%s%s", cfg.selection_is_primary ? "s" : "",
-			cfg.tab_switches_pane ? "t" : "");
+	snprintf(buf, sizeof(buf), "%s%s%s",
+			cfg.filter_inverted_by_default ? "f" : "",
+			cfg.selection_is_primary ? "s" : "", cfg.tab_switches_pane ? "t" : "");
 	val->str_val = buf;
 }
 
@@ -361,6 +522,35 @@ static void
 init_lsview(optval_t *val)
 {
 	val->bool_val = curr_view->ls_view;
+}
+
+static void
+init_shortmess(optval_t *val)
+{
+	static char buf[32];
+	snprintf(buf, sizeof(buf), "%s", cfg.trunc_normal_sb_msgs ? "T" : "");
+	val->str_val = buf;
+}
+
+/* Default-initializes whether to display file numbers. */
+static void
+init_number(optval_t *val)
+{
+	val->bool_val = 0;
+}
+
+/* Default-initializes minimum width of file number field. */
+static void
+init_numberwidth(optval_t *val)
+{
+	val->int_val = 4;
+}
+
+/* Default-initializes whether to display relative file numbers. */
+static void
+init_relativenumber(optval_t *val)
+{
+	val->bool_val = 0;
 }
 
 static void
@@ -422,39 +612,47 @@ load_local_options(FileView *view)
 
 	val.bool_val = view->ls_view;
 	set_option("lsview", val);
+
+	val.bool_val = view->num_type & NT_SEQ;
+	set_option("number", val);
+
+	val.int_val = view->num_width;
+	set_option("numberwidth", val);
+
+	val.int_val = view->num_type & NT_REL;
+	set_option("relativenumber", val);
 }
 
 void
 load_sort_option(FileView *view)
 {
+	/* This approximate maximum length also includes "+" or "-" sign and a
+	 * comma (",") between items. */
+	enum { MAX_SORT_OPTION_NAME_LEN = 16 };
+
+	int i;
+
 	optval_t val;
-	char buf[64] = "";
-	int j, i;
+	char opt_val[MAX_SORT_OPTION_NAME_LEN*SORT_OPTION_COUNT] = "";
+	size_t opt_val_len = 0U;
 
-	for(j = 0; j < NUM_SORT_OPTIONS && view->sort[j] <= NUM_SORT_OPTIONS; j++)
-		if(abs(view->sort[j]) == SORT_BY_NAME ||
-				abs(view->sort[j]) == SORT_BY_INAME)
-			break;
-	if(j < NUM_SORT_OPTIONS && view->sort[j] > NUM_SORT_OPTIONS)
-#ifndef _WIN32
-		view->sort[j++] = SORT_BY_NAME;
-#else
-		view->sort[j++] = SORT_BY_INAME;
-#endif
+	ui_view_sort_list_ensure_well_formed(view->sort);
 
+	/* Produce a string, which represents a list of sorting keys. */
 	i = -1;
-	while(++i < NUM_SORT_OPTIONS && view->sort[i] <= NUM_SORT_OPTIONS)
+	while(++i < SORT_OPTION_COUNT && abs(view->sort[i]) <= LAST_SORT_OPTION)
 	{
-		if(buf[0] != '\0')
-			strcat(buf, ",");
-		if(view->sort[i] < 0)
-			strcat(buf, "-");
-		else
-			strcat(buf, "+");
-		strcat(buf, sort_enum[abs(view->sort[i]) - 1]);
+		const int sort_option = view->sort[i];
+		const char *const comma = (opt_val_len == 0U) ? "" : ",";
+		const char option_mark = (sort_option < 0) ? '-' : '+';
+		const char *const option_name = sort_enum[abs(sort_option) - 1];
+
+		opt_val_len += snprintf(opt_val + opt_val_len,
+				sizeof(opt_val) - opt_val_len, "%s%c%s", comma, option_mark,
+				option_name);
 	}
 
-	val.str_val = buf;
+	val.str_val = opt_val;
 	set_option("sort", val);
 
 	val.enum_item = (view->sort[0] < 0);
@@ -489,6 +687,12 @@ process_set_args(const char *args)
 }
 
 static void
+aproposprg_handler(OPT_OP op, optval_t val)
+{
+	(void)replace_string(&cfg.apropos_prg, val.str_val);
+}
+
+static void
 autochpos_handler(OPT_OP op, optval_t val)
 {
 	cfg.auto_ch_pos = val.bool_val;
@@ -502,12 +706,43 @@ autochpos_handler(OPT_OP op, optval_t val)
 static void
 classify_handler(OPT_OP op, optval_t val)
 {
+	char decorations[FILE_TYPE_COUNT][2] = {};
+
+	if(str_to_classify(val.str_val, decorations) == 0)
+	{
+		assert(sizeof(cfg.decorations) == sizeof(decorations) && "Arrays diverged.");
+		memcpy(&cfg.decorations, &decorations, sizeof(cfg.decorations));
+
+		update_screen(UT_REDRAW);
+	}
+	else
+	{
+		error = 1;
+	}
+
+	init_classify(&val);
+	set_option("classify", val);
+}
+
+/* Fills the decorations array with parsed classification values from the str.
+ * It's assumed that decorations array is zeroed.  Returns zero on success,
+ * otherwise non-zero is returned. */
+static int
+str_to_classify(const char str[], char decorations[FILE_TYPE_COUNT][2])
+{
 	char *saveptr;
 	char *str_copy;
 	char *token;
-	char decorations[FILE_TYPE_COUNT][2] = {};
+	int error_encountered;
 
-	str_copy = strdup(val.str_val);
+	str_copy = strdup(str);
+	if(str_copy == NULL)
+	{
+		/* Not enough memory. */
+		return 1;
+	}
+
+	error_encountered = 0;
 	for(token = str_copy; (token = strtok_r(token, ",", &saveptr)); token = NULL)
 	{
 		FileType type;
@@ -515,23 +750,23 @@ classify_handler(OPT_OP op, optval_t val)
 		if(suffix == NULL)
 		{
 			text_buffer_addf("Invalid filetype: %s", token);
-			error = 1;
+			error_encountered = 1;
 		}
 		else
 		{
 			if(strlen(token) > 1)
 			{
 				text_buffer_addf("Invalid prefix: %s", token);
-				error = 1;
+				error_encountered = 1;
 			}
 			if(strlen(suffix) > 1)
 			{
 				text_buffer_addf("Invalid suffix: %s", suffix);
-				error = 1;
+				error_encountered = 1;
 			}
 		}
 
-		if(!error)
+		if(!error_encountered)
 		{
 			decorations[type][DECORATION_PREFIX] = token[0];
 			decorations[type][DECORATION_SUFFIX] = suffix[0];
@@ -539,22 +774,13 @@ classify_handler(OPT_OP op, optval_t val)
 	}
 	free(str_copy);
 
-	if(!error)
-	{
-		assert(sizeof(cfg.decorations) == sizeof(decorations) && "Arrays diverged.");
-		memcpy(&cfg.decorations, &decorations, sizeof(cfg.decorations));
-
-		update_screen(UT_REDRAW);
-	}
-
-	init_classify(&val);
-	set_option("classify", val);
+	return error_encountered;
 }
 
 /* Puts '\0' after prefix end and returns pointer to the suffix beginning or
  * NULL on unknown filetype specifier. */
 static const char *
-pick_out_decoration(char classify_item[], FileType *type)
+pick_out_decoration(const char classify_item[], FileType *type)
 {
 	int filetype;
 	for(filetype = 0; filetype < FILE_TYPE_COUNT; filetype++)
@@ -580,7 +806,11 @@ columns_handler(OPT_OP op, optval_t val)
 	/* Handle case when 'columns' value wasn't yet initialized. */
 	if(val.int_val == INT_MIN)
 	{
-		val.int_val = getmaxx(stdscr);
+		val.int_val = curr_stats.initial_columns;
+		if(val.int_val == INT_MIN)
+		{
+			val.int_val = getmaxx(stdscr);
+		}
 	}
 
 	if(val.int_val < MIN_TERM_WIDTH)
@@ -611,36 +841,20 @@ confirm_handler(OPT_OP op, optval_t val)
 static void
 cpoptions_handler(OPT_OP op, optval_t val)
 {
-	const char VALID[] = "st";
-	char buf[ARRAY_LEN(VALID)];
 	char *p;
 
-	buf[0] = '\0';
-	p = val.str_val;
-	while(*p != '\0')
-	{
-		if(char_is_one_of(VALID, *p))
-		{
-			buf[strlen(buf) + 1] = '\0';
-			buf[strlen(buf)] = *p;
-		}
-		p++;
-	}
-
-	if(strcmp(val.str_val, buf) != 0)
-	{
-		val.str_val = buf;
-		set_option("cpoptions", val);
-		return;
-	}
-
+	cfg.filter_inverted_by_default = 0;
 	cfg.selection_is_primary = 0;
 	cfg.tab_switches_pane = 0;
 
-	p = buf;
+	p = val.str_val;
 	while(*p != '\0')
 	{
-		if(*p == 's')
+		if(*p == 'f')
+		{
+			cfg.filter_inverted_by_default = 1;
+		}
+		else if(*p == 's')
 		{
 			cfg.selection_is_primary = 1;
 		}
@@ -666,6 +880,12 @@ fastrun_handler(OPT_OP op, optval_t val)
 }
 
 static void
+findprg_handler(OPT_OP op, optval_t val)
+{
+	(void)replace_string(&cfg.find_prg, val.str_val);
+}
+
+static void
 followlinks_handler(OPT_OP op, optval_t val)
 {
 	cfg.follow_links = val.bool_val;
@@ -674,21 +894,27 @@ followlinks_handler(OPT_OP op, optval_t val)
 static void
 fusehome_handler(OPT_OP op, optval_t val)
 {
+	char *const expanded_path = expand_path(val.str_val);
 	/* Set cfg.fuse_home in the correct way. */
-	char *expanded_path = expand_tilde(strdup(val.str_val));
-	(void)set_fuse_home(expanded_path);
+	if(set_fuse_home(expanded_path) != 0)
+	{
+		/* Reset the 'fusehome' options to its previous value. */
+		val.str_val = cfg.fuse_home;
+		set_option("fusehome", val);
+	}
 	free(expanded_path);
-
-	/* Update value of 'fusehome' in options unit to show its real value to
-	 * user. */
-	val.str_val = cfg.fuse_home;
-	set_option("fusehome", val);
 }
 
 static void
 gdefault_handler(OPT_OP op, optval_t val)
 {
 	cfg.gdefault = val.bool_val;
+}
+
+static void
+grepprg_handler(OPT_OP op, optval_t val)
+{
+	(void)replace_string(&cfg.grep_prg, val.str_val);
 }
 
 static void
@@ -766,7 +992,11 @@ lines_handler(OPT_OP op, optval_t val)
 	/* Handle case when 'lines' value wasn't yet initialized. */
 	if(val.int_val == INT_MIN)
 	{
-		val.int_val = getmaxy(stdscr);
+		val.int_val = curr_stats.initial_lines;
+		if(val.int_val == INT_MIN)
+		{
+			val.int_val = getmaxy(stdscr);
+		}
 	}
 
 	if(val.int_val < MIN_TERM_HEIGHT)
@@ -790,6 +1020,12 @@ lines_handler(OPT_OP op, optval_t val)
 }
 
 static void
+locateprg_handler(OPT_OP op, optval_t val)
+{
+	(void)replace_string(&cfg.locate_prg, val.str_val);
+}
+
+static void
 scroll_line_down(FileView *view)
 {
 	view->window_rows--;
@@ -805,11 +1041,7 @@ scroll_line_down(FileView *view)
 static void
 rulerformat_handler(OPT_OP op, optval_t val)
 {
-	char *s;
-	if((s = strdup(val.str_val)) == NULL)
-		return;
-	free(cfg.ruler_format);
-	cfg.ruler_format = s;
+	(void)replace_string(&cfg.ruler_format, val.str_val);
 }
 
 static void
@@ -844,22 +1076,32 @@ scrolloff_handler(OPT_OP op, optval_t val)
 static void
 shell_handler(OPT_OP op, optval_t val)
 {
-	char *s;
-	if((s = strdup(val.str_val)) == NULL)
-		return;
-	free(cfg.shell);
-	cfg.shell = s;
+	cfg_set_shell(val.str_val);
+}
+
+static void
+shortmess_handler(OPT_OP op, optval_t val)
+{
+	const char *p;
+
+	cfg.trunc_normal_sb_msgs = 0;
+
+	p = val.str_val;
+	while(*p != '\0')
+	{
+		if(*p == 'T')
+		{
+			cfg.trunc_normal_sb_msgs = 1;
+		}
+		p++;
+	}
 }
 
 #ifndef _WIN32
 static void
 slowfs_handler(OPT_OP op, optval_t val)
 {
-	char *s;
-	if((s = strdup(val.str_val)) == NULL)
-		return;
-	free(cfg.slow_fs_list);
-	cfg.slow_fs_list = s;
+	(void)replace_string(&cfg.slow_fs_list, val.str_val);
 }
 #endif
 
@@ -901,11 +1143,54 @@ lsview_handler(OPT_OP op, optval_t val)
 	}
 }
 
+/* Handles file numbers displaying toggle. */
+static void
+number_handler(OPT_OP op, optval_t val)
+{
+	update_num_type(NT_SEQ, val.bool_val);
+}
+
+/* Handles changes of minimum width of file number field. */
+static void
+numberwidth_handler(OPT_OP op, optval_t val)
+{
+	curr_view->num_width = val.int_val;
+
+	if(ui_view_displays_numbers(curr_view))
+	{
+		redraw_current_view();
+	}
+}
+
+/* Handles relative file numbers displaying toggle. */
+static void
+relativenumber_handler(OPT_OP op, optval_t val)
+{
+	update_num_type(NT_REL, val.bool_val);
+}
+
+/* Handles toggling of boolean number related option and updates current view if
+ * needed. */
+static void
+update_num_type(NumberingType num_type, int enable)
+{
+	const int old_num_type = curr_view->num_type;
+
+	curr_view->num_type = enable
+	                    ? (old_num_type | num_type)
+	                    : (old_num_type & ~num_type);
+
+	if(curr_view->num_type != old_num_type)
+	{
+		redraw_current_view();
+	}
+}
+
 static void
 sort_handler(OPT_OP op, optval_t val)
 {
 	char *p = val.str_val - 1;
-	int i, j;
+	int i;
 
 	i = 0;
 	do
@@ -914,6 +1199,7 @@ sort_handler(OPT_OP op, optval_t val)
 		char *t;
 		int minus;
 		int pos;
+		int j;
 
 		t = p + 1;
 		p = strchr(t, ',');
@@ -944,20 +1230,11 @@ sort_handler(OPT_OP op, optval_t val)
 	}
 	while(*p != '\0');
 
-	for(j = 0; j < i; j++)
+	if(i < SORT_OPTION_COUNT)
 	{
-		int sort_key = abs(curr_view->sort[j]);
-		if(sort_key == SORT_BY_NAME || sort_key == SORT_BY_INAME)
-			break;
+		curr_view->sort[i] = NO_SORT_OPTION;
 	}
-	if(j == i)
-#ifndef _WIN32
-		curr_view->sort[i++] = SORT_BY_NAME;
-#else
-		curr_view->sort[i++] = SORT_BY_INAME;
-#endif
-	while(i < NUM_SORT_OPTIONS)
-		curr_view->sort[i++] = NUM_SORT_OPTIONS + 1;
+	ui_view_sort_list_ensure_well_formed(curr_view->sort);
 
 	reset_view_sort(curr_view);
 	resort_view(curr_view);
@@ -1049,11 +1326,7 @@ resort_view(FileView * view)
 static void
 statusline_handler(OPT_OP op, optval_t val)
 {
-	char *s;
-	if((s = strdup(val.str_val)) == NULL)
-		return;
-	free(cfg.status_line);
-	cfg.status_line = s;
+	(void)replace_string(&cfg.status_line, val.str_val);
 }
 
 static void
@@ -1068,10 +1341,7 @@ tabstop_handler(OPT_OP op, optval_t val)
 	}
 
 	cfg.tab_stop = val.int_val;
-	if(curr_stats.view)
-		quick_view_file(curr_view);
-	else if(other_view->explore_mode)
-		view_redraw();
+	text_option_changed();
 }
 
 static void
@@ -1109,10 +1379,14 @@ trash_handler(OPT_OP op, optval_t val)
 static void
 trashdir_handler(OPT_OP op, optval_t val)
 {
-	char *s = expand_tilde(strdup(val.str_val));
-	snprintf(cfg.trash_dir, sizeof(cfg.trash_dir), "%s", s);
-	create_trash_dir();
-	free(s);
+	char *const expanded_path = expand_path(val.str_val);
+	if(set_trash_dir(expanded_path) != 0)
+	{
+		/* Reset the 'trashdir' option to its previous value. */
+		val.str_val = cfg.trash_dir;
+		set_option("trashdir", val);
+	}
+	free(expanded_path);
 }
 
 static void
@@ -1161,8 +1435,22 @@ static void
 wrap_handler(OPT_OP op, optval_t val)
 {
 	cfg.wrap_quick_view = val.bool_val;
+	text_option_changed();
+}
+
+/* Updates preview pane and explore mode.  Should be called when any of options
+ * that affect those modes is changed. */
+static void
+text_option_changed(void)
+{
 	if(curr_stats.view)
+	{
 		quick_view_file(curr_view);
+	}
+	else if(other_view->explore_mode)
+	{
+		view_redraw();
+	}
 }
 
 static void

@@ -16,8 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __CMDS_H__
-#define __CMDS_H__
+#ifndef VIFM__ENGINE__CMDS_H__
+#define VIFM__ENGINE__CMDS_H__
 
 #include <stddef.h> /* size_t */
 
@@ -46,6 +46,8 @@ enum
 
 enum
 {
+	/* Commands with ids in range [NO_COMPLETION_BOUNDARY; 0) not completed. */
+	NO_COMPLETION_BOUNDARY = -127,
 	USER_CMD_ID = -128,
 	COMCLEAR_CMD_ID = -129,
 	COMMAND_CMD_ID = -130,
@@ -79,7 +81,8 @@ typedef struct
 	int emark;
 	int qmark; /* 1 - no args after qmark, other value - args are allowed */
 	int min_args, max_args;
-	int expand; /* 1 - expand macros, 2 - expand envvars, 3 - expand both */
+	/* 0x01 - expand macros, 0x02 - expand envvars, 0x04 - expand for shell */
+	int expand;
 	int regexp;
 	int select; /* select files in range */
 	int bg; /* background */
@@ -94,18 +97,18 @@ typedef struct
 	int current;
 	int end;
 
-	int (*complete_args)(int id, const char *args, int argc, char **argv,
+	int (*complete_args)(int id, const char args[], int argc, char *argv[],
 			int arg_pos);
 	int (*swap_range)(void);
 	int (*resolve_mark)(char mark); /* should return value < 0 on error */
 	/* should allocate memory */
-	char *(*expand_macros)(const char *str, int *usr1, int *usr2);
+	char *(*expand_macros)(const char str[], int for_shell, int *usr1, int *usr2);
 	/* should allocate memory */
-	char *(*expand_envvars)(const char *str);
+	char *(*expand_envvars)(const char str[]);
 	void (*post)(int id); /* called after successful processing command */
 	void (*select_range)(int id, const cmd_info_t *cmd_info);
 	/* should return < 0 to do nothing, x to skip command name and x chars */
-	int (*skip_at_beginning)(int id, const char *args);
+	int (*skip_at_beginning)(int id, const char args[]);
 }cmds_conf_t;
 
 /* cmds_conf_t should be filled before calling this function */
@@ -113,14 +116,14 @@ void init_cmds(int udf, cmds_conf_t *cmds_conf);
 
 void reset_cmds(void);
 
-/* Returns one of CMDS_ERR_* codes. */
-int execute_cmd(const char *cmd);
+/* Returns one of CMDS_ERR_* codes or code returned by command handler. */
+int execute_cmd(const char cmd[]);
 
 /* Returns -1 on error and USER_CMD_ID for user defined commands. */
-int get_cmd_id(const char *cmd);
+int get_cmd_id(const char cmd[]);
 
 /* Returns command id */
-int get_cmd_info(const char *cmd, cmd_info_t *info);
+int get_cmd_info(const char cmd[], cmd_info_t *info);
 
 /* Returns offset in cmd, where completion elements should be pasted. */
 int complete_cmd(const char cmd[]);
@@ -133,15 +136,16 @@ char * get_last_argument(const char cmd[], size_t *len);
 /* Last element is followed by a NULL */
 char ** list_udf(void);
 
-char * list_udf_content(const char *beginning);
+char * list_udf_content(const char beginning[]);
 
 TSTATIC_DEFS(
 	int add_builtin_cmd(const char name[], int abbr, const cmd_add_t *conf);
 	char ** dispatch_line(const char args[], int *count, char sep, int regexp,
 			int quotes, int *last_arg, int *last_begin, int *last_end);
+	void unescape(char s[], int regexp);
 )
 
-#endif
+#endif /* VIFM__ENGINE__CMDS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

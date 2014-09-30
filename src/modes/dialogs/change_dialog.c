@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "change_dialog.h"
+
 #include <curses.h>
 
 #include <assert.h>
@@ -36,8 +38,6 @@
 #include "../cmdline.h"
 #include "../modes.h"
 #include "attr_dialog.h"
-
-#include "change_dialog.h"
 
 static void leave_change_mode(int clean_selection);
 static void cmd_ctrl_c(key_info_t key_info, keys_info_t *keys_info);
@@ -152,8 +152,7 @@ leave_change_mode(int clean_selection)
 
 	if(clean_selection)
 	{
-		clean_selected_files(view);
-		load_saving_pos(view, 1);
+		ui_view_reset_selection_and_reload(view);
 	}
 
 	update_all_windows();
@@ -171,7 +170,7 @@ cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 	leave_change_mode(0);
 
 	if(curr == 2)
-		rename_file(view, 0);
+		rename_current_file(view, 0);
 #ifndef _WIN32
 	else if(curr == 4)
 		change_owner();

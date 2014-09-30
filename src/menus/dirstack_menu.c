@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "dirstack_menu.h"
+
 #include <string.h> /* strdup() */
 
 #include "../modes/menu.h"
@@ -24,51 +26,45 @@
 #include "../ui.h"
 #include "menus.h"
 
-#include "dirstask_menu.h"
+static int execute_dirstack_cb(FileView *view, menu_info *m);
 
 int
 show_dirstack_menu(FileView *view)
 {
-	int i;
-
 	static menu_info m;
-	init_menu_info(&m, DIRSTACK);
+	/* Directory stack always contains at least one item (current directories). */
+	init_menu_info(&m, DIRSTACK_MENU, NULL);
 	m.title = strdup(" Directory Stack ");
+	m.execute_handler = &execute_dirstack_cb;
 
 	m.items = dir_stack_list();
 
-	i = -1;
-	while(m.items[++i] != NULL);
-	if(i != 0)
-	{
-		m.len = i;
-	}
-	else
-	{
-		m.items[0] = strdup("Directory stack is empty");
-		m.len = 1;
-	}
+	m.len = -1;
+	while(m.items[++m.len] != NULL);
 
-	setup_menu();
-	draw_menu(&m);
-	move_to_menu_pos(m.pos, &m);
-	enter_menu_mode(&m, view);
-	return 0;
+	return display_menu(&m, view);
 }
 
-void
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
 execute_dirstack_cb(FileView *view, menu_info *m)
 {
-	int pos = 0;
-	int i;
+	if(m->items[m->pos][0] != '-')
+	{
+		int pos = 0;
+		int i;
 
-	if(m->items[m->pos][0] == '-')
-		return;
-
-	for(i = 0; i < m->pos; i++)
-		if(m->items[i][0] == '-')
-			pos++;
-	rotate_stack(pos);
+		for(i = 0; i < m->pos; i++)
+		{
+			if(m->items[i][0] == '-')
+			{
+				pos++;
+			}
+		}
+		rotate_stack(pos);
+	}
+	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
