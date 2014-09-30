@@ -17,15 +17,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __ALL_H__
-#define __ALL_H__
+#ifndef VIFM__MENUS__ALL_H__
+#define VIFM__MENUS__ALL_H__
 
 #include "apropos_menu.h"
 #include "bookmarks_menu.h"
 #include "colorscheme_menu.h"
 #include "commands_menu.h"
 #include "dirhistory_menu.h"
-#include "dirstask_menu.h"
+#include "dirstack_menu.h"
 #include "filetypes_menu.h"
 #include "find_menu.h"
 #include "grep_menu.h"
@@ -34,12 +34,14 @@
 #include "locate_menu.h"
 #include "map_menu.h"
 #include "registers_menu.h"
+#include "trash_menu.h"
+#include "trashes_menu.h"
 #include "undolist_menu.h"
 #include "users_menu.h"
 #include "vifm_menu.h"
 #include "volumes_menu.h"
 
-#endif
+#endif /* VIFM__MENUS__ALL_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

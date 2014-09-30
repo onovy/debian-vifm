@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "file_magic.h"
+
 #ifdef HAVE_LIBGTK
 #include <gio/gio.h>
 #include <glib.h>
@@ -33,8 +35,6 @@
 #include "desktop.h"
 #include "filetype.h"
 #include "status.h"
-
-#include "file_magic.h"
 
 static assoc_records_t handlers;
 
@@ -180,7 +180,7 @@ parse_app_dir(const char *directory, const char *mime_type,
 		assoc_records_t *result)
 {
 	assoc_records_t desktop_assocs = parse_desktop_files(directory, mime_type);
-	add_assoc_records(result, desktop_assocs);
+	add_assoc_records(result, &desktop_assocs);
 	free_assoc_records(&desktop_assocs);
 }
 #endif

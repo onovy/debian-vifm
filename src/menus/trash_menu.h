@@ -1,6 +1,5 @@
 /* vifm
- * Copyright (C) 2001 Ken Steen.
- * Copyright (C) 2011 xaizek.
+ * Copyright (C) 2013 xaizek.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -17,15 +16,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __DIRSTASK_MENU_H__
-#define __DIRSTASK_MENU_H__
+#ifndef VIFM__MENUS__TRASH_MENU_H__
+#define VIFM__MENUS__TRASH_MENU_H__
 
 #include "../ui.h"
+#include "menus.h"
 
-int show_dirstack_menu(FileView *view);
-void execute_dirstack_cb(FileView *view, menu_info *m);
+/* Returns non-zero if status bar message should be saved. */
+int show_trash_menu(FileView *view);
 
-#endif
+#endif /* VIFM__MENUS__TRASH_MENU_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

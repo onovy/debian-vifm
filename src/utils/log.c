@@ -16,9 +16,10 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "log.h"
+
 #include <unistd.h>
 
-#include <limits.h> /* PATH_MAX */
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
@@ -26,8 +27,7 @@
 
 #include "../cfg/config.h"
 #include "../status.h"
-
-#include "log.h"
+#include "fs_limits.h"
 
 static FILE *log;
 static int verbosity;
@@ -120,10 +120,13 @@ void
 log_msg(const char *msg, ...)
 {
 	va_list ap;
-	va_start(ap, msg);
 
 	if(verbosity <= 0 || log == NULL)
+	{
 		return;
+	}
+
+	va_start(ap, msg);
 
 	fprintf(log, "               ");
 	vfprintf(log, msg, ap);

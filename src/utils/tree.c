@@ -16,7 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <limits.h> /* PATH_MAX */
+#include "tree.h"
+
 #include <stdint.h> /* uint64_t */
 #include <stdlib.h>
 #include <string.h>
@@ -24,9 +25,8 @@
 #ifdef _WIN32
 #include "fs.h"
 #endif
+#include "fs_limits.h"
 #include "str.h"
-
-#include "tree.h"
 
 typedef struct node_t
 {
@@ -149,11 +149,7 @@ find_node(node_t *root, const char *name, int create, node_t **last)
 	node_t *prev = NULL, *curr;
 	node_t *new_node;
 
-	while(*name == '/')
-	{
-		name++;
-	}
-
+	name = skip_char(name, '/');
 	if(*name == '\0')
 		return root;
 

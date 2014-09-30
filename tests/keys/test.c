@@ -21,11 +21,15 @@ void put_wait_points(void);
 void remap_users(void);
 void same_multi_and_motion(void);
 void users_key_to_key(void);
+void def_keys_and_user_mappings(void);
 void pick_longest(void);
 void unmap_tests(void);
 void noremap_tests(void);
 void num_in_the_middle_tests(void);
 void selectors_tests(void);
+void mapping_state_tests(void);
+void count_tests(void);
+void rhs_tests(void);
 
 void
 all_tests(void)
@@ -51,6 +55,9 @@ all_tests(void)
 	noremap_tests();
 	num_in_the_middle_tests();
 	selectors_tests();
+	mapping_state_tests();
+	count_tests();
+	rhs_tests();
 }
 
 void

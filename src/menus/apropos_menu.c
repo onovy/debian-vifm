@@ -17,43 +17,52 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "apropos_menu.h"
+
+#include <stddef.h> /* NULL */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* malloc() free() */
 #include <string.h> /* strdup() strchr() strlen() */
 
+#include "../cfg/config.h"
+#include "../utils/macros.h"
+#include "../utils/str.h"
+#include "../macros.h"
 #include "../running.h"
 #include "../status.h"
+#include "../ui.h"
 #include "menus.h"
 
-#include "apropos_menu.h"
+static int execute_apropos_cb(FileView *view, menu_info *m);
 
-void
-show_apropos_menu(FileView *view, char args[])
+int
+show_apropos_menu(FileView *view, const char args[])
 {
-	char cmd_buf[256];
-	int were_errors;
-	size_t title_len;
+	char *cmd;
+	int save_msg;
+	custom_macro_t macros[] =
+	{
+		{ .letter = 'a', .value = args, .uses_left = 1, .group = -1 },
+	};
 
 	static menu_info m;
-	init_menu_info(&m, APROPOS);
+	init_menu_info(&m, APROPOS_MENU, format_str("No matches for \'%s\'", args));
 	m.args = strdup(args);
-
-	title_len = 9 + strlen(args) + 1 + 1;
-	m.title = malloc(title_len);
-	snprintf(m.title, title_len, " Apropos %s ", args);
+	m.title = format_str(" Apropos %s ", args);
+	m.execute_handler = &execute_apropos_cb;
 
 	status_bar_message("apropos...");
 
-	snprintf(cmd_buf, sizeof(cmd_buf), "apropos %s", args);
-	were_errors = capture_output_to_menu(view, cmd_buf, &m);
-	if(!were_errors && m.len < 1)
-	{
-		show_error_msgf("Nothing Appropriate", "No matches for \'%s\'", m.title);
-	}
+	cmd = expand_custom_macros(cfg.apropos_prg, ARRAY_LEN(macros), macros);
+	save_msg = capture_output_to_menu(view, cmd, &m);
+	free(cmd);
+	return save_msg;
 }
 
-void
-execute_apropos_cb(menu_info *m)
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
+execute_apropos_cb(FileView *view, menu_info *m)
 {
 	char *line;
 	char *man_page;
@@ -65,7 +74,7 @@ execute_apropos_cb(menu_info *m)
 	if(free_this == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory");
-		return;
+		return 1;
 	}
 
 	if((num_str = strchr(line, '(')))
@@ -79,21 +88,25 @@ execute_apropos_cb(menu_info *m)
 			if(z > 40)
 			{
 				free(free_this);
-				return;
+				return 1;
 			}
 		}
 
 		num_str[z] = '\0';
 		line = strchr(line, ' ');
-		line[0] = '\0';
+		if(line != NULL)
+		{
+			line[0] = '\0';
 
-		snprintf(command, sizeof(command), "man %s %s", num_str, man_page);
+			snprintf(command, sizeof(command), "man %s %s", num_str, man_page);
 
-		curr_stats.auto_redraws = 1;
-		shellout(command, 0, 1);
-		curr_stats.auto_redraws = 0;
+			curr_stats.skip_shellout_redraw = 1;
+			shellout(command, 0, 1);
+			curr_stats.skip_shellout_redraw = 0;
+		}
 	}
 	free(free_this);
+	return 1;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

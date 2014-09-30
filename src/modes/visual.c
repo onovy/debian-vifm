@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "visual.h"
+
 #include <curses.h>
 
 #include <assert.h>
@@ -30,6 +32,7 @@
 #include "../commands.h"
 #include "../filelist.h"
 #include "../fileops.h"
+#include "../registers.h"
 #include "../running.h"
 #include "../search.h"
 #include "../status.h"
@@ -37,8 +40,6 @@
 #include "cmdline.h"
 #include "modes.h"
 #include "normal.h"
-
-#include "visual.h"
 
 static void cmd_ctrl_a(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_b(key_info_t key_info, keys_info_t *keys_info);
@@ -90,10 +91,14 @@ static void cmd_l(key_info_t key_info, keys_info_t *keys_info);
 static void go_to_next(key_info_t key_info, keys_info_t *keys_info, int def,
 		int step);
 static void cmd_m(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_q_colon(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_q_slash(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_q_question(key_info_t key_info, keys_info_t *keys_info);
+static void activate_search(int count, int back, int external);
 static void cmd_n(key_info_t key_info, keys_info_t *keys_info);
 static void search(key_info_t key_info, int backward);
 static void cmd_y(key_info_t key_info, keys_info_t *keys_info);
-static void leave_clearing_selection(int save_msg);
+static void leave_clearing_selection(int go_to_top, int save_msg);
 static void update_marks(FileView *view);
 static void cmd_zf(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_left_paren(key_info_t key_info, keys_info_t *keys_info);
@@ -174,6 +179,9 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"m", {BUILTIN_WAIT_POINT, FOLLOWED_BY_MULTIKEY, {.handler = cmd_m}}},
 	{L"n", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_n}}},
 	{L"o", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_O}}},
+	{L"q:", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_q_colon}}},
+	{L"q/", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_q_slash}}},
+	{L"q?", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_q_question}}},
 	{L"u", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_gu}}},
 	{L"v", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_c}}},
 	{L"y", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_y}}},
@@ -266,7 +274,7 @@ cmd_ctrl_a(key_info_t key_info, keys_info_t *keys_info)
 	if(key_info.count == NO_COUNT_GIVEN)
 		key_info.count = 1;
 	curr_stats.save_msg = incdec_names(view, key_info.count);
-	leave_clearing_selection(curr_stats.save_msg);
+	leave_clearing_selection(1, curr_stats.save_msg);
 }
 
 static void
@@ -360,7 +368,7 @@ cmd_ctrl_u(key_info_t key_info, keys_info_t *keys_info)
 		size_t offset = view->window_cells/2;
 		offset = ROUND_DOWN(offset, view->column_count);
 		new_pos = get_corrected_list_pos_up(view, offset);
-		new_pos = MIN(new_pos, view->list_pos - offset);
+		new_pos = MIN(new_pos, view->list_pos - (int)offset);
 		new_pos = MAX(new_pos, 0);
 		new_pos = ROUND_DOWN(new_pos, view->column_count);
 		view->top_line += new_pos - view->list_pos;
@@ -374,7 +382,7 @@ cmd_ctrl_x(key_info_t key_info, keys_info_t *keys_info)
 	if(key_info.count == NO_COUNT_GIVEN)
 		key_info.count = 1;
 	curr_stats.save_msg = incdec_names(view, -key_info.count);
-	leave_clearing_selection(curr_stats.save_msg);
+	leave_clearing_selection(1, curr_stats.save_msg);
 }
 
 static void
@@ -394,7 +402,7 @@ cmd_C(key_info_t key_info, keys_info_t *keys_info)
 	if(key_info.count == NO_COUNT_GIVEN)
 		key_info.count = 1;
 	curr_stats.save_msg = clone_files(view, NULL, 0, 0, key_info.count);
-	leave_clearing_selection(curr_stats.save_msg);
+	leave_clearing_selection(1, curr_stats.save_msg);
 }
 
 static void
@@ -541,18 +549,14 @@ cmd_semicolon(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_slash(key_info_t key_info, keys_info_t *keys_info)
 {
-	search_repeat = (key_info.count == NO_COUNT_GIVEN) ? 1 : key_info.count;
-	curr_stats.last_search_backward = 0;
-	enter_cmdline_mode(VSEARCH_FORWARD_SUBMODE, L"", NULL);
+	activate_search(key_info.count, 0, 0);
 }
 
 /* Search backward. */
 static void
 cmd_question(key_info_t key_info, keys_info_t *keys_info)
 {
-	search_repeat = (key_info.count == NO_COUNT_GIVEN) ? 1 : key_info.count;
-	curr_stats.last_search_backward = 1;
-	enter_cmdline_mode(VSEARCH_BACKWARD_SUBMODE, L"", NULL);
+	activate_search(key_info.count, 1, 0);
 }
 
 static void
@@ -578,7 +582,7 @@ delete(key_info_t key_info, int use_trash)
 	}
 
 	save_msg = delete_file(view, key_info.reg, 0, NULL, use_trash);
-	leave_clearing_selection(save_msg);
+	leave_clearing_selection(1, save_msg);
 }
 
 static void
@@ -630,7 +634,7 @@ cmd_gU(key_info_t key_info, keys_info_t *keys_info)
 {
 	int save_msg;
 	save_msg = change_case(view, 1, 0, NULL);
-	leave_clearing_selection(save_msg);
+	leave_clearing_selection(1, save_msg);
 }
 
 static void
@@ -638,7 +642,7 @@ cmd_gu(key_info_t key_info, keys_info_t *keys_info)
 {
 	int save_msg;
 	save_msg = change_case(view, 0, 0, NULL);
-	leave_clearing_selection(save_msg);
+	leave_clearing_selection(1, save_msg);
 }
 
 static void
@@ -695,7 +699,7 @@ static void
 cmd_i(key_info_t key_info, keys_info_t *keys_info)
 {
 	handle_file(view, 1, 0);
-	leave_clearing_selection(curr_stats.save_msg);
+	leave_clearing_selection(1, curr_stats.save_msg);
 }
 
 static void
@@ -752,7 +756,7 @@ go_to_next(key_info_t key_info, keys_info_t *keys_info, int def, int step)
 static void
 cmd_m(key_info_t key_info, keys_info_t *keys_info)
 {
-	add_bookmark(key_info.multi, view->curr_dir,
+	set_user_bookmark(key_info.multi, view->curr_dir,
 			get_current_file_name(view));
 }
 
@@ -766,18 +770,19 @@ static void
 search(key_info_t key_info, int backward)
 {
 	int found;
-	if(cfg.search_history_num < 0)
+
+	if(hist_is_empty(&cfg.search_hist))
+	{
 		return;
+	}
 
 	if(view->matches == 0)
 	{
 		const char *pattern = (view->regexp[0] == '\0') ?
-				cfg.search_history[0] : view->regexp;
+				cfg.search_hist.items[0] : view->regexp;
 		curr_stats.save_msg = find_vpattern(view, pattern, backward);
-	}
-
-	if(view->matches == 0)
 		return;
+	}
 
 	if(key_info.count == NO_COUNT_GIVEN)
 		key_info.count = 1;
@@ -796,6 +801,46 @@ search(key_info_t key_info, int backward)
 	curr_stats.save_msg = 1;
 }
 
+/* Runs external editor to get command-line command and then executes it. */
+static void
+cmd_q_colon(key_info_t key_info, keys_info_t *keys_info)
+{
+	leave_clearing_selection(0, 0);
+	get_and_execute_command("", 0U, GET_COMMAND);
+}
+
+/* Runs external editor to get search pattern and then executes it. */
+static void
+cmd_q_slash(key_info_t key_info, keys_info_t *keys_info)
+{
+	activate_search(key_info.count, 0, 1);
+}
+
+/* Runs external editor to get search pattern and then executes it. */
+static void
+cmd_q_question(key_info_t key_info, keys_info_t *keys_info)
+{
+	activate_search(key_info.count, 1, 1);
+}
+
+/* Activates search of different kinds. */
+static void
+activate_search(int count, int back, int external)
+{
+	search_repeat = (count == NO_COUNT_GIVEN) ? 1 : count;
+	curr_stats.last_search_backward = back;
+	if(external)
+	{
+		const int type = back ? GET_VBSEARCH_PATTERN : GET_VFSEARCH_PATTERN;
+		get_and_execute_command("", 0U, type);
+	}
+	else
+	{
+		const int type = back ? VSEARCH_BACKWARD_SUBMODE : VSEARCH_FORWARD_SUBMODE;
+		enter_cmdline_mode(type, L"", NULL);
+	}
+}
+
 static void
 cmd_y(key_info_t key_info, keys_info_t *keys_info)
 {
@@ -810,41 +855,42 @@ cmd_y(key_info_t key_info, keys_info_t *keys_info)
 
 	free_selected_file_array(view);
 
-	leave_clearing_selection(1);
+	leave_clearing_selection(1, 1);
 }
 
 /* Correctly leaves visual mode updating marks, clearing selection and going to
  * the top of selection. */
 static void
-leave_clearing_selection(int save_msg)
+leave_clearing_selection(int go_to_top, int save_msg)
 {
 	update_marks(view);
-	leave_visual_mode(save_msg, 1, 1);
+	leave_visual_mode(save_msg, go_to_top, 1);
 }
 
 static void
 update_marks(FileView *view)
 {
+	char start_mark, end_mark;
+
 	if(start_pos >= view->list_rows)
+	{
 		start_pos = view->list_rows - 1;
+	}
+
 	upwards_range = view->list_pos < start_pos;
-	if(upwards_range)
-	{
-		set_specmark('<', view->curr_dir, get_current_file_name(view));
-		set_specmark('>', view->curr_dir, view->dir_entry[start_pos].name);
-	}
-	else
-	{
-		set_specmark('<', view->curr_dir, view->dir_entry[start_pos].name);
-		set_specmark('>', view->curr_dir, get_current_file_name(view));
-	}
+
+	start_mark = upwards_range ? '<' : '>';
+	end_mark = upwards_range ? '>' : '<';
+
+	set_spec_bookmark(start_mark, view->curr_dir, get_current_file_name(view));
+	set_spec_bookmark(end_mark, view->curr_dir, view->dir_entry[start_pos].name);
 }
 
 static void
 cmd_zf(key_info_t key_info, keys_info_t *keys_info)
 {
 	filter_selected_files(view);
-	leave_clearing_selection(0);
+	leave_clearing_selection(1, 0);
 }
 
 static void
@@ -985,9 +1031,10 @@ find_vpattern(FileView *view, const char *pattern, int backward)
 	int i;
 	int result;
 	int hls = cfg.hl_search;
+	int found;
 
 	cfg.hl_search = 0;
-	result = find_pattern(view, pattern, backward, 0);
+	result = find_pattern(view, pattern, backward, 0, &found);
 	cfg.hl_search = hls;
 	for(i = 0; i < search_repeat; i++)
 		find_update(view, backward);
@@ -998,14 +1045,9 @@ find_vpattern(FileView *view, const char *pattern, int backward)
 static int
 find_update(FileView *view, int backward)
 {
-	int found;
-	int old_pos, new_pos;
-	old_pos = view->list_pos;
-	if(backward)
-		found = find_previous_pattern(view, cfg.wrap_scan);
-	else
-		found = find_next_pattern(view, cfg.wrap_scan);
-	new_pos = view->list_pos;
+	const int old_pos = view->list_pos;
+	const int found = goto_search_match(view, backward);
+	const int new_pos = view->list_pos;
 	view->list_pos = old_pos;
 	goto_pos(new_pos);
 	return found;

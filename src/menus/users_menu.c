@@ -17,30 +17,43 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "users_menu.h"
+
 #include <string.h> /* strdup() */
 
 #include "../status.h"
 #include "../ui.h"
 #include "menus.h"
 
-#include "users_menu.h"
+static int execute_users_cb(FileView *view, menu_info *m);
 
-void
+int
 show_user_menu(FileView *view, const char command[], int navigate)
 {
 	static menu_info m;
-	int were_errors;
-	const int menu_type = navigate ? USER_NAVIGATE : USER;
-	init_menu_info(&m, menu_type);
+	const int menu_type = navigate ? USER_NAVIGATE_MENU : USER_MENU;
+	init_menu_info(&m, menu_type, strdup("No results found"));
 
 	m.title = strdup(command);
-
-	were_errors = capture_output_to_menu(view, command, &m);
-	if(!were_errors && m.len < 1)
+	m.execute_handler = &execute_users_cb;
+	if(navigate)
 	{
-		status_bar_error("No results found");
-		curr_stats.save_msg = 1;
+		m.key_handler = &filelist_khandler;
 	}
+
+	return capture_output_to_menu(view, command, &m);
+}
+
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
+execute_users_cb(FileView *view, menu_info *m)
+{
+	if(m->type == USER_NAVIGATE_MENU)
+	{
+		goto_selected_file(view, m->items[m->pos], 0);
+	}
+	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

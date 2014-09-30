@@ -17,15 +17,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#define _GNU_SOURCE /* I don't know how portable this is but it is
-                     * needed in Linux for the ncurses wide char
-                     * functions
-                     */
-
-#ifdef __APPLE__
-/* Enable wide functions of ncurses for Mac OS. */
-#define _XOPEN_SOURCE_EXTENDED
-#endif
+#include "ui.h"
 
 #include <sys/stat.h> /* stat */
 #include <dirent.h> /* DIR */
@@ -37,14 +29,13 @@
 #endif
 #include <unistd.h>
 
-#include <assert.h>
+#include <assert.h> /* assert() */
 #include <ctype.h>
-#include <limits.h> /* PATH_MAX */
 #include <signal.h> /* signal() */
 #include <stdarg.h> /* va_list va_start() va_end() */
-#include <stdlib.h> /* malloc */
+#include <stdlib.h> /* malloc() free() */
 #include <stdio.h> /* snprintf() vsnprintf() */
-#include <string.h>
+#include <string.h> /* memset() strcpy() strlen() */
 #include <time.h>
 
 #include "cfg/config.h"
@@ -53,8 +44,11 @@
 #include "modes/file_info.h"
 #include "modes/modes.h"
 #include "modes/view.h"
+#include "utils/fs.h"
+#include "utils/fs_limits.h"
 #include "utils/log.h"
 #include "utils/macros.h"
+#include "utils/path.h"
 #include "utils/str.h"
 #include "utils/utf8.h"
 #include "utils/utils.h"
@@ -65,24 +59,44 @@
 #include "quickview.h"
 #include "signals.h"
 #include "status.h"
+#include "term_title.h"
 
-#include "ui.h"
+/* State of cancellation request processing. */
+typedef enum
+{
+	CRS_DISABLED,           /* Cancellation is disabled. */
+	CRS_DISABLED_REQUESTED, /* Cancellation is disabled and was requested. */
+	CRS_ENABLED,            /* Cancellation is enabled, but wasn't requested. */
+	CRS_ENABLED_REQUESTED,  /* Cancellation is enabled and was requested. */
+}
+cancellation_request_state;
 
 static const char PRESS_ENTER_MSG[] = "Press ENTER or type command to continue";
 
 static int multiline_status_bar;
+
+/* Whether cancellation was requested.  Used by ui_cancellation_* group of
+ * functions. */
+static cancellation_request_state cancellation_state;
 
 static WINDOW *ltop_line1;
 static WINDOW *ltop_line2;
 static WINDOW *rtop_line1;
 static WINDOW *rtop_line2;
 
+static void truncate_with_ellipsis(const char msg[], size_t width,
+		char buffer[]);
 static void update_attributes(void);
+static void update_geometry(void);
 static void update_views(int reload);
 static void reload_lists(void);
 static void reload_list(FileView *view);
+static void swap_view_roles(void);
 static void update_view(FileView *win);
 static void update_window_lazy(WINDOW *win);
+static void switch_panes_content(void);
+static int ui_cancellation_enabled(void);
+static int ui_cancellation_disabled(void);
 
 static void _gnuc_noreturn
 finish(const char *message)
@@ -103,7 +117,7 @@ break_in_two(char *str, size_t max)
 	if(break_point == NULL)
 		return str;
 
-	len = get_utf8_string_length(str) - 2;
+	len = get_screen_string_length(str) - 2;
 	size = strlen(str);
 	size = MAX(size, max);
 	result = malloc(size*4 + 2);
@@ -112,7 +126,7 @@ break_in_two(char *str, size_t max)
 
 	if(len > max)
 	{
-		int l = get_utf8_string_length(result) - (len - max);
+		const int l = get_screen_string_length(result) - (len - max);
 		break_point = str + get_real_string_width(str, MAX(l, 0));
 	}
 
@@ -183,6 +197,11 @@ expand_ruler_macros(FileView *view, const char *format)
 			case '%':
 				snprintf(buf, sizeof(buf), "%%");
 				break;
+
+			default:
+				LOG_INFO_MSG("Unexpected %%-sequence: %%%c", c);
+				snprintf(buf, sizeof(buf), "%%%c", c);
+				break;
 		}
 		if(strlen(buf) < width)
 		{
@@ -216,13 +235,21 @@ update_pos_window(FileView *view)
 	char *buf;
 
 	buf = expand_ruler_macros(view, cfg.ruler_format);
-	buf = break_in_two(buf, 13);
+	buf = break_in_two(buf, POS_WIN_WIDTH);
 
-	werase(pos_win);
-	mvwaddstr(pos_win, 0, 0, buf);
-	wrefresh(pos_win);
+	ui_pos_window_set(buf);
 
 	free(buf);
+}
+
+void
+ui_pos_window_set(const char val[])
+{
+	const int x = POS_WIN_WIDTH - strlen(val);
+
+	werase(pos_win);
+	mvwaddstr(pos_win, 0, MAX(x, 0), val);
+	wnoutrefresh(pos_win);
 }
 
 static void
@@ -313,7 +340,7 @@ expand_status_line_macros(FileView *view, const char *format)
 		switch(c)
 		{
 			case 't':
-				snprintf(buf, sizeof(buf), "%s", get_current_file_name(view));
+				format_entry_name(curr_view, view->list_pos, sizeof(buf), buf);
 				break;
 			case 'A':
 #ifndef _WIN32
@@ -376,6 +403,11 @@ expand_status_line_macros(FileView *view, const char *format)
 				break;
 			case '%':
 				snprintf(buf, sizeof(buf), "%%");
+				break;
+
+			default:
+				LOG_INFO_MSG("Unexpected %%-sequence: %%%c", c);
+				snprintf(buf, sizeof(buf), "%%%c", c);
 				break;
 		}
 		if(strlen(buf) < width)
@@ -445,7 +477,7 @@ update_stat_window_old(FileView *view)
 
 	werase(stat_win);
 	cur_x = 2;
-	wmove(stat_win, 0, cur_x);
+	checked_wmove(stat_win, 0, cur_x);
 	wprint(stat_win, name_buf);
 	cur_x += 22;
 	if(x > 83)
@@ -499,7 +531,7 @@ update_stat_window(FileView *view)
 	buf = break_in_two(buf, getmaxx(stdscr));
 
 	werase(stat_win);
-	wmove(stat_win, 0, 0);
+	checked_wmove(stat_win, 0, 0);
 	wprint(stat_win, buf);
 	wrefresh(stat_win);
 
@@ -533,6 +565,8 @@ save_status_bar_msg(const char *msg)
 static void
 status_bar_message_i(const char *message, int error)
 {
+	/* TODO: Refactor this function status_bar_message_i() */
+
 	static char *msg;
 	static int err;
 
@@ -540,19 +574,20 @@ status_bar_message_i(const char *message, int error)
 	const char *p, *q;
 	int lines;
 	int status_bar_lines;
+	size_t screen_length;
+	const char *out_msg;
+	char truncated_msg[2048];
 
 	if(curr_stats.load_stage == 0)
 		return;
 
 	if(message != NULL)
 	{
-		char *p;
-
-		if((p = strdup(message)) == NULL)
+		if(replace_string(&msg, message))
+		{
 			return;
+		}
 
-		free(msg);
-		msg = p;
 		err = error;
 
 		save_status_bar_msg(msg);
@@ -580,18 +615,31 @@ status_bar_message_i(const char *message, int error)
 	{
 		status_bar_lines++;
 	}
-	status_bar_lines += DIV_ROUND_UP(strlen(p), len);
+	screen_length = get_screen_string_length(p);
+	status_bar_lines += DIV_ROUND_UP(screen_length, len);
 	if(status_bar_lines == 0)
 		status_bar_lines = 1;
 
 	lines = status_bar_lines;
-	if(status_bar_lines > 1 || strlen(p) > getmaxx(status_bar))
+	if(status_bar_lines > 1 || screen_length > getmaxx(status_bar))
 		lines++;
+
+	out_msg = msg;
 
 	if(lines > 1)
 	{
-		int extra = DIV_ROUND_UP(ARRAY_LEN(PRESS_ENTER_MSG) - 1, len) - 1;
-		lines += extra;
+		if(cfg.trunc_normal_sb_msgs && !err && curr_stats.allow_sb_msg_truncation)
+		{
+			truncate_with_ellipsis(msg, getmaxx(stdscr) - FIELDS_WIDTH,
+					truncated_msg);
+			out_msg = truncated_msg;
+			lines = 1;
+		}
+		else
+		{
+			const int extra = DIV_ROUND_UP(ARRAY_LEN(PRESS_ENTER_MSG) - 1, len) - 1;
+			lines += extra;
+		}
 	}
 
 	if(lines > getmaxy(stdscr))
@@ -601,13 +649,13 @@ status_bar_message_i(const char *message, int error)
 	mvwin(status_bar, getmaxy(stdscr) - lines, 0);
 	if(lines == 1)
 	{
-		wresize(status_bar, lines, getmaxx(stdscr) - 19);
+		wresize(status_bar, lines, getmaxx(stdscr) - FIELDS_WIDTH);
 	}
 	else
 	{
 		wresize(status_bar, lines, getmaxx(stdscr));
 	}
-	wmove(status_bar, 0, 0);
+	checked_wmove(status_bar, 0, 0);
 
 	if(err)
 	{
@@ -623,12 +671,12 @@ status_bar_message_i(const char *message, int error)
 	}
 	werase(status_bar);
 
-	wprint(status_bar, msg);
+	wprint(status_bar, out_msg);
 	multiline_status_bar = lines > 1;
 	if(multiline_status_bar)
 	{
-		wmove(status_bar, lines - DIV_ROUND_UP(ARRAY_LEN(PRESS_ENTER_MSG), len),
-				0);
+		checked_wmove(status_bar,
+				lines - DIV_ROUND_UP(ARRAY_LEN(PRESS_ENTER_MSG), len), 0);
 		wclrtoeol(status_bar);
 		if(lines < status_bar_lines)
 			wprintw(status_bar, "%d of %d lines.  ", lines, status_bar_lines);
@@ -642,6 +690,23 @@ status_bar_message_i(const char *message, int error)
 		update_window_lazy(stat_win);
 	}
 	doupdate();
+}
+
+/* Truncate the msg to the width by placing ellipsis in the middle and put the
+ * result to the buffer. */
+static void
+truncate_with_ellipsis(const char msg[], size_t width, char buffer[])
+{
+	const size_t screen_len = get_screen_string_length(msg);
+	const size_t screen_left_len = (width - 3)/2;
+	const size_t screen_right_len = (width - 3) - screen_left_len;
+	const size_t left = get_normal_utf8_string_widthn(msg, screen_left_len);
+	const size_t right = get_normal_utf8_string_widthn(msg,
+			screen_len - screen_right_len);
+	strncpy(buffer, msg, left);
+	strcpy(buffer + left, "...");
+	strcpy(buffer + left + 3, msg + right);
+	assert(get_screen_string_length(buffer) == width);
 }
 
 static void
@@ -703,7 +768,7 @@ clean_status_bar(void)
 {
 	werase(status_bar);
 	mvwin(stat_win, getmaxy(stdscr) - 2, 0);
-	wresize(status_bar, 1, getmaxx(stdscr) - 19);
+	wresize(status_bar, 1, getmaxx(stdscr) - FIELDS_WIDTH);
 	mvwin(status_bar, getmaxy(stdscr) - 1, 0);
 	wnoutrefresh(status_bar);
 
@@ -757,8 +822,8 @@ setup_ncurses_interface(void)
 	wattrset(menu_win, cfg.cs.color[WIN_COLOR].attr);
 	werase(menu_win);
 
-	sort_win = newwin(NUM_SORT_OPTIONS + 5, SORT_WIN_WIDTH,
-			(screen_y - NUM_SORT_OPTIONS)/2, (screen_x - SORT_WIN_WIDTH)/2);
+	sort_win = newwin(SORT_OPTION_COUNT + 5, SORT_WIN_WIDTH,
+			(screen_y - SORT_OPTION_COUNT)/2, (screen_x - SORT_WIN_WIDTH)/2);
 	wbkgdset(sort_win, COLOR_PAIR(DCOLOR_BASE + WIN_COLOR));
 	wattrset(sort_win, cfg.cs.color[WIN_COLOR].attr);
 	werase(sort_win);
@@ -870,7 +935,7 @@ setup_ncurses_interface(void)
 			cfg.cs.color[STATUS_LINE_COLOR].attr);
 	werase(stat_win);
 
-	status_bar = newwin(1, screen_x - 19, screen_y -1, 0);
+	status_bar = newwin(1, screen_x - FIELDS_WIDTH, screen_y - 1, 0);
 #ifdef ENABLE_EXTENDED_KEYS
 	keypad(status_bar, TRUE);
 #endif /* ENABLE_EXTENDED_KEYS */
@@ -878,12 +943,12 @@ setup_ncurses_interface(void)
 	wbkgdset(status_bar, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
 	werase(status_bar);
 
-	pos_win = newwin(1, 13, screen_y - 1, screen_x - 13);
+	pos_win = newwin(1, POS_WIN_WIDTH, screen_y - 1, screen_x - POS_WIN_WIDTH);
 	wattrset(pos_win, cfg.cs.color[CMD_LINE_COLOR].attr);
 	wbkgdset(pos_win, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
 	werase(pos_win);
 
-	input_win = newwin(1, 6, screen_y - 1, screen_x -19);
+	input_win = newwin(1, INPUT_WIN_WIDTH, screen_y - 1, screen_x - FIELDS_WIDTH);
 	wattrset(input_win, cfg.cs.color[CMD_LINE_COLOR].attr);
 	wbkgdset(input_win, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
 	werase(input_win);
@@ -891,9 +956,13 @@ setup_ncurses_interface(void)
 	cfg.tab_stop = TABSIZE;
 
 #if defined(NCURSES_EXT_FUNCS) && NCURSES_EXT_FUNCS >= 20081102
+#ifdef HAVE_SET_ESCDELAY_FUNC
 	/* Use ncurses specific function to disable delay after pressing escape key */
 	set_escdelay(0);
 #endif
+#endif
+
+	update_geometry();
 
 	return 1;
 }
@@ -1044,21 +1113,11 @@ static void
 resize_all(void)
 {
 	static float prev_x = -1.f, prev_y = -1.f;
+
 	int screen_x, screen_y;
-#ifndef _WIN32
-	struct winsize ws;
 
-	ioctl(0, TIOCGWINSZ, &ws);
-	LOG_INFO_MSG("ws.ws_row = %d; ws.ws_col = %d", ws.ws_row, ws.ws_col);
-
-	/* changed for pdcurses */
-	resize_term(ws.ws_row, ws.ws_col);
-#endif
-
+	update_geometry();
 	getmaxyx(stdscr, screen_y, screen_x);
-	cfg.lines = screen_y;
-	cfg.columns = screen_x;
-	load_geometry();
 
 	LOG_INFO_MSG("screen_y = %d; screen_x = %d", screen_y, screen_x);
 
@@ -1146,7 +1205,7 @@ resize_all(void)
 
 	wresize(stat_win, 1, screen_x);
 	mvwin(stat_win, screen_y - 2, 0);
-	wresize(status_bar, 1, screen_x - 19);
+	wresize(status_bar, 1, screen_x - FIELDS_WIDTH);
 
 #ifdef ENABLE_EXTENDED_KEYS
 	/* For FreeBSD */
@@ -1154,13 +1213,46 @@ resize_all(void)
 #endif /* ENABLE_EXTENDED_KEYS */
 
 	mvwin(status_bar, screen_y - 1, 0);
-	wresize(pos_win, 1, 13);
-	mvwin(pos_win, screen_y - 1, screen_x - 13);
+	wresize(pos_win, 1, POS_WIN_WIDTH);
+	mvwin(pos_win, screen_y - 1, screen_x - POS_WIN_WIDTH);
 
-	wresize(input_win, 1, 6);
-	mvwin(input_win, screen_y - 1, screen_x - 19);
+	wresize(input_win, 1, INPUT_WIN_WIDTH);
+	mvwin(input_win, screen_y - 1, screen_x - FIELDS_WIDTH);
 
 	curs_set(FALSE);
+}
+
+/* Updates internal data structures to reflect actual terminal geometry. */
+static void
+update_geometry(void)
+{
+	int screen_x, screen_y;
+#ifndef _WIN32
+	struct winsize ws;
+
+	ioctl(0, TIOCGWINSZ, &ws);
+	LOG_INFO_MSG("ws.ws_row = %d; ws.ws_col = %d", ws.ws_row, ws.ws_col);
+
+	/* changed for pdcurses */
+	resize_term(ws.ws_row, ws.ws_col);
+#endif
+
+#ifdef _WIN32
+	getmaxyx(stdscr, screen_y, screen_x);
+	resize_term(screen_y, screen_x);
+#endif
+
+	getmaxyx(stdscr, screen_y, screen_x);
+	cfg.lines = screen_y;
+	cfg.columns = screen_x;
+
+	if(curr_stats.initial_lines == INT_MIN)
+	{
+		curr_stats.initial_lines = screen_y;
+		curr_stats.initial_columns = screen_x;
+	}
+
+	load_geometry();
 }
 
 void
@@ -1198,11 +1290,22 @@ update_screen(UpdateType update_kind)
 		else
 			clean_status_bar();
 
-		update_pos_window(curr_view);
+		if(get_mode() == VIEW_MODE)
+		{
+			view_draw_pos();
+		}
+		else
+		{
+			update_pos_window(curr_view);
+		}
 	}
 
 	if(curr_stats.save_msg == 0)
 		status_bar_message("");
+
+	if(get_mode() == VIEW_MODE ||
+			(curr_stats.number_of_windows == 2 && other_view->explore_mode))
+		view_redraw();
 
 	update_all_windows();
 
@@ -1218,9 +1321,6 @@ update_screen(UpdateType update_kind)
 
 	update_input_buf();
 	
-	if(get_mode() == VIEW_MODE || lwin.explore_mode || rwin.explore_mode)
-		view_redraw();
-
 	curr_stats.need_update = UT_NONE;
 }
 
@@ -1242,11 +1342,15 @@ reload_lists(void)
 
 	if(curr_stats.number_of_windows == 2)
 	{
-		update_view_title(other_view);
+		ui_view_title_update(other_view);
 		if(curr_stats.view)
+		{
 			quick_view_file(curr_view);
+		}
 		else if(!other_view->explore_mode)
+		{
 			reload_list(other_view);
+		}
 	}
 }
 
@@ -1261,20 +1365,10 @@ reload_list(FileView *view)
 				!(cfg.vifm_info&VIFMINFO_SAVEDIRS) || view->list_pos != 0);
 }
 
-static void
-switch_views(void)
-{
-	FileView *tmp = curr_view;
-	curr_view = other_view;
-	other_view = tmp;
-
-	load_local_options(curr_view);
-}
-
 void
 change_window(void)
 {
-	switch_views();
+	swap_view_roles();
 
 	if(curr_stats.number_of_windows != 1)
 	{
@@ -1283,39 +1377,26 @@ change_window(void)
 			put_inactive_mark(other_view);
 			erase_current_line_bar(other_view);
 		}
-		update_view_title(other_view);
 	}
 
 	if(curr_stats.view && !is_dir_list_loaded(curr_view))
 	{
-		if(change_directory(curr_view, curr_view->curr_dir) >= 0)
-		{
-			load_dir_list(curr_view, 0);
-			move_to_list_pos(curr_view, curr_view->list_pos);
-		}
+		navigate_to(curr_view, curr_view->curr_dir);
 	}
 
-	update_view_title(curr_view);
+	curr_stats.need_update = UT_REDRAW;
+}
 
-	wnoutrefresh(other_view->win);
-	wnoutrefresh(curr_view->win);
+/* Swaps curr_view and other_view pointers and updates things that are bound to
+ * current view, which is obviously changed after swapping. */
+static void
+swap_view_roles(void)
+{
+	FileView *tmp = curr_view;
+	curr_view = other_view;
+	other_view = tmp;
 
-	(void)change_directory(curr_view, curr_view->curr_dir);
-
-	if(curr_stats.number_of_windows == 1 && window_shows_dirlist(curr_view))
-	{
-		load_dir_list(curr_view, 1);
-	}
-
-	if(!curr_view->explore_mode)
-	{
-		redraw_current_view();
-	}
-	werase(status_bar);
-	wnoutrefresh(status_bar);
-
-	if(curr_stats.number_of_windows == 1)
-		update_all_windows();
+	load_local_options(curr_view);
 }
 
 void
@@ -1443,44 +1524,50 @@ redraw_lists(void)
 		if(curr_stats.view)
 		{
 			quick_view_file(curr_view);
+			refresh_view_win(other_view);
 		}
-		else
+		else if(!other_view->explore_mode)
 		{
 			(void)move_curr_line(other_view);
 			draw_dir_list(other_view);
+			refresh_view_win(other_view);
 		}
-		refresh_view_win(other_view);
 	}
 }
 
 int
-load_color_scheme(const char *name)
+load_color_scheme(const char name[])
 {
+	col_scheme_t prev_cs;
 	char full[PATH_MAX];
 
-	if(!find_color_scheme(name))
+	if(!color_scheme_exists(name))
 	{
 		show_error_msgf("Color Scheme", "Invalid color scheme name: \"%s\"", name);
 		return 0;
 	}
 
+	prev_cs = cfg.cs;
 	curr_stats.cs_base = DCOLOR_BASE;
 	curr_stats.cs = &cfg.cs;
 	cfg.cs.defaulted = 0;
 
 	snprintf(full, sizeof(full), "%s/colors/%s", cfg.config_dir, name);
-	(void)source_file(full);
-	strcpy(cfg.cs.name, name);
+	if(source_file(full) != 0)
+	{
+		show_error_msgf("Color Scheme", "Can't load colorscheme: \"%s\"", name);
+		return 0;
+	}
+	copy_str(cfg.cs.name, sizeof(cfg.cs.name), name);
 	check_color_scheme(&cfg.cs);
 
 	update_attributes();
 
-	if(curr_stats.load_stage < 2)
-		return 0;
-
-	if(cfg.cs.defaulted)
+	if(curr_stats.load_stage >= 2 && cfg.cs.defaulted)
 	{
+		cfg.cs = prev_cs;
 		load_color_scheme_colors();
+		update_screen(UT_REDRAW);
 		show_error_msg("Color Scheme Error", "Not supported by the terminal");
 		return 1;
 	}
@@ -1539,7 +1626,7 @@ update_attributes(void)
 }
 
 void
-wprint(WINDOW *win, const char *str)
+wprint(WINDOW *win, const char str[])
 {
 #ifndef _WIN32
 	waddstr(win, str);
@@ -1554,6 +1641,14 @@ wprint(WINDOW *win, const char *str)
 	waddwstr(win, t);
 	free(t);
 #endif
+}
+
+void
+wprinta(WINDOW *win, const char str[], int line_attrs)
+{
+	wattron(win, line_attrs);
+	wprint(win, str);
+	wattroff(win, line_attrs);
 }
 
 void
@@ -1581,11 +1676,11 @@ resize_for_menu_like(void)
 	werase(pos_win);
 
 	wresize(menu_win, screen_y - 1, screen_x);
-	wresize(status_bar, 1, screen_x - 19);
+	wresize(status_bar, 1, screen_x - FIELDS_WIDTH);
 	mvwin(status_bar, screen_y - 1, 0);
-	wresize(pos_win, 1, 13);
-	mvwin(pos_win, screen_y - 1, screen_x - 13);
-	mvwin(input_win, screen_y - 1, screen_x - 19);
+	wresize(pos_win, 1, POS_WIN_WIDTH);
+	mvwin(pos_win, screen_y - 1, screen_x - POS_WIN_WIDTH);
+	mvwin(input_win, screen_y - 1, screen_x - FIELDS_WIDTH);
 	wrefresh(status_bar);
 	wrefresh(pos_win);
 	wrefresh(input_win);
@@ -1605,6 +1700,408 @@ refresh_view_win(FileView *view)
 		touchwin(stat_win);
 		wrefresh(stat_win);
 	}
+}
+
+void
+move_window(FileView *view, int horizontally, int first)
+{
+	const SPLIT split_type = horizontally ? HSPLIT : VSPLIT;
+	const FileView *const desired_view = first ? &lwin : &rwin;
+	split_view(split_type);
+	if(view != desired_view)
+	{
+		switch_windows();
+	}
+}
+
+void
+switch_windows(void)
+{
+	switch_panes_content();
+	go_to_other_pane();
+}
+
+void
+switch_panes(void)
+{
+	switch_panes_content();
+	try_activate_view_mode();
+}
+
+/* Switches panes content. */
+static void
+switch_panes_content(void)
+{
+	FileView tmp_view;
+	WINDOW* tmp;
+	int t;
+
+	if(get_mode() != VIEW_MODE)
+	{
+		view_switch_views();
+	}
+
+	tmp = lwin.win;
+	lwin.win = rwin.win;
+	rwin.win = tmp;
+
+	t = lwin.window_rows;
+	lwin.window_rows = rwin.window_rows;
+	rwin.window_rows = t;
+
+	t = lwin.window_width;
+	lwin.window_width = rwin.window_width;
+	rwin.window_width = t;
+
+	t = lwin.color_scheme;
+	lwin.color_scheme = rwin.color_scheme;
+	rwin.color_scheme = t;
+
+	tmp = lwin.title;
+	lwin.title = rwin.title;
+	rwin.title = tmp;
+
+	tmp_view = lwin;
+	lwin = rwin;
+	rwin = tmp_view;
+
+	curr_stats.need_update = UT_REDRAW;
+}
+
+void
+go_to_other_pane(void)
+{
+	change_window();
+	try_activate_view_mode();
+}
+
+void
+split_view(SPLIT orientation)
+{
+	if(curr_stats.number_of_windows == 2 && curr_stats.split == orientation)
+		return;
+
+	if(curr_stats.number_of_windows == 2 && curr_stats.splitter_pos > 0)
+	{
+		if(orientation == VSPLIT)
+			curr_stats.splitter_pos *= (float)getmaxx(stdscr)/getmaxy(stdscr);
+		else
+			curr_stats.splitter_pos *= (float)getmaxy(stdscr)/getmaxx(stdscr);
+	}
+
+	curr_stats.split = orientation;
+	curr_stats.number_of_windows = 2;
+	curr_stats.need_update = UT_REDRAW;
+}
+
+void
+only(void)
+{
+	if(curr_stats.number_of_windows != 1)
+	{
+		curr_stats.number_of_windows = 1;
+		update_screen(UT_REDRAW);
+	}
+}
+
+void
+format_entry_name(FileView *view, size_t pos, size_t buf_len, char buf[])
+{
+	dir_entry_t *const entry = &view->dir_entry[pos];
+	char *const full_path = format_str("%s/%s", view->curr_dir, entry->name);
+	const FileType type = (entry->type == LINK && check_link_is_dir(full_path)) ?
+		DIRECTORY : entry->type;
+
+	const char prefix[2] = { cfg.decorations[type][DECORATION_PREFIX] };
+	const char suffix[2] = { cfg.decorations[type][DECORATION_SUFFIX] };
+	size_t name_len = 1;
+
+	free(full_path);
+
+	/* FIXME: remove this hack for directories. */
+	if(type == DIRECTORY)
+	{
+		name_len = strlen(entry->name);
+		if(name_len > 0)
+		{
+			entry->name[name_len - 1] = '\0';
+		}
+	}
+	snprintf(buf, buf_len, "%s%s%s", prefix, entry->name, suffix);
+	/* FIXME: remove this hack for directories. */
+	if(type == DIRECTORY)
+	{
+		if(name_len > 0)
+		{
+			entry->name[name_len - 1] = '/';
+		}
+	}
+}
+
+void
+checked_wmove(WINDOW *win, int y, int x)
+{
+	if(wmove(win, y, x) == ERR)
+	{
+		LOG_INFO_MSG("Error moving cursor on a window to (x=%d, y=%d).", x, y);
+	}
+}
+
+void
+ui_view_win_changed(FileView *view)
+{
+	wnoutrefresh(view->win);
+}
+
+void
+ui_view_reset_selection_and_reload(FileView *view)
+{
+	clean_selected_files(view);
+	load_saving_pos(view, 1);
+}
+
+void
+ui_views_reload_visible_filelists(void)
+{
+	if(curr_stats.view)
+	{
+		load_saving_pos(curr_view, 1);
+	}
+	else
+	{
+		ui_views_reload_filelists();
+	}
+}
+
+void
+ui_views_reload_filelists(void)
+{
+	load_saving_pos(curr_view, 1);
+	load_saving_pos(other_view, 1);
+}
+
+void
+ui_views_update_titles(void)
+{
+	ui_view_title_update(&lwin);
+	ui_view_title_update(&rwin);
+}
+
+void
+ui_view_title_update(FileView *view)
+{
+	char *buf;
+	size_t len;
+	int gen_view = get_mode() == VIEW_MODE && !curr_view->explore_mode;
+	FileView *selected = gen_view ? other_view : curr_view;
+
+	if(curr_stats.load_stage < 2)
+	{
+		return;
+	}
+
+	if(view == selected)
+	{
+		col_attr_t col;
+
+		col = cfg.cs.color[TOP_LINE_COLOR];
+		mix_colors(&col, &cfg.cs.color[TOP_LINE_SEL_COLOR]);
+		init_pair(DCOLOR_BASE + TOP_LINE_SEL_COLOR, col.fg, col.bg);
+
+		wbkgdset(view->title, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_SEL_COLOR) |
+				(col.attr & A_REVERSE));
+		wattrset(view->title, col.attr & ~A_REVERSE);
+	}
+	else
+	{
+		wbkgdset(view->title, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
+				(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
+		wattrset(view->title, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
+		wbkgdset(top_line, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
+				(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
+		wattrset(top_line, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
+		werase(top_line);
+	}
+	werase(view->title);
+
+	if(curr_stats.load_stage < 2)
+		return;
+
+	buf = replace_home_part(view->curr_dir);
+	if(view == selected)
+	{
+		set_term_title(replace_home_part(view->curr_dir));
+	}
+
+	if(view->explore_mode)
+	{
+		if(!is_root_dir(buf))
+			strcat(buf, "/");
+		strcat(buf, get_current_file_name(view));
+	}
+	else if(curr_stats.view && view == other_view)
+	{
+		strcpy(buf, "File: ");
+		strcat(buf, get_current_file_name(curr_view));
+	}
+
+	len = get_screen_string_length(buf);
+	if(len > view->window_width + 1 && view == selected)
+	{ /* Truncate long directory names */
+		const char *ptr;
+
+		ptr = buf;
+		while(len > view->window_width - 2)
+		{
+			len--;
+			ptr += get_char_width(ptr);
+		}
+
+		wprintw(view->title, "...");
+		wprint(view->title, ptr);
+	}
+	else if(len > view->window_width + 1 && view != selected)
+	{
+		size_t len = get_normal_utf8_string_widthn(buf, view->window_width - 3 + 1);
+		buf[len] = '\0';
+		wprint(view->title, buf);
+		wprintw(view->title, "...");
+	}
+	else
+	{
+		wprint(view->title, buf);
+	}
+
+	wnoutrefresh(view->title);
+}
+
+int
+ui_view_sort_list_contains(const char sort[SORT_OPTION_COUNT], char key)
+{
+	int i = -1;
+	while(++i < SORT_OPTION_COUNT)
+	{
+		const int sort_key = abs(sort[i]);
+		if(sort_key > LAST_SORT_OPTION)
+		{
+			return 0;
+		}
+		else if(sort_key == key)
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+void
+ui_view_sort_list_ensure_well_formed(char sort[SORT_OPTION_COUNT])
+{
+	int found_name_key = 0;
+	int i = -1;
+	while(++i < SORT_OPTION_COUNT)
+	{
+		const int sort_key = abs(sort[i]);
+		if(sort_key > LAST_SORT_OPTION)
+		{
+			break;
+		}
+		else if(sort_key == SORT_BY_NAME || sort_key == SORT_BY_INAME)
+		{
+			found_name_key = 1;
+		}
+	}
+
+	if(!found_name_key && i < SORT_OPTION_COUNT)
+	{
+		sort[i++] = DEFAULT_SORT_KEY;
+	}
+
+	if(i < SORT_OPTION_COUNT)
+	{
+		memset(&sort[i], NO_SORT_OPTION, SORT_OPTION_COUNT - i);
+	}
+}
+
+int
+ui_view_displays_numbers(const FileView *const view)
+{
+	return view->num_type != NT_NONE && !view->ls_view;
+}
+
+int
+ui_view_is_visible(const FileView *const view)
+{
+	return curr_stats.number_of_windows == 2 || curr_view == view;
+}
+
+void
+ui_cancellation_reset(void)
+{
+	assert(ui_cancellation_disabled() && "Can't reset while active.");
+
+	cancellation_state = CRS_DISABLED;
+}
+
+void
+ui_cancellation_enable(void)
+{
+	assert(ui_cancellation_disabled() && "Can't enable twice in a row.");
+
+	cancellation_state = (cancellation_state == CRS_DISABLED)
+	                   ? CRS_ENABLED
+	                   : CRS_ENABLED_REQUESTED;
+
+	/* Temporary disable raw mode of terminal so that Ctrl-C is be handled as
+	 * SIGINT signal rather than as regular input character. */
+	noraw();
+}
+
+void
+ui_cancellation_request(void)
+{
+	if(ui_cancellation_enabled())
+	{
+		cancellation_state = CRS_ENABLED_REQUESTED;
+	}
+}
+
+int
+ui_cancellation_requested(void)
+{
+	return cancellation_state == CRS_ENABLED_REQUESTED
+	    || cancellation_state == CRS_DISABLED_REQUESTED;
+}
+
+void
+ui_cancellation_disable(void)
+{
+	assert(ui_cancellation_enabled() && "Can't disable what disabled.");
+
+	/* Restore raw mode of terminal so that Ctrl-C is be handled as regular input
+	 * character rather than as SIGINT signal. */
+	raw();
+
+	cancellation_state = (cancellation_state == CRS_ENABLED_REQUESTED)
+	                   ? CRS_DISABLED_REQUESTED
+	                   : CRS_DISABLED;
+}
+
+/* Checks whether cancellation processing is enabled.  Returns non-zero if so,
+ * otherwise zero is returned. */
+static int
+ui_cancellation_enabled(void)
+{
+	return cancellation_state == CRS_ENABLED
+	    || cancellation_state == CRS_ENABLED_REQUESTED;
+}
+
+/* Checks whether cancellation processing is disabled.  Returns non-zero if so,
+ * otherwise zero is returned. */
+static int
+ui_cancellation_disabled(void)
+{
+	return !ui_cancellation_enabled();
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

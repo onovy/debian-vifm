@@ -17,13 +17,17 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "menu.h"
+
 #include <regex.h>
 
 #include <curses.h>
 
-#include <assert.h>
+#include <assert.h> /* assert() */
 #include <ctype.h>
+#include <stddef.h> /* NULL */
 #include <string.h>
+#include <wchar.h> /* wchar_t */
 
 #include "../cfg/config.h"
 #include "../engine/cmds.h"
@@ -40,15 +44,14 @@
 #include "cmdline.h"
 #include "modes.h"
 
-#include "menu.h"
-
 static const int SCROLL_GAP = 2;
 
 static int complete_args(int id, const char *args, int argc, char **argv,
 		int arg_pos);
 static int swap_range(void);
 static int resolve_mark(char mark);
-static char * menu_expand_macros(const char *str, int *usr1, int *usr2);
+static char * menu_expand_macros(const char *str, int for_shell, int *usr1,
+		int *usr2);
 static char * menu_expand_envvars(const char *str);
 static void post(int id);
 static void menu_select_range(int id, const cmd_info_t *cmd_info);
@@ -78,6 +81,8 @@ static void cmd_L(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_M(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_N(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_dd(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_gf(key_info_t key_info, keys_info_t *keys_info);
+static int pass_combination_to_khandler(const wchar_t keys[]);
 static void cmd_gg(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_j(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_k(key_info_t key_info, keys_info_t *keys_info);
@@ -133,6 +138,7 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"ZZ", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_c}}},
 	{L"ZQ", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_c}}},
 	{L"dd", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_dd}}},
+	{L"gf", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_gf}}},
 	{L"gg", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_gg}}},
 	{L"j", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_j}}},
 	{L"k", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_k}}},
@@ -200,7 +206,7 @@ resolve_mark(char mark)
 }
 
 static char *
-menu_expand_macros(const char *str, int *usr1, int *usr2)
+menu_expand_macros(const char *str, int for_shell, int *usr1, int *usr2)
 {
 	return strdup(str);
 }
@@ -248,15 +254,9 @@ init_menu_mode(int *key_mode)
 static int
 key_handler(wchar_t key)
 {
-	wchar_t buf[] = {key, L'\0'};
+	const wchar_t shortcut[] = {key, L'\0'};
 
-	if(menu->key_handler == NULL)
-		return 0;
-
-	if(menu->key_handler(menu, buf) > 0)
-		wrefresh(menu_win);
-
-	if(menu->len == 0)
+	if(pass_combination_to_khandler(shortcut) && menu->len == 0)
 	{
 		show_error_msg("No more items in the menu", "Menu will be closed");
 		leave_menu_mode();
@@ -270,6 +270,8 @@ enter_menu_mode(menu_info *m, FileView *active_view)
 {
 	if(curr_stats.load_stage < 2)
 		return;
+
+	assert(m->len > 0 && "Menu cannot be empty.");
 
 	werase(status_bar);
 
@@ -298,6 +300,7 @@ menu_post(void)
 		wrefresh(menu_win);
 		curr_stats.need_update = UT_NONE;
 	}
+	status_bar_message(curr_stats.save_msg ? NULL : "");
 }
 
 void
@@ -435,7 +438,7 @@ cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 
 	*mode = NORMAL_MODE;
 	saved_menu = menu;
-	if(execute_menu_cb(curr_view, menu) != 0)
+	if(menu->execute_handler != NULL && menu->execute_handler(curr_view, menu))
 	{
 		*mode = MENU_MODE;
 		menu_redraw();
@@ -562,12 +565,8 @@ cmd_L(key_info_t key_info, keys_info_t *keys_info)
 	int off;
 	if(menu->key_handler != NULL)
 	{
-		int ret = menu->key_handler(menu, L"L");
-		if(ret == 0)
-			return;
-		else if(ret > 0)
+		if(pass_combination_to_khandler(L"L"))
 		{
-			wrefresh(menu_win);
 			return;
 		}
 	}
@@ -612,16 +611,48 @@ cmd_N(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_dd(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(menu->key_handler == NULL)
-		return;
-
-	if(menu->key_handler(menu, L"dd") > 0)
-		wrefresh(menu_win);
-
-	if(menu->len == 0)
+	if(pass_combination_to_khandler(L"dd") && menu->len == 0)
 	{
 		show_error_msg("No more items in the menu", "Menu will be closed");
 		leave_menu_mode();
+	}
+}
+
+/* Passes "gf" shortcut to menu as otherwise the shortcut is not available. */
+static void
+cmd_gf(key_info_t key_info, keys_info_t *keys_info)
+{
+	(void)pass_combination_to_khandler(L"gf");
+}
+
+/* Gives menu-specific keyboard routine to process the shortcut.  Returns zero
+ * if the shortcut wasn't processed, otherwise non-zero is returned. */
+static int
+pass_combination_to_khandler(const wchar_t keys[])
+{
+	KHandlerResponse handler_response;
+
+	if(menu->key_handler == NULL)
+	{
+		return 0;
+	}
+
+	handler_response = menu->key_handler(menu, keys);
+
+	switch(handler_response)
+	{
+		case KHR_REFRESH_WINDOW:
+			wrefresh(menu_win);
+			return 1;
+		case KHR_CLOSE_MENU:
+			leave_menu_mode();
+			return 1;
+		case KHR_UNHANDLED:
+			return 0;
+
+		default:
+			assert(0 && "Unknown menu-specific keyboard handler response.");
+			return 0;
 	}
 }
 
@@ -897,6 +928,8 @@ search_menu(menu_info *m, int start_pos)
 static int
 search_menu_forwards(menu_info *m, int start_pos)
 {
+	/* FIXME: code duplicatio with search_menu_backwards. */
+
 	int match_up = -1;
 	int match_down = -1;
 	int x;
@@ -932,16 +965,19 @@ search_menu_forwards(menu_info *m, int start_pos)
 
 		clean_menu_position(m);
 		move_to_menu_pos(pos, m);
-		status_bar_messagef("%d %s", m->matching_entries,
-				(m->matching_entries == 1) ? "match" : "matches");
+		menu_print_search_msg(m);
 	}
 	else
 	{
 		move_to_menu_pos(m->pos, m);
 		if(!cfg.wrap_scan)
+		{
 			status_bar_errorf("Search hit BOTTOM without match for: %s", m->regexp);
+		}
 		else
-			status_bar_errorf("No matches for: %s", m->regexp);
+		{
+			menu_print_search_msg(m);
+		}
 		return 1;
 	}
 	return 0;
@@ -950,6 +986,8 @@ search_menu_forwards(menu_info *m, int start_pos)
 static int
 search_menu_backwards(menu_info *m, int start_pos)
 {
+	/* FIXME: code duplicatio with search_menu_forwards. */
+
 	int match_up = -1;
 	int match_down = -1;
 	int x;
@@ -985,16 +1023,19 @@ search_menu_backwards(menu_info *m, int start_pos)
 
 		clean_menu_position(m);
 		move_to_menu_pos(pos, m);
-		status_bar_messagef("%d %s", m->matching_entries,
-				(m->matching_entries == 1) ? "match" : "matches");
+		menu_print_search_msg(m);
 	}
 	else
 	{
 		move_to_menu_pos(m->pos, m);
 		if(!cfg.wrap_scan)
+		{
 			status_bar_errorf("Search hit TOP without match for: %s", m->regexp);
+		}
 		else
-			status_bar_errorf("No matches for: %s", m->regexp);
+		{
+			menu_print_search_msg(m);
+		}
 		return 1;
 	}
 	return 0;
@@ -1008,6 +1049,20 @@ execute_cmdline_command(const char cmd[])
 		status_bar_error("An error occuried while trying to execute command");
 	}
 	init_cmds(0, &cmds_conf);
+}
+
+void
+menu_print_search_msg(const menu_info *m)
+{
+	if(m->matching_entries > 0)
+	{
+		status_bar_messagef("%d %s", m->matching_entries,
+				(m->matching_entries == 1) ? "match" : "matches");
+	}
+	else
+	{
+		status_bar_errorf("No matches for: %s", m->regexp);
+	}
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

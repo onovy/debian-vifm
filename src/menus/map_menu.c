@@ -17,40 +17,37 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "map_menu.h"
+
 #include <ctype.h> /* tolower() */
 #include <stdlib.h> /* malloc() realloc() free() */
-#include <string.h> /* strlen() strcat() */
+#include <string.h> /* strdup() strlen() strcat() */
 #include <wchar.h> /* wcsncmp() wcslen() */
 
 #include "../modes/menu.h"
+#include "../utils/str.h"
+#include "../utils/string_array.h"
 #include "../utils/utils.h"
 #include "../ui.h"
 #include "menus.h"
 
-#include "map_menu.h"
+static void add_mapping_item(menu_info *m, const wchar_t map_info[]);
+static char * uchar2str(const wchar_t c[], size_t *len);
 
-static char * uchar2str(wchar_t c[], size_t *len);
-
-void
+int
 show_map_menu(FileView *view, const char mode_str[], wchar_t *list[],
 		const wchar_t start[])
 {
 	int x;
-	size_t start_len = wcslen(start);
+	const size_t start_len = wcslen(start);
 
 	static menu_info m;
-	init_menu_info(&m, MAP);
-
-	m.title = malloc(strlen(mode_str) + 21);
-	sprintf(m.title, " Mappings for %s mode ", mode_str);
+	init_menu_info(&m, MAP_MENU, strdup("No mapping found"));
+	m.title = format_str(" Mappings for %s mode ", mode_str);
 
 	x = 0;
 	while(list[x] != NULL)
 	{
-		enum { MAP_WIDTH = 10 };
-		size_t len;
-		int i, str_len, buf_len;
-
 		if(list[x][0] != L'\0' && wcsncmp(start, list[x], start_len) != 0)
 		{
 			free(list[x]);
@@ -58,59 +55,98 @@ show_map_menu(FileView *view, const char mode_str[], wchar_t *list[],
 			continue;
 		}
 
-		str_len = wcslen(list[x]);
-		buf_len = 0;
-		for(i = 0; i < str_len; i += len)
-			buf_len += strlen(uchar2str(list[x] + i, &len));
-
-		if(str_len > 0)
-			buf_len += 1 + wcslen(list[x] + str_len + 1)*4 + 1;
-		else
-			buf_len += 1 + 0 + 1;
-
-		m.items = realloc(m.items, sizeof(char *)*(m.len + 1));
-		m.items[m.len] = malloc(buf_len + MAP_WIDTH);
-		m.items[m.len][0] = '\0';
-		for(i = 0; i < str_len; i += len)
-			strcat(m.items[m.len], uchar2str(list[x] + i, &len));
-
-		if(str_len > 0)
+		if(list[x][0] != '\0')
 		{
-			int i;
-			for(i = strlen(m.items[m.len]); i < MAP_WIDTH; i++)
-				strcat(m.items[m.len], " ");
-
-			strcat(m.items[m.len], " ");
-
-			for(i = str_len + 1; list[x][i] != L'\0'; i += len)
-			{
-				if(list[x][i] == L' ')
-				{
-					strcat(m.items[m.len], " ");
-					len = 1;
-				}
-				else
-				{
-					strcat(m.items[m.len], uchar2str(list[x] + i, &len));
-				}
-			}
+			add_mapping_item(&m, list[x]);
+			m.len++;
+		}
+		else if(m.len != 0)
+		{
+			add_to_string_array(&m.items, m.len, 1, "");
+			m.len++;
 		}
 
 		free(list[x]);
-
 		x++;
-		m.len++;
 	}
 	free(list);
 
-	setup_menu();
-	draw_menu(&m);
-	move_to_menu_pos(m.pos, &m);
-	enter_menu_mode(&m, view);
+	if(m.len > 0 && m.items[m.len - 1][0] == '\0')
+	{
+		free(m.items[m.len - 1]);
+		m.len--;
+	}
+
+	return display_menu(&m, view);
+}
+
+static void
+add_mapping_item(menu_info *m, const wchar_t map_info[])
+{
+	enum { MAP_WIDTH = 10 };
+	size_t len;
+	int i, str_len, buf_len;
+	const wchar_t *rhs;
+
+	str_len = wcslen(map_info);
+	rhs = map_info + str_len + 1;
+
+	buf_len = 0;
+	for(i = 0; i < str_len; i += len)
+	{
+		buf_len += strlen(uchar2str(map_info + i, &len));
+	}
+
+	if(rhs[0] == L'\0')
+	{
+		rhs = L"<nop>";
+	}
+
+	if(str_len > 0)
+	{
+		buf_len += 1 + wcslen(rhs)*4 + 1;
+	}
+	else
+	{
+		buf_len += 1 + 0 + 1;
+	}
+
+	m->items = realloc(m->items, sizeof(char *)*(m->len + 1));
+	m->items[m->len] = malloc(buf_len + MAP_WIDTH);
+	m->items[m->len][0] = '\0';
+	for(i = 0; i < str_len; i += len)
+	{
+		strcat(m->items[m->len], uchar2str(map_info + i, &len));
+	}
+
+	if(str_len == 0)
+	{
+		strcat(m->items[m->len], "<nop>");
+	}
+
+	for(i = strlen(m->items[m->len]); i < MAP_WIDTH; i++)
+	{
+		strcat(m->items[m->len], " ");
+	}
+
+	strcat(m->items[m->len], " ");
+
+	for(i = 0; rhs[i] != L'\0'; i += len)
+	{
+		if(rhs[i] == L' ')
+		{
+			strcat(m->items[m->len], " ");
+			len = 1;
+		}
+		else
+		{
+			strcat(m->items[m->len], uchar2str(rhs + i, &len));
+		}
+	}
 }
 
 static char *
-uchar2str(wchar_t c[], size_t *len)
+uchar2str(const wchar_t c[], size_t *len)
 {
 	/* TODO: refactor this function uchar2str() */
 

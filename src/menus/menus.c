@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "menus.h"
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -25,69 +27,100 @@
 
 #include <dirent.h> /* DIR */
 #include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h> /* access() */
+#include <sys/types.h> /* pid_t */
+#include <unistd.h> /* access() F_OK R_OK */
 
-#include <assert.h>
+#include <assert.h> /* assert() */
 #include <ctype.h> /* isspace() */
-#include <string.h> /* strchr() */
+#include <errno.h> /* errno */
+#include <stddef.h> /* NULL size_t */
+#include <stdlib.h> /* free() malloc() */
+#include <string.h> /* memmove() memset() strdup() strcat() strncat() strchr()
+                       strlen() strrchr() */
 #include <stdarg.h>
 #include <signal.h>
+#include <wchar.h> /* wchar_t wcscmp() */
 
 #include "../cfg/config.h"
 #include "../modes/cmdline.h"
 #include "../modes/menu.h"
 #include "../modes/modes.h"
+#include "../utils/file_streams.h"
 #include "../utils/fs.h"
+#include "../utils/log.h"
+#include "../utils/path.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
+#include "../utils/test_helpers.h"
 #include "../utils/utf8.h"
+#include "../utils/utils.h"
 #include "../background.h"
 #include "../bookmarks.h"
-#include "../commands.h"
 #include "../filelist.h"
+#include "../macros.h"
 #include "../running.h"
 #include "../search.h"
 #include "../status.h"
 #include "../ui.h"
-#include "all.h"
 
 static int prompt_error_msg_internalv(const char title[], const char format[],
 		int prompt_skip, va_list pa);
 static int prompt_error_msg_internal(const char title[], const char message[],
 		int prompt_skip);
+TSTATIC char * parse_spec(const char spec[], int *line_num);
+static void open_selected_file(const char path[], int line_num);
+static void navigate_to_selected_file(FileView *view, const char path[]);
 static void normalize_top(menu_info *m);
+static void append_to_string(char **str, const char suffix[]);
+static char * expand_tabulation_a(const char line[], size_t tab_stops);
+static size_t chars_in_str(const char s[], char c);
 static void redraw_error_msg(const char title_arg[], const char message_arg[],
 		int prompt_skip);
 
 static void
 show_position_in_menu(menu_info *m)
 {
-	char pos_buf[14];
+	char pos_buf[POS_WIN_WIDTH + 1];
 	snprintf(pos_buf, sizeof(pos_buf), " %d-%d ", m->pos + 1, m->len);
-	werase(pos_win);
-	mvwaddstr(pos_win, 0, 13 - strlen(pos_buf),  pos_buf);
-	wrefresh(pos_win);
+
+	ui_pos_window_set(pos_buf);
+}
+
+void
+remove_current_item(menu_info *m)
+{
+	clean_menu_position(m);
+
+	remove_from_string_array(m->items, m->len, m->pos);
+	if(m->matches != NULL)
+	{
+		if(m->matches[m->pos])
+			m->matching_entries--;
+		memmove(m->matches + m->pos, m->matches + m->pos + 1,
+				sizeof(int)*((m->len - 1) - m->pos));
+	}
+	m->len--;
+	draw_menu(m);
+
+	move_to_menu_pos(m->pos, m);
 }
 
 void
 clean_menu_position(menu_info *m)
 {
 	int x, z;
+	int off = 0;
 	char * buf = (char *)NULL;
 	col_attr_t col;
 	int type = MENU_COLOR;
 
-	x = getmaxx(menu_win);
-
-	x += get_utf8_overhead(m->items[m->pos]);
+	x = getmaxx(menu_win) + get_utf8_overhead(m->items[m->pos]);
 
 	buf = malloc(x + 2);
 
-	/* TODO: check if this can be false. */
-	if(m->items != NULL && m->items[m->pos] != NULL)
+	/* TODO: check if this can ever be false. */
+	if(m->items[m->pos] != NULL)
 	{
-		int off = 0;
 		z = m->hor_pos;
 		while(z-- > 0 && m->items[m->pos][off] != '\0')
 		{
@@ -123,20 +156,20 @@ clean_menu_position(menu_info *m)
 	init_pair(DCOLOR_BASE + type, col.fg, col.bg);
 	wattrset(menu_win, COLOR_PAIR(type + DCOLOR_BASE) | col.attr);
 
-	wmove(menu_win, m->current, 1);
-	if(strlen(m->items[m->pos]) > x - 4)
+	checked_wmove(menu_win, m->current, 1);
+	if(get_screen_string_length(m->items[m->pos] + off) > getmaxx(menu_win) - 4)
 	{
 		size_t len = get_normal_utf8_string_widthn(buf,
 				getmaxx(menu_win) - 3 - 4 + 1);
-		if(strlen(buf) > len)
-			buf[len] = '\0';
+		memset(buf + len, ' ', strlen(buf) - len);
+		buf[len + 3] = '\0';
 		wprint(menu_win, buf);
-		waddstr(menu_win, "...");
+		mvwaddstr(menu_win, m->current, getmaxx(menu_win) - 5, "...");
 	}
 	else
 	{
-		if(strlen(buf) > x - 4 + 1)
-			buf[x - 4 + 1] = '\0';
+		size_t len = get_normal_utf8_string_widthn(buf, getmaxx(menu_win) - 4 + 1);
+		buf[len] = '\0';
 		wprint(menu_win, buf);
 	}
 	waddstr(menu_win, " ");
@@ -191,9 +224,11 @@ prompt_error_msg_internalv(const char title[], const char format[],
 	return prompt_error_msg_internal(title, buf, prompt_skip);
 }
 
-/* Internal function for displaying messages to a user.  When the prompt_skip
+/* Internal function for displaying error messages to a user.  Automatically
+ * skips whitespace in front of the message and does nothing for empty messages
+ * (due to skipping whitespace-only are counted as empty). When the prompt_skip
  * isn't zero, asks user about successive messages.  Returns non-zero if all
- * successive messages should be skipped. */
+ * successive messages should be skipped, otherwise zero is returned. */
 static int
 prompt_error_msg_internal(const char title[], const char message[],
 		int prompt_skip)
@@ -205,6 +240,12 @@ prompt_error_msg_internal(const char title[], const char message[],
 		return 1;
 	if(curr_stats.load_stage < 2 && skip_until_started)
 		return 1;
+
+	message = skip_whitespace(message);
+	if(*message == '\0')
+	{
+		return 0;
+	}
 
 	curr_stats.errmsg_shown = 1;
 
@@ -230,7 +271,7 @@ prompt_error_msg_internal(const char title[], const char message[],
 }
 
 void
-init_menu_info(menu_info *m, int menu_type)
+init_menu_info(menu_info *m, int menu_type, char empty_msg[])
 {
 	m->top = 0;
 	m->current = 1;
@@ -250,6 +291,7 @@ init_menu_info(menu_info *m, int menu_type)
 	m->key_handler = NULL;
 	m->extra_data = 0;
 	m->execute_handler = NULL;
+	m->empty_msg = empty_msg;
 }
 
 void
@@ -266,6 +308,7 @@ reset_popup_menu(menu_info *m)
 	free(m->regexp);
 	free(m->matches);
 	free(m->title);
+	free(m->empty_msg);
 
 	werase(menu_win);
 }
@@ -291,16 +334,13 @@ move_to_menu_pos(int pos, menu_info *m)
 	int x, z;
 	char *buf = NULL;
 	col_attr_t col;
-
-	x = getmaxx(menu_win);
+	int off = 0;
 
 	pos = MIN(m->len - 1, MAX(0, pos));
 	if(pos < 0)
 		return;
 
 	normalize_top(m);
-
-	x += get_utf8_overhead(m->items[pos]);
 
 	if(pos > get_last_visible_line(m))
 	{
@@ -335,13 +375,13 @@ move_to_menu_pos(int pos, menu_info *m)
 	if(redraw)
 		draw_menu(m);
 
+	x = getmaxx(menu_win) + get_utf8_overhead(m->items[pos]);
 	buf = malloc(x + 2);
 	if(buf == NULL)
 		return;
 	/* TODO: check if this can be false. */
 	if(m->items[pos] != NULL)
 	{
-		int off = 0;
 		z = m->hor_pos;
 		while(z-- > 0 && m->items[pos][off] != '\0')
 		{
@@ -377,20 +417,20 @@ move_to_menu_pos(int pos, menu_info *m)
 	init_pair(DCOLOR_BASE + MENU_CURRENT_COLOR, col.fg, col.bg);
 	wattrset(menu_win, COLOR_PAIR(DCOLOR_BASE + MENU_CURRENT_COLOR) | col.attr);
 
-	wmove(menu_win, m->current, 1);
-	if(strlen(m->items[pos]) > x - 4)
+	checked_wmove(menu_win, m->current, 1);
+	if(get_screen_string_length(m->items[pos] + off) > getmaxx(menu_win) - 4)
 	{
 		size_t len = get_normal_utf8_string_widthn(buf,
 				getmaxx(menu_win) - 3 - 4 + 1);
-		if(strlen(buf) > len)
-			buf[len] = '\0';
+		memset(buf + len, ' ', strlen(buf) - len);
+		buf[len + 3] = '\0';
 		wprint(menu_win, buf);
-		waddstr(menu_win, "...");
+		mvwaddstr(menu_win, m->current, getmaxx(menu_win) - 5, "...");
 	}
 	else
 	{
-		if(strlen(buf) > x - 4 + 1)
-			buf[x - 4 + 1] = '\0';
+		size_t len = get_normal_utf8_string_widthn(buf, getmaxx(menu_win) - 4 + 1);
+		buf[len] = '\0';
 		wprint(menu_win, buf);
 	}
 	waddstr(menu_win, " ");
@@ -413,166 +453,162 @@ redraw_menu(menu_info *m)
 	wrefresh(menu_win);
 }
 
-static void
-goto_selected_file(FileView *view, menu_info *m)
+void
+goto_selected_file(FileView *view, const char spec[], int try_open)
 {
-	char *dir;
-	char *file;
-	char *free_this;
-	char *num = NULL;
-	char *p = NULL;
+	char *path_buf;
+	int line_num;
 
-	free_this = file = dir = malloc(2 + strlen(m->items[m->pos]) + 1 + 1);
-	if(free_this == NULL)
+	path_buf = parse_spec(spec, &line_num);
+	if(path_buf == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory");
 		return;
 	}
 
-	if(m->items[m->pos][0] != '/')
-		strcpy(dir, "./");
+	if(access(path_buf, F_OK) == 0)
+	{
+		if(try_open)
+		{
+			open_selected_file(path_buf, line_num);
+		}
+		else
+		{
+			navigate_to_selected_file(view, path_buf);
+		}
+	}
 	else
-		dir[0] = '\0';
-	if(m->type == GREP)
 	{
-		p = strchr(m->items[m->pos], ':');
-		if(p != NULL)
-		{
-			*p = '\0';
-			num = p + 1;
-		}
-		else
-		{
-			num = NULL;
-		}
-	}
-	strcat(dir, m->items[m->pos]);
-	chomp(file);
-	if(m->type == GREP && p != NULL)
-	{
-		int n = 1;
-
-		*p = ':';
-
-		if(num != NULL)
-			n = atoi(num);
-
-		if(access(file, R_OK) == 0)
-		{
-			curr_stats.auto_redraws = 1;
-			view_file(file, n, 1);
-			curr_stats.auto_redraws = 0;
-		}
-		free(free_this);
-		return;
+		show_error_msgf("Missing file", "File \"%s\" doesn't exist", path_buf);
 	}
 
-	if(access(file, R_OK) == 0)
-	{
-		int isdir = 0;
-
-		if(is_dir(file))
-			isdir = 1;
-
-		file = strrchr(dir, '/');
-		*file++ = '\0';
-
-		if(change_directory(view, dir) >= 0)
-		{
-			status_bar_message("Finding the correct directory...");
-
-			wrefresh(status_bar);
-			load_dir_list(view, 0);
-			if(isdir)
-				strcat(file, "/");
-
-			(void)ensure_file_is_selected(view, file);
-		}
-		else
-		{
-			show_error_msgf("Invalid path", "Cannot change dir to \"%s\"", dir);
-		}
-	}
-	else if(m->type == LOCATE || m->type == USER_NAVIGATE)
-	{
-		show_error_msgf("Missing file", "File \"%s\" doesn't exist", file);
-	}
-
-	free(free_this);
+	free(path_buf);
 }
 
-int
-execute_menu_cb(FileView *view, menu_info *m)
+/* Extracts path and line number from the spec (1 when absent from the spec).
+ * Returns path and sets *line_num to line number, otherwise NULL is
+ * returned. */
+TSTATIC char *
+parse_spec(const char spec[], int *line_num)
 {
-	switch(m->type)
+	char *path_buf;
+	const char *colon;
+	int colon_lookup_offset = 0;
+	const size_t bufs_len = 2 + strlen(spec) + 1 + 1;
+
+	path_buf = malloc(bufs_len);
+	if(path_buf == NULL)
 	{
-		case APROPOS:
-			execute_apropos_cb(m);
-			return 1;
-		case BOOKMARK:
-			move_to_bookmark(view, index2mark(active_bookmarks[m->pos]));
-			break;
-		case CMDHISTORY:
-			save_command_history(m->items[m->pos]);
-			exec_commands(m->items[m->pos], view, GET_COMMAND);
-			break;
-		case FSEARCHHISTORY:
-			save_search_history(m->items[m->pos]);
-			exec_commands(m->items[m->pos], view, GET_FSEARCH_PATTERN);
-			break;
-		case BSEARCHHISTORY:
-			save_search_history(m->items[m->pos]);
-			exec_commands(m->items[m->pos], view, GET_BSEARCH_PATTERN);
-			break;
-		case COLORSCHEME:
-			load_color_scheme(m->items[m->pos]);
-			break;
-		case COMMAND:
-			*strchr(m->items[m->pos], ' ') = '\0';
-			exec_command(m->items[m->pos], view, GET_COMMAND);
-			break;
-		case FILETYPE:
-			execute_filetype_cb(view, m);
-			break;
-		case DIRHISTORY:
-			if(!cfg.auto_ch_pos)
-			{
-				clean_positions_in_history(curr_view);
-				curr_stats.ch_pos = 0;
-			}
-			if(change_directory(view, m->items[m->pos]) >= 0)
-			{
-				load_dir_list(view, 0);
-				move_to_list_pos(view, view->list_pos);
-			}
-			if(!cfg.auto_ch_pos)
-				curr_stats.ch_pos = 1;
-			break;
-		case DIRSTACK:
-			execute_dirstack_cb(view, m);
-			break;
-		case JOBS:
-			execute_jobs_cb(view, m);
-			break;
-		case LOCATE:
-		case FIND:
-		case USER_NAVIGATE:
-			goto_selected_file(view, m);
-			break;
-		case GREP:
-			goto_selected_file(view, m);
-			return 1;
-		case VIFM:
-			break;
-#ifdef _WIN32
-		case VOLUMES:
-			execute_volumes_cb(view, m);
-			break;
-#endif
-		default:
-			break;
+		return NULL;
 	}
-	return 0;
+
+	if(is_path_absolute(spec))
+	{
+		path_buf[0] = '\0';
+	}
+	else
+	{
+		copy_str(path_buf, bufs_len, "./");
+	}
+
+#ifdef _WIN32
+	if(is_path_absolute(spec))
+	{
+		colon_lookup_offset = 2;
+	}
+#endif
+
+	colon = strchr(spec + colon_lookup_offset, ':');
+	if(colon != NULL)
+	{
+		strncat(path_buf, spec, colon - spec);
+		*line_num = atoi(colon + 1);
+	}
+	else
+	{
+		strcat(path_buf, spec);
+		*line_num = 1;
+	}
+
+	chomp(path_buf);
+
+#ifdef _WIN32
+	to_forward_slash(path_buf);
+#endif
+
+	return path_buf;
+}
+
+/* Opens file specified by its path on the given line number. */
+static void
+open_selected_file(const char path[], int line_num)
+{
+	if(access(path, R_OK) == 0)
+	{
+		(void)view_file(path, line_num, -1, 1);
+	}
+	else
+	{
+		show_error_msgf("Can't read file", "File \"%s\" is not readable", path);
+	}
+}
+
+/* Navigates the view to a given dir/file combination specified by the path. */
+static void
+navigate_to_selected_file(FileView *view, const char path[])
+{
+	/* Check whether target path is directory while we don't change current
+	 * working directory by invoking change_directory() function below. */
+	const int dst_is_dir = is_dir(path);
+
+	char name[NAME_MAX];
+	char *dir = strdup(path);
+	char *const last_slash = find_slashr(dir);
+
+	if(last_slash == NULL)
+	{
+		copy_str(name, sizeof(name), dir);
+	}
+	else
+	{
+		*last_slash = '\0';
+		copy_str(name, sizeof(name), last_slash + 1);
+	}
+
+	if(change_directory(view, dir) >= 0)
+	{
+		status_bar_message("Finding the correct directory...");
+		wrefresh(status_bar);
+
+		load_dir_list(view, 0);
+
+		if(dst_is_dir)
+		{
+			strcat(name, "/");
+		}
+		(void)ensure_file_is_selected(view, name);
+	}
+	else
+	{
+		show_error_msgf("Invalid path", "Cannot change dir to \"%s\"", dir);
+	}
+
+	free(dir);
+}
+
+void
+goto_selected_directory(FileView *view, menu_info *m)
+{
+	if(!cfg.auto_ch_pos)
+	{
+		clean_positions_in_history(curr_view);
+		curr_stats.ch_pos = 0;
+	}
+	navigate_to(view, m->items[m->pos]);
+	if(!cfg.auto_ch_pos)
+	{
+		curr_stats.ch_pos = 1;
+	}
 }
 
 void
@@ -581,20 +617,18 @@ draw_menu(menu_info *m)
 	int i;
 	int win_len;
 	int x, y;
-	int len;
 
 	getmaxyx(menu_win, y, x);
 	win_len = x;
 	werase(menu_win);
 
-	box(menu_win, 0, 0);
-
 	normalize_top(m);
 
 	x = m->top;
 
+	box(menu_win, 0, 0);
 	wattron(menu_win, A_BOLD);
-	wmove(menu_win, 0, 3);
+	checked_wmove(menu_win, 0, 3);
 	wprint(menu_win, m->title);
 	wattroff(menu_win, A_BOLD);
 
@@ -609,7 +643,6 @@ draw_menu(menu_info *m)
 		chomp(m->items[x]);
 		if((ptr = strchr(m->items[x], '\n')) || (ptr = strchr(m->items[x], '\r')))
 			*ptr = '\0';
-		len = win_len + get_utf8_overhead(m->items[x]);
 
 		col = cfg.cs.color[WIN_COLOR];
 
@@ -628,7 +661,6 @@ draw_menu(menu_info *m)
 		{
 			size_t l = get_char_width(m->items[x] + off);
 			off += l;
-			len -= l - 1;
 		}
 
 		buf = strdup(m->items[x] + off);
@@ -636,19 +668,19 @@ draw_menu(menu_info *m)
 			if(buf[z] == '\t')
 				buf[z] = ' ';
 
-		wmove(menu_win, i, 2);
-		if(strlen(buf) > len - 4)
+		checked_wmove(menu_win, i, 2);
+		if(get_screen_string_length(buf) > win_len - 4)
 		{
 			size_t len = get_normal_utf8_string_widthn(buf, win_len - 3 - 4);
-			if(strlen(buf) > len)
-				buf[len] = '\0';
+			memset(buf + len, ' ', strlen(buf) - len);
+			buf[len + 3] = '\0';
 			wprint(menu_win, buf);
-			waddstr(menu_win, "...");
+			mvwaddstr(menu_win, i, win_len - 5, "...");
 		}
 		else
 		{
-			if(strlen(buf) > len - 4)
-				buf[len - 4] = '\0';
+			const size_t len = get_normal_utf8_string_widthn(buf, win_len - 4);
+			buf[len] = '\0';
 			wprint(menu_win, buf);
 		}
 		waddstr(menu_win, " ");
@@ -673,89 +705,142 @@ int
 capture_output_to_menu(FileView *view, const char cmd[], menu_info *m)
 {
 	FILE *file, *err;
-	char buf[4096];
+	char *line = NULL;
 	int x;
-	int were_errors;
+	pid_t pid;
 
-	if(background_and_capture((char *)cmd, &file, &err) != 0)
+	LOG_INFO_MSG("Capturing output of the command to a menu: %s", cmd);
+
+	pid = background_and_capture((char *)cmd, &file, &err);
+	if(pid == (pid_t)-1)
 	{
 		show_error_msgf("Trouble running command", "Unable to run: %s", cmd);
 		return 0;
 	}
 
-	curr_stats.search = 1;
+	show_progress("", 0);
+
+	ui_cancellation_reset();
+	ui_cancellation_enable();
+
+	wait_for_data_from(pid, file, 0);
 
 	x = 0;
-	show_progress("", 0);
-	while(fgets(buf, sizeof(buf), file) == buf)
+	while((line = read_line(file, line)) != NULL)
 	{
-		int i, j;
-		size_t len;
-
-		j = 0;
-		for(i = 0; buf[i] != '\0'; i++)
-			j++;
-
+		char *expanded_line;
 		show_progress("Loading menu", 1000);
 		m->items = realloc(m->items, sizeof(char *)*(x + 1));
-		len = strlen(buf) + j*(cfg.tab_stop - 1) + 2;
-		m->items[x] = malloc(len);
-
-		j = 0;
-		for(i = 0; buf[i] != '\0'; i++)
+		expanded_line = expand_tabulation_a(line, cfg.tab_stop);
+		if(expanded_line != NULL)
 		{
-			if(buf[i] == '\t')
-			{
-				int k = cfg.tab_stop - j%cfg.tab_stop;
-				while(k-- > 0)
-					m->items[x][j++] = ' ';
-			}
-			else
-			{
-				m->items[x][j++] = buf[i];
-			}
+			m->items[x++] = expanded_line;
 		}
-		m->items[x][j] = '\0';
 
-		x++;
+		wait_for_data_from(pid, file, 0);
 	}
+	m->len = x;
+
+	ui_cancellation_disable();
 
 	fclose(file);
-	m->len = x;
-	curr_stats.search = 0;
+	print_errors(err);
 
-	were_errors = print_errors(err);
-
-	if(m->len < 1)
+	if(ui_cancellation_requested())
 	{
-		reset_popup_menu(m);
-		return were_errors;
+		append_to_string(&m->title, "(cancelled) ");
+		append_to_string(&m->empty_msg, " (cancelled)");
 	}
 
-	setup_menu();
-	draw_menu(m);
-	move_to_menu_pos(m->pos, m);
-	enter_menu_mode(m, view);
-	return 0;
+	return display_menu(m, view);
+}
+
+/* Replaces *str with a copy of the with string extended by the suffix.  *str
+ * can be NULL in which case it's treated as empty string. equal to the with (then function does nothing).  Returns non-zero if memory allocation
+ * failed. */
+static void
+append_to_string(char **str, const char suffix[])
+{
+	const char *const non_null_str = (*str == NULL) ? "" : *str;
+	char *const appended_str = format_str("%s%s", non_null_str, suffix);
+	if(appended_str != NULL)
+	{
+		free(*str);
+		*str = appended_str;
+	}
+}
+
+/* Clones the line replacing all occurrences of horizontal tabulation character
+ * with appropriate number of spaces.  The tab_stops parameter shows how many
+ * character position are taken by one tabulation.  Returns newly allocated
+ * string. */
+static char *
+expand_tabulation_a(const char line[], size_t tab_stops)
+{
+	const size_t tab_count = chars_in_str(line, '\t');
+	const size_t extra_line_len = tab_count*tab_stops;
+	const size_t expanded_line_len = (strlen(line) - tab_count) + extra_line_len;
+	char *const expanded_line = malloc(expanded_line_len + 1);
+
+	if(expanded_line != NULL)
+	{
+		const char *const end = expand_tabulation(line, (size_t)-1, tab_stops,
+				expanded_line);
+		assert(*end == '\0' && "The line should be processed till the end");
+	}
+
+	return expanded_line;
+}
+
+/* Returns number of c char occurrences in the s string. */
+static size_t
+chars_in_str(const char s[], char c)
+{
+	size_t char_count = 0;
+	while(*s != '\0')
+	{
+		if(*s++ == c)
+		{
+			char_count++;
+		}
+	}
+	return char_count;
+}
+
+int
+display_menu(menu_info *m, FileView *view)
+{
+	if(m->len < 1)
+	{
+		status_bar_message(m->empty_msg);
+		reset_popup_menu(m);
+		return 1;
+	}
+	else
+	{
+		setup_menu();
+		draw_menu(m);
+		move_to_menu_pos(m->pos, m);
+		enter_menu_mode(m, view);
+		return 0;
+	}
 }
 
 int
 query_user_menu(char *title, char *message)
 {
 	int key;
-	int done = 0;
 	char *dup = strdup(message);
 
 	curr_stats.errmsg_shown = 2;
 
 	redraw_error_msg(title, message, 0);
 
-	while(!done)
+	do
 	{
 		key = wgetch(error_win);
-		if(key == 'y' || key == 'n' || key == ERR)
-			done = 1;
 	}
+	while(key != 'y' && key != 'n' && key != ERR);
 
 	free(dup);
 
@@ -771,10 +856,7 @@ query_user_menu(char *title, char *message)
 	if(curr_stats.need_update != UT_NONE)
 		update_screen(UT_FULL);
 
-	if(key == 'y')
-		return 1;
-	else
-		return 0;
+	return key == 'y';
 }
 
 void
@@ -821,7 +903,7 @@ redraw_error_msg(const char title_arg[], const char message_arg[],
 		y = 6;
 		wresize(error_win, y, x);
 		mvwin(error_win, (sy - y)/2, (sx - x)/2);
-		wmove(error_win, 2, (x - z)/2);
+		checked_wmove(error_win, 2, (x - z)/2);
 		wprint(error_win, message);
 	}
 	else
@@ -852,7 +934,7 @@ redraw_error_msg(const char title_arg[], const char message_arg[],
 			mvwin(error_win, (sy - y)/2, (sx - x)/2);
 			wresize(error_win, y, x);
 
-			wmove(error_win, cy++, 1);
+			checked_wmove(error_win, cy++, 1);
 			wprint(error_win, buf);
 		}
 	}
@@ -879,21 +961,18 @@ redraw_error_msg(const char title_arg[], const char message_arg[],
 	mvwaddstr(error_win, y - 2, (x - strlen(text))/2, text);
 }
 
-/* Returns non-zero if there were errors, closes ef */
-int
+void
 print_errors(FILE *ef)
 {
 	char linebuf[160];
 	char buf[sizeof(linebuf)*5];
-	int error = 0;
 
 	if(ef == NULL)
-		return 0;
+		return;
 
 	buf[0] = '\0';
 	while(fgets(linebuf, sizeof(linebuf), ef) == linebuf)
 	{
-		error = 1;
 		if(linebuf[0] == '\n')
 			continue;
 		if(strlen(buf) + strlen(linebuf) + 1 >= sizeof(buf))
@@ -910,7 +989,29 @@ print_errors(FILE *ef)
 		show_error_msg("Background Process Error", buf);
 
 	fclose(ef);
-	return error;
+}
+
+char *
+get_cmd_target(void)
+{
+	return (curr_view->selected_files > 0) ?
+		expand_macros("%f", NULL, NULL, 1) : strdup(".");
+}
+
+KHandlerResponse
+filelist_khandler(menu_info *m, const wchar_t keys[])
+{
+	if(wcscmp(keys, L"gf") == 0)
+	{
+		goto_selected_file(curr_view, m->items[m->pos], 0);
+		return KHR_CLOSE_MENU;
+	}
+	else if(wcscmp(keys, L"e") == 0)
+	{
+		goto_selected_file(curr_view, m->items[m->pos], 1);
+		return KHR_REFRESH_WINDOW;
+	}
+	return KHR_UNHANDLED;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

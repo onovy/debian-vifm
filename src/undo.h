@@ -16,10 +16,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __UNDO_H__
-#define __UNDO_H__
+#ifndef VIFM__UNDO_H__
+#define VIFM__UNDO_H__
 
 #include "ops.h"
+
+/* TODO: Use enumeration for errors in undo_group() and redo_group(). */
 
 enum
 {
@@ -41,14 +43,18 @@ typedef int (*perform_func)(OPS op, void *data, const char src[],
  * > 0 - available always (no additional checks are performed) */
 typedef int (*op_available_func)(OPS op);
 
+/* Callback to control execution of sets of operations.  Should return non-zero
+ * in case processing should be aborted, otherwise zero is expected. */
+typedef int (*undo_cancel_requested)(void);
+
 /*
  * Won't call reset_undo_list, so this function could be called multiple
  * times.
  * exec_func can't be NULL and should return non-zero on error.
- * op_avail can be NULL.
+ * op_avail and cancel can be NULL.
  */
 void init_undo_list(perform_func exec_func, op_available_func op_avail,
-		const int* max_levels);
+		undo_cancel_requested cancel, const int* max_levels);
 
 /*
  * Frees all allocated memory
@@ -96,6 +102,7 @@ void cmd_group_end(void);
  *  -4 - skipped unbalanced operation
  *  -5 - operation cannot be undone
  *  -6 - operation skipped by user
+ *  -7 - operation was cancelled
  *   1 - operation was skipped due to previous errors (no command run)
  */
 int undo_group(void);
@@ -108,6 +115,7 @@ int undo_group(void);
  *  -3 - redoing group is impossible
  *  -4 - skipped unbalanced operation
  *  -6 - operation skipped by user
+ *  -7 - operation was cancelled
  *   1 - operation was skipped due to previous errors (no command run)
  */
 int redo_group(void);
@@ -129,7 +137,7 @@ int get_undolist_pos(int detail);
  */
 void clean_cmds_with_trash(void);
 
-#endif
+#endif /* VIFM__UNDO_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

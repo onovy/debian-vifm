@@ -17,18 +17,21 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "normal.h"
+
 #include <curses.h>
 
 #include <pthread.h>
 
-#include <assert.h>
-#include <limits.h> /* PATH_MAX */
+#include <assert.h> /* assert() */
+#include <stdlib.h> /* free() */
 #include <string.h>
 #include <wctype.h> /* wtoupper() */
 
 #include "../cfg/config.h"
 #include "../engine/keys.h"
 #include "../menus/menus.h"
+#include "../utils/fs_limits.h"
 #include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
@@ -55,8 +58,6 @@
 #include "view.h"
 #include "visual.h"
 
-#include "normal.h"
-
 typedef struct
 {
 	char *path;
@@ -81,6 +82,10 @@ static void cmd_ctrl_o(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_r(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_u(key_info_t key_info, keys_info_t *keys_info);
 static void scroll_view(ssize_t offset);
+static void cmd_ctrl_wH(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_ctrl_wJ(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_ctrl_wK(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_ctrl_wL(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_wb(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_wh(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_wj(key_info_t key_info, keys_info_t *keys_info);
@@ -91,16 +96,19 @@ static void cmd_ctrl_ws(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_wt(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_wv(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_ww(key_info_t key_info, keys_info_t *keys_info);
-static void go_to_other_window(void);
 static void cmd_ctrl_wx(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_ctrl_wz(key_info_t key_info, keys_info_t *keys_info);
 static FileView * get_view(void);
 static void move_splitter(key_info_t key_info, int fact);
 static void cmd_ctrl_x(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_y(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_shift_tab(key_info_t key_info, keys_info_t *keys_info);
+static void go_to_other_window(void);
+static int try_switch_into_view_mode(void);
 static void cmd_quote(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_dollar(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_percent(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_equal(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_comma(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_dot(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_zero(key_info_t key_info, keys_info_t *keys_info);
@@ -156,6 +164,7 @@ static void cmd_gU(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_gUgg(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_gu(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_gugg(key_info_t key_info, keys_info_t *keys_info);
+static void do_gu(key_info_t key_info, keys_info_t *keys_info, int upper);
 static void cmd_gv(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_h(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_i(key_info_t key_info, keys_info_t *keys_info);
@@ -172,6 +181,11 @@ static void cmd_p(key_info_t key_info, keys_info_t *keys_info);
 static void put_files(key_info_t key_info, int move);
 static void cmd_m(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_rl(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_q_colon(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_q_slash(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_q_question(key_info_t key_info, keys_info_t *keys_info);
+static void activate_search(int count, int back, int external);
+static void cmd_q_equals(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_t(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_u(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_yy(key_info_t key_info, keys_info_t *keys_info);
@@ -188,7 +202,6 @@ static void cmd_zo(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_left_paren(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_right_paren(key_info_t key_info, keys_info_t *keys_info);
 static const char * get_last_ext(const char *name);
-static wchar_t get_first_wchar(const char *str);
 static void pick_files(FileView *view, int end, keys_info_t *keys_info);
 static void selector_S(key_info_t key_info, keys_info_t *keys_info);
 static void selector_a(key_info_t key_info, keys_info_t *keys_info);
@@ -216,21 +229,21 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"\x12", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_r}}},
 	{L"\x15", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_u}}},
 	{L"\x17\x02", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wb}}},
-	{L"\x17H", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_ctrl_wH}}},
-	{L"\x17J", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_ctrl_wJ}}},
-	{L"\x17K", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_ctrl_wK}}},
-	{L"\x17L", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_ctrl_wL}}},
+	{L"\x17H", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wH}}},
+	{L"\x17J", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wJ}}},
+	{L"\x17K", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wK}}},
+	{L"\x17L", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wL}}},
 	{L"\x17"L"b", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wb}}},
 	{L"\x17\x08", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wh}}},
 	{L"\x17h", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wh}}},
 	{L"\x17\x09", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wj}}},
 	{L"\x17j", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wj}}},
-	{L"\x17\x0f", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wo}}},
-	{L"\x17o", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wo}}},
 	{L"\x17\x0b", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wk}}},
 	{L"\x17k", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wk}}},
 	{L"\x17\x0c", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wl}}},
 	{L"\x17l", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wl}}},
+	{L"\x17\x0f", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wo}}},
+	{L"\x17o", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wo}}},
 	{L"\x17\x10", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_ww}}},
 	{L"\x17p", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_ww}}},
 	{L"\x17\x13", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_ws}}},
@@ -243,6 +256,8 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"\x17w", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_ww}}},
 	{L"\x17\x18", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wx}}},
 	{L"\x17x", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wx}}},
+	{L"\x17\x1a", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wz}}},
+	{L"\x17z", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_wz}}},
 	{L"\x17=", {BUILTIN_NIM_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_ctrl_wequal}}},
 	{L"\x17<", {BUILTIN_NIM_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_ctrl_wless}}},
 	{L"\x17>", {BUILTIN_NIM_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_ctrl_wgreater}}},
@@ -266,6 +281,7 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"^", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_zero}}},
 	{L"$", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_dollar}}},
 	{L"%", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_percent}}},
+	{L"=", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_equal}}},
 	{L",", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_comma}}},
 	{L".", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_dot}}},
 	{L"0", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_zero}}},
@@ -332,6 +348,10 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"n", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_n}}},
 	{L"p", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_p}}},
 	{L"rl", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_rl}}},
+	{L"q:", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_q_colon}}},
+	{L"q/", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_q_slash}}},
+	{L"q?", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_q_question}}},
+	{L"q=", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_q_equals}}},
 	{L"t", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_t}}},
 	{L"u", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_u}}},
 	{L"yy", {BUILTIN_NIM_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_yy}}},
@@ -486,7 +506,7 @@ cmd_ctrl_g(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_space(key_info_t key_info, keys_info_t *keys_info)
 {
-	go_to_other_window();
+	go_to_other_pane();
 }
 
 /* Processes !! normal mode command, which can be prepended by a count, which is
@@ -503,7 +523,7 @@ cmd_emarkemark(key_info_t key_info, keys_info_t *keys_info)
 		}
 		else
 		{
-			my_swprintf(buf, ARRAY_LEN(buf), L".,.+%d!", key_info.count - 1);
+			vifm_swprintf(buf, ARRAY_LEN(buf), L".,.+%d!", key_info.count - 1);
 		}
 	}
 	enter_cmdline_mode(CMD_SUBMODE, buf, NULL);
@@ -542,7 +562,7 @@ cmd_ctrl_i(key_info_t key_info, keys_info_t *keys_info)
 {
 	if(cfg.tab_switches_pane)
 	{
-		go_to_other_window();
+		cmd_space(key_info, keys_info);
 	}
 	else
 	{
@@ -585,32 +605,20 @@ cmd_ctrl_r(key_info_t key_info, keys_info_t *keys_info)
 	int ret;
 
 	curr_stats.confirmed = 0;
+	ui_cancellation_reset();
+
+	status_bar_message("Redoing...");
 
 	ret = redo_group();
+
 	if(ret == 0)
 	{
-		if(curr_stats.view)
-		{
-			load_saving_pos(curr_view, 1);
-		}
-		else
-		{
-			load_saving_pos(&lwin, 1);
-			load_saving_pos(&rwin, 1);
-		}
+		ui_views_reload_visible_filelists();
 		status_bar_message("Redone one group");
 	}
 	else if(ret == -2)
 	{
-		if(curr_stats.view)
-		{
-			load_saving_pos(curr_view, 1);
-		}
-		else
-		{
-			load_saving_pos(&lwin, 1);
-			load_saving_pos(&rwin, 1);
-		}
+		ui_views_reload_visible_filelists();
 		status_bar_error("Redone one group with errors");
 	}
 	else if(ret == -1)
@@ -628,6 +636,11 @@ cmd_ctrl_r(key_info_t key_info, keys_info_t *keys_info)
 	else if(ret == -6)
 	{
 		status_bar_message("Group redo skipped by user");
+	}
+	else if(ret == -7)
+	{
+		ui_views_reload_visible_filelists();
+		status_bar_message("Redoing was cancelled");
 	}
 	else if(ret == 1)
 	{
@@ -694,18 +707,18 @@ cmd_ctrl_wl(key_info_t key_info, keys_info_t *keys_info)
 		go_to_other_window();
 }
 
-/* Leave only one pane. */
+/* Leave only one (current) pane. */
 static void
 cmd_ctrl_wo(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_only();
+	only();
 }
 
 /* To split pane horizontally. */
 static void
 cmd_ctrl_ws(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_split(HSPLIT);
+	split_view(HSPLIT);
 }
 
 /* Go to top-left window. */
@@ -720,7 +733,7 @@ cmd_ctrl_wt(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_ctrl_wv(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_split(VSPLIT);
+	split_view(VSPLIT);
 }
 
 static void
@@ -730,55 +743,27 @@ cmd_ctrl_ww(key_info_t key_info, keys_info_t *keys_info)
 }
 
 static void
-go_to_other_window(void)
+cmd_ctrl_wH(key_info_t key_info, keys_info_t *keys_info)
 {
-	change_window();
-	if(curr_view->explore_mode)
-		activate_view_mode();
+	move_window(curr_view, 0, 1);
 }
 
-void
-normal_cmd_ctrl_wH(key_info_t key_info, keys_info_t *keys_info)
+static void
+cmd_ctrl_wJ(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_split(VSPLIT);
-	if(curr_view != &lwin)
-	{
-		cmd_ctrl_wx(key_info, NULL);
-		go_to_other_window();
-	}
+	move_window(curr_view, 1, 0);
 }
 
-void
-normal_cmd_ctrl_wJ(key_info_t key_info, keys_info_t *keys_info)
+static void
+cmd_ctrl_wK(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_split(HSPLIT);
-	if(curr_view != &rwin)
-	{
-		cmd_ctrl_wx(key_info, NULL);
-		go_to_other_window();
-	}
+	move_window(curr_view, 1, 1);
 }
 
-void
-normal_cmd_ctrl_wK(key_info_t key_info, keys_info_t *keys_info)
+static void
+cmd_ctrl_wL(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_split(HSPLIT);
-	if(curr_view != &lwin)
-	{
-		cmd_ctrl_wx(key_info, NULL);
-		go_to_other_window();
-	}
-}
-
-void
-normal_cmd_ctrl_wL(key_info_t key_info, keys_info_t *keys_info)
-{
-	comm_split(VSPLIT);
-	if(curr_view != &rwin)
-	{
-		cmd_ctrl_wx(key_info, NULL);
-		go_to_other_window();
-	}
+	move_window(curr_view, 0, 0);
 }
 
 void
@@ -850,35 +835,23 @@ move_splitter(key_info_t key_info, int fact)
 	update_screen(UT_REDRAW);
 }
 
-/* Switch views. */
+/* Switches views. */
 static void
 cmd_ctrl_wx(key_info_t key_info, keys_info_t *keys_info)
 {
-	FileView tmp_view;
-	WINDOW* tmp;
-	int t;
+	switch_panes();
+	if(curr_stats.view)
+	{
+		change_window();
+		(void)try_switch_into_view_mode();
+	}
+}
 
-	tmp = lwin.win;
-	lwin.win = rwin.win;
-	rwin.win = tmp;
-
-	t = lwin.window_rows;
-	lwin.window_rows = rwin.window_rows;
-	rwin.window_rows = t;
-
-	t = lwin.window_width;
-	lwin.window_width = rwin.window_width;
-	rwin.window_width = t;
-
-	tmp = lwin.title;
-	lwin.title = rwin.title;
-	rwin.title = tmp;
-
-	tmp_view = lwin;
-	lwin = rwin;
-	rwin = tmp_view;
-
-	curr_stats.need_update = UT_REDRAW;
+/* Quits preview pane or view modes. */
+static void
+cmd_ctrl_wz(key_info_t key_info, keys_info_t *keys_info)
+{
+	preview_close();
 }
 
 static void
@@ -902,10 +875,36 @@ cmd_ctrl_y(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_shift_tab(key_info_t key_info, keys_info_t *keys_info)
 {
+	if(!try_switch_into_view_mode())
+	{
+		if(other_view->explore_mode)
+		{
+			go_to_other_window();
+		}
+	}
+}
+
+/* Activates view mode on the preview, or just switches active pane. */
+static void
+go_to_other_window(void)
+{
+	if(!try_switch_into_view_mode())
+	{
+		go_to_other_pane();
+	}
+}
+
+/* Tries to go into view mode in case the other pane displays preview.  Returns
+ * non-zero on success, otherwise zero is returned. */
+static int
+try_switch_into_view_mode(void)
+{
 	if(curr_stats.view)
+	{
 		enter_view_mode(0);
-	else if(other_view->explore_mode)
-		go_to_other_window();
+		return 1;
+	}
+	return 0;
 }
 
 /* Clone selection.  Count specifies number of copies of each file or directory
@@ -1146,24 +1145,15 @@ cmd_gs(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_gU(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(keys_info->count == 0)
-	{
-		curr_stats.save_msg = change_case(curr_view, 1, 1, &curr_view->list_pos);
-	}
-	else
-	{
-		curr_stats.save_msg = change_case(curr_view, 1, keys_info->count,
-				keys_info->indexes);
-
-		free_list_of_file_indexes(keys_info);
-	}
+	do_gu(key_info, keys_info, 1);
 }
 
+/* Special handler for combination of gU<selector> and gg motion. */
 static void
 cmd_gUgg(key_info_t key_info, keys_info_t *keys_info)
 {
 	pick_files(curr_view, 0, keys_info);
-	cmd_gU(key_info, keys_info);
+	do_gu(key_info, keys_info, 1);
 }
 
 /* Handles gu<selector>, gugu and guu normal mode commands, which convert file
@@ -1171,24 +1161,33 @@ cmd_gUgg(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_gu(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(keys_info->count == 0)
-	{
-		curr_stats.save_msg = change_case(curr_view, 0, 1, &curr_view->list_pos);
-	}
-	else
-	{
-		curr_stats.save_msg = change_case(curr_view, 0, keys_info->count,
-				keys_info->indexes);
-
-		free_list_of_file_indexes(keys_info);
-	}
+	do_gu(key_info, keys_info, 0);
 }
 
+/* Special handler for combination of gu<selector> and gg motion. */
 static void
 cmd_gugg(key_info_t key_info, keys_info_t *keys_info)
 {
 	pick_files(curr_view, 0, keys_info);
-	cmd_gu(key_info, keys_info);
+	do_gu(key_info, keys_info, 0);
+}
+
+/* Handles gUU, gU<selector>, gUgU, gu<selector>, guu and gugu commands. */
+static void
+do_gu(key_info_t key_info, keys_info_t *keys_info, int upper)
+{
+	/* If nothing was selected, do selection count elements down. */
+	if(keys_info->count == 0)
+	{
+		const int count = (key_info.count == NO_COUNT_GIVEN)
+			? 0
+			: (key_info.count - 1);
+		pick_files(curr_view, curr_view->list_pos + count, keys_info);
+	}
+
+	curr_stats.save_msg = change_case(curr_view, upper, keys_info->count,
+			keys_info->indexes);
+	free_list_of_file_indexes(keys_info);
 }
 
 static void
@@ -1274,16 +1273,19 @@ cmd_quote(key_info_t key_info, keys_info_t *keys_info)
 {
 	if(keys_info->selector)
 	{
-		int pos = check_mark_directory(curr_view, key_info.multi);
-		if(pos < 0)
-			return;
-		pick_files(curr_view, pos, keys_info);
+		const int pos = check_mark_directory(curr_view, key_info.multi);
+		if(pos >= 0)
+		{
+			pick_files(curr_view, pos, keys_info);
+		}
 	}
 	else
 	{
-		curr_stats.save_msg = get_bookmark(curr_view, key_info.multi);
+		curr_stats.save_msg = goto_bookmark(curr_view, key_info.multi);
 		if(!cfg.auto_ch_pos)
+		{
 			move_to_list_pos(curr_view, 0);
+		}
 	}
 }
 
@@ -1310,6 +1312,15 @@ cmd_percent(key_info_t key_info, keys_info_t *keys_info)
 	pick_or_move(keys_info, line - 1);
 }
 
+/* Go to local filter mode. */
+static void
+cmd_equal(key_info_t key_info, keys_info_t *keys_info)
+{
+	wchar_t *previous = to_wide(curr_view->local_filter.filter.raw);
+	enter_cmdline_mode(FILTER_SUBMODE, previous, NULL);
+	free(previous);
+}
+
 static void
 cmd_comma(key_info_t key_info, keys_info_t *keys_info)
 {
@@ -1326,11 +1337,8 @@ cmd_comma(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_dot(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(0 > cfg.cmd_history_num)
-		show_error_msg("Command Error", "Command history list is empty.");
-	else
-		curr_stats.save_msg = exec_commands(cfg.cmd_history[0], curr_view,
-				GET_COMMAND);
+	curr_stats.save_msg = exec_commands(curr_stats.last_cmdline_command,
+			curr_view, GET_COMMAND);
 }
 
 /* Move cursor to the first column in ls-view sub-mode. */
@@ -1349,7 +1357,9 @@ cmd_colon(key_info_t key_info, keys_info_t *keys_info)
 {
 	wchar_t buf[16] = L"";
 	if(key_info.count != NO_COUNT_GIVEN)
-		my_swprintf(buf, ARRAY_LEN(buf), L".,.+%d", key_info.count - 1);
+	{
+		vifm_swprintf(buf, ARRAY_LEN(buf), L".,.+%d", key_info.count - 1);
+	}
 	enter_cmdline_mode(CMD_SUBMODE, buf, NULL);
 }
 
@@ -1369,18 +1379,14 @@ cmd_semicolon(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_slash(key_info_t key_info, keys_info_t *keys_info)
 {
-	search_repeat = (key_info.count == NO_COUNT_GIVEN) ? 1 : key_info.count;
-	curr_stats.last_search_backward = 0;
-	enter_cmdline_mode(SEARCH_FORWARD_SUBMODE, L"", NULL);
+	activate_search(key_info.count, 0, 0);
 }
 
 /* Search backward. */
 static void
 cmd_question(key_info_t key_info, keys_info_t *keys_info)
 {
-	search_repeat = (key_info.count == NO_COUNT_GIVEN) ? 1 : key_info.count;
-	curr_stats.last_search_backward = 1;
-	enter_cmdline_mode(SEARCH_BACKWARD_SUBMODE, L"", NULL);
+	activate_search(key_info.count, 1, 0);
 }
 
 /* Create link with absolute path */
@@ -1390,15 +1396,14 @@ cmd_al(key_info_t key_info, keys_info_t *keys_info)
 	if(key_info.reg == NO_REG_GIVEN)
 		key_info.reg = DEFAULT_REG_NAME;
 	curr_stats.save_msg = put_links(curr_view, key_info.reg, 0);
-	load_saving_pos(&lwin, 1);
-	load_saving_pos(&rwin, 1);
+	ui_views_reload_filelists();
 }
 
 /* Change word (rename file without extension). */
 static void
 cmd_cW(key_info_t key_info, keys_info_t *keys_info)
 {
-	rename_file(curr_view, 1);
+	rename_current_file(curr_view, 1);
 }
 
 #ifndef _WIN32
@@ -1440,7 +1445,7 @@ cmd_cw(key_info_t key_info, keys_info_t *keys_info)
 	if(curr_view->selected_files > 1)
 		rename_files(curr_view, NULL, 0, 0);
 	else
-		rename_file(curr_view, 0);
+		rename_current_file(curr_view, 0);
 }
 
 /* Delete file. */
@@ -1636,7 +1641,7 @@ go_to_next(key_info_t key_info, keys_info_t *keys_info, int def, int step)
 static void
 cmd_m(key_info_t key_info, keys_info_t *keys_info)
 {
-	add_bookmark(key_info.multi, curr_view->curr_dir,
+	curr_stats.save_msg = set_user_bookmark(key_info.multi, curr_view->curr_dir,
 			get_current_file_name(curr_view));
 }
 
@@ -1651,8 +1656,10 @@ search(key_info_t key_info, int backward)
 {
 	int found;
 
-	if(cfg.search_history_num < 0)
+	if(hist_is_empty(&cfg.search_hist))
+	{
 		return;
+	}
 
 	if(key_info.count == NO_COUNT_GIVEN)
 		key_info.count = 1;
@@ -1661,31 +1668,29 @@ search(key_info_t key_info, int backward)
 	if(curr_view->matches == 0)
 	{
 		const char *pattern = (curr_view->regexp[0] == '\0') ?
-				cfg.search_history[0] : curr_view->regexp;
-		found = find_pattern(curr_view, pattern, backward, 1);
-		curr_stats.save_msg = found;
+				cfg.search_hist.items[0] : curr_view->regexp;
+		curr_stats.save_msg = find_pattern(curr_view, pattern, backward, 1, &found);
+		if(!found)
+		{
+			return;
+		}
 		key_info.count--;
 	}
 
-	if(curr_view->matches == 0)
-		return;
-
 	while(key_info.count-- > 0)
 	{
-		if(backward)
-			found += find_previous_pattern(curr_view, cfg.wrap_scan) != 0;
-		else
-			found += find_next_pattern(curr_view, cfg.wrap_scan) != 0;
+		found += goto_search_match(curr_view, backward) != 0;
 	}
 
-	if(!found)
+	if(found)
+	{
+		status_bar_messagef("%c%s", backward ? '?' : '/', curr_view->regexp);
+	}
+	else
 	{
 		print_search_fail_msg(curr_view, backward);
-		curr_stats.save_msg = 1;
-		return;
 	}
 
-	status_bar_messagef("%c%s", backward ? '?' : '/', curr_view->regexp);
 	curr_stats.save_msg = 1;
 }
 
@@ -1702,8 +1707,7 @@ put_files(key_info_t key_info, int move)
 	if(key_info.reg == NO_REG_GIVEN)
 		key_info.reg = DEFAULT_REG_NAME;
 	curr_stats.save_msg = put_files_from_register(curr_view, key_info.reg, move);
-	load_saving_pos(&lwin, 1);
-	load_saving_pos(&rwin, 1);
+	ui_views_reload_filelists();
 }
 
 /* Create link with absolute path */
@@ -1713,8 +1717,53 @@ cmd_rl(key_info_t key_info, keys_info_t *keys_info)
 	if(key_info.reg == NO_REG_GIVEN)
 		key_info.reg = DEFAULT_REG_NAME;
 	curr_stats.save_msg = put_links(curr_view, key_info.reg, 1);
-	load_saving_pos(&lwin, 1);
-	load_saving_pos(&rwin, 1);
+	ui_views_reload_filelists();
+}
+
+/* Runs external editor to get command-line command and then executes it. */
+static void
+cmd_q_colon(key_info_t key_info, keys_info_t *keys_info)
+{
+	get_and_execute_command("", 0U, GET_COMMAND);
+}
+
+/* Runs external editor to get search pattern and then executes it. */
+static void
+cmd_q_slash(key_info_t key_info, keys_info_t *keys_info)
+{
+	activate_search(key_info.count, 0, 1);
+}
+
+/* Runs external editor to get search pattern and then executes it. */
+static void
+cmd_q_question(key_info_t key_info, keys_info_t *keys_info)
+{
+	activate_search(key_info.count, 1, 1);
+}
+
+/* Activates search of different kinds. */
+static void
+activate_search(int count, int back, int external)
+{
+	search_repeat = (count == NO_COUNT_GIVEN) ? 1 : count;
+	curr_stats.last_search_backward = back;
+	if(external)
+	{
+		const int type = back ? GET_BSEARCH_PATTERN : GET_FSEARCH_PATTERN;
+		get_and_execute_command("", 0U, type);
+	}
+	else
+	{
+		const int type = back ? SEARCH_BACKWARD_SUBMODE : SEARCH_FORWARD_SUBMODE;
+		enter_cmdline_mode(type, L"", NULL);
+	}
+}
+
+/* Runs external editor to get local filter pattern and then executes it. */
+static void
+cmd_q_equals(key_info_t key_info, keys_info_t *keys_info)
+{
+	get_and_execute_command("", 0U, GET_FILTER_PATTERN);
 }
 
 /* Tag file. */
@@ -1724,7 +1773,7 @@ cmd_t(key_info_t key_info, keys_info_t *keys_info)
 	if(curr_view->dir_entry[curr_view->list_pos].selected == 0)
 	{
 		/* The ../ dir cannot be selected */
-		if(!stroscmp(curr_view->dir_entry[curr_view->list_pos].name, "../"))
+		if(is_parent_dir(curr_view->dir_entry[curr_view->list_pos].name))
 			return;
 
 		curr_view->dir_entry[curr_view->list_pos].selected = 1;
@@ -1746,32 +1795,20 @@ cmd_u(key_info_t key_info, keys_info_t *keys_info)
 	int ret;
 
 	curr_stats.confirmed = 0;
+	ui_cancellation_reset();
+
+	status_bar_message("Undoing...");
 
 	ret = undo_group();
+
 	if(ret == 0)
 	{
-		if(curr_stats.view)
-		{
-			load_saving_pos(curr_view, 1);
-		}
-		else
-		{
-			load_saving_pos(&lwin, 1);
-			load_saving_pos(&rwin, 1);
-		}
+		ui_views_reload_visible_filelists();
 		status_bar_message("Undone one group");
 	}
 	else if(ret == -2)
 	{
-		if(curr_stats.view)
-		{
-			load_saving_pos(curr_view, 1);
-		}
-		else
-		{
-			load_saving_pos(&lwin, 1);
-			load_saving_pos(&rwin, 1);
-		}
+		ui_views_reload_visible_filelists();
 		status_bar_error("Undone one group with errors");
 	}
 	else if(ret == -1)
@@ -1793,6 +1830,11 @@ cmd_u(key_info_t key_info, keys_info_t *keys_info)
 	else if(ret == -6)
 	{
 		status_bar_message("Group undo skipped by user");
+	}
+	else if(ret == -7)
+	{
+		ui_views_reload_visible_filelists();
+		status_bar_message("Undoing was cancelled");
 	}
 	else if(ret == 1)
 	{
@@ -1820,8 +1862,7 @@ cmd_yy(key_info_t key_info, keys_info_t *keys_info)
 	curr_stats.save_msg = yank_files(curr_view, key_info.reg, keys_info->count,
 			keys_info->indexes);
 
-	if(key_info.count != NO_COUNT_GIVEN)
-		free(keys_info->indexes);
+	free(keys_info->indexes);
 }
 
 /* Calculates end position for pick_files(...) function using cursor position
@@ -1871,6 +1912,7 @@ static void
 cmd_zM(key_info_t key_info, keys_info_t *keys_info)
 {
 	restore_filename_filter(curr_view);
+	local_filter_restore(curr_view);
 	set_dot_files_visible(curr_view, 0);
 }
 
@@ -1886,6 +1928,7 @@ static void
 cmd_zR(key_info_t key_info, keys_info_t *keys_info)
 {
 	remove_filename_filter(curr_view);
+	local_filter_remove(curr_view);
 	set_dot_files_visible(curr_view, 1);
 }
 
@@ -2025,19 +2068,6 @@ get_last_ext(const char *name)
 		return ext + 1;
 }
 
-static wchar_t
-get_first_wchar(const char *str)
-{
-	char tbuf[9];
-	wchar_t wbuf[8];
-
-	strncpy(tbuf, str, ARRAY_LEN(tbuf) - 1);
-	tbuf[ARRAY_LEN(tbuf) - 1] = '\0';
-	mbstowcs(wbuf, tbuf, ARRAY_LEN(wbuf));
-
-	return wbuf[0];
-}
-
 /* Redraw with file in top of list. */
 void
 normal_cmd_zt(key_info_t key_info, keys_info_t *keys_info)
@@ -2111,7 +2141,7 @@ selector_S(key_info_t key_info, keys_info_t *keys_info)
 	i = 0;
 	for(x = 0; x < curr_view->list_rows; x++)
 	{
-		if(stroscmp(curr_view->dir_entry[x].name, "../") == 0)
+		if(is_parent_dir(curr_view->dir_entry[x].name))
 			continue;
 		if(curr_view->dir_entry[x].selected)
 			continue;
@@ -2136,7 +2166,7 @@ selector_a(key_info_t key_info, keys_info_t *keys_info)
 	i = 0;
 	for(x = 0; x < curr_view->list_rows; x++)
 	{
-		if(stroscmp(curr_view->dir_entry[x].name, "../") == 0)
+		if(is_parent_dir(curr_view->dir_entry[x].name))
 			continue;
 		keys_info->indexes[i++] = x;
 	}
@@ -2172,16 +2202,14 @@ selector_s(key_info_t key_info, keys_info_t *keys_info)
 }
 
 int
-find_npattern(FileView *view, const char *pattern, int backward, int move)
+find_npattern(FileView *view, const char *pattern, int backward)
 {
 	int i;
-	int found = find_pattern(view, pattern, backward, move);
+	int found;
+	(void)find_pattern(view, pattern, backward, 1, &found);
 	for(i = 0; i < search_repeat - 1; i++)
 	{
-		if(backward)
-			found += find_previous_pattern(view, cfg.wrap_scan) != 0;
-		else
-			found += find_next_pattern(view, cfg.wrap_scan) != 0;
+		found += goto_search_match(view, backward) != 0;
 	}
 	return found;
 }

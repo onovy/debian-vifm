@@ -17,16 +17,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __APROPOS_MENU_H__
-#define __APROPOS_MENU_H__
+#ifndef VIFM__MENUS__APROPOS_MENU_H__
+#define VIFM__MENUS__APROPOS_MENU_H__
 
 #include "../ui.h"
 #include "menus.h"
 
-void show_apropos_menu(FileView *view, char args[]);
-void execute_apropos_cb(menu_info *m);
+/* Returns non-zero if status bar message should be saved. */
+int show_apropos_menu(FileView *view, const char args[]);
 
-#endif
+#endif /* VIFM__MENUS__APROPOS_MENU_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

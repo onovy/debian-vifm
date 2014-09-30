@@ -17,14 +17,17 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "fuse.h"
+
 #include <sys/stat.h> /* S_IRWXU */
 
-#include <limits.h> /* PATH_MAX */
+#include <stddef.h> /* NULL */
 #include <string.h> /* memmove() strcpy() strlen() strcmp() strcat() */
 
 #include "cfg/config.h"
 #include "menus/menus.h"
 #include "utils/fs.h"
+#include "utils/fs_limits.h"
 #include "utils/log.h"
 #include "utils/path.h"
 #include "utils/str.h"
@@ -33,8 +36,6 @@
 #include "background.h"
 #include "filelist.h"
 #include "status.h"
-
-#include "fuse.h"
 
 typedef struct fuse_mount_t
 {
@@ -122,11 +123,7 @@ fuse_try_mount(FileView *view, const char *program)
 			return;
 	}
 
-	if(change_directory(view, mount_point) >= 0)
-	{
-		load_dir_list(view, 0);
-		move_to_list_pos(view, view->curr_line);
-	}
+	navigate_to(view, mount_point);
 }
 
 /* Searchers for mount record by source file path. */
@@ -192,7 +189,7 @@ fuse_mount(FileView *view, char *file_full_path, const char *param,
 		 paths, Otherwise the fuse-zip command fails with
 		 "fusermount: failed to open current directory: permission denied"
 		 (this happens when mounting JARs from mounted JARs) */
-	if(my_chdir(cfg.fuse_home) != 0)
+	if(vifm_chdir(cfg.fuse_home) != 0)
 	{
 		show_error_msg("FUSE MOUNT ERROR", "Can't chdir() to FUSE home");
 		return -1;
@@ -230,14 +227,15 @@ fuse_mount(FileView *view, char *file_full_path, const char *param,
 		if(path_exists(mount_point))
 			rmdir(mount_point);
 		show_error_msg("FUSE MOUNT ERROR", file_full_path);
-		(void)my_chdir(view->curr_dir);
+		(void)vifm_chdir(view->curr_dir);
 		return -1;
 	}
 	unlink(errors_file);
 	status_bar_message("FUSE mount success");
 
-	fuse_item = (fuse_mount_t *)malloc(sizeof(fuse_mount_t));
-	strcpy(fuse_item->source_file_name, file_full_path);
+	fuse_item = malloc(sizeof(*fuse_item));
+	copy_str(fuse_item->source_file_name, sizeof(fuse_item->source_file_name),
+			file_full_path);
 	strcpy(fuse_item->source_file_dir, view->curr_dir);
 	canonicalize_path(mount_point, fuse_item->mount_point,
 			sizeof(fuse_item->mount_point));
@@ -272,12 +270,9 @@ format_mount_command(const char mount_point[], const char file_name[],
 	escaped_mount_point = escape_filename(mount_point, 0);
 
 	buf_pos = buf;
-	prog_pos = format;
-	strcpy(buf_pos, "");
-	buf_pos += strlen(buf_pos);
-	while(*prog_pos != '\0' && *prog_pos != '|')
-		prog_pos++;
-	prog_pos++;
+	buf_pos[0] = '\0';
+
+	prog_pos = after_first(format, '|');
 	while(*prog_pos != '\0')
 	{
 		if(*prog_pos == '%')
@@ -294,22 +289,20 @@ format_mount_command(const char mount_point[], const char file_name[],
 				prog_pos++;
 			}
 			*cmd_pos = '\0';
-			/* FIXME: possible buffer overflow */
-			if(buf_pos + strlen(escaped_path) >= buf + buf_size + 2)
-				continue;
-			else if(!strcmp(cmd_buf, "%SOURCE_FILE"))
+
+			if(!strcmp(cmd_buf, "%SOURCE_FILE"))
 			{
-				strcpy(buf_pos, escaped_path);
+				copy_str(buf_pos, buf_size - (buf_pos - buf), escaped_path);
 				buf_pos += strlen(escaped_path);
 			}
 			else if(!strcmp(cmd_buf, "%PARAM"))
 			{
-				strcpy(buf_pos, param);
+				copy_str(buf_pos, buf_size - (buf_pos - buf), param);
 				buf_pos += strlen(param);
 			}
 			else if(!strcmp(cmd_buf, "%DESTINATION_DIR"))
 			{
-				strcpy(buf_pos, escaped_mount_point);
+				copy_str(buf_pos, buf_size - (buf_pos - buf), escaped_mount_point);
 				buf_pos += strlen(escaped_mount_point);
 			}
 			else if(!strcmp(cmd_buf, "%CLEAR"))
@@ -339,13 +332,17 @@ unmount_fuse(void)
 	fuse_mount_t *runner;
 
 	if(fuse_mounts == NULL)
+	{
 		return;
+	}
 
-	if(my_chdir("/") != 0)
+	if(vifm_chdir("/") != 0)
+	{
 		return;
+	}
 
 	runner = fuse_mounts;
-	while(runner)
+	while(runner != NULL)
 	{
 		char buf[14 + PATH_MAX + 1];
 		char *escaped_filename;
@@ -354,15 +351,17 @@ unmount_fuse(void)
 		snprintf(buf, sizeof(buf), "fusermount -u %s", escaped_filename);
 		free(escaped_filename);
 
-		my_system(buf);
+		(void)vifm_system(buf);
 		if(path_exists(runner->mount_point))
+		{
 			rmdir(runner->mount_point);
+		}
 
 		runner = runner->next;
 	}
 
-	leave_invalid_dir(&lwin, lwin.curr_dir);
-	leave_invalid_dir(&rwin, rwin.curr_dir);
+	leave_invalid_dir(&lwin);
+	leave_invalid_dir(&rwin);
 }
 
 int
@@ -418,7 +417,9 @@ try_unmount_fuse(FileView *view)
 	}
 
 	if(runner == NULL)
+	{
 		return 0;
+	}
 
 	/* we are exiting a top level dir */
 	escaped_mount_point = escape_filename(runner->mount_point, 0);
@@ -428,7 +429,7 @@ try_unmount_fuse(FileView *view)
 	free(escaped_mount_point);
 
 	/* have to chdir to parent temporarily, so that this DIR can be unmounted */
-	if(my_chdir(cfg.fuse_home) != 0)
+	if(vifm_chdir(cfg.fuse_home) != 0)
 	{
 		show_error_msg("FUSE UMOUNT ERROR", "Can't chdir to FUSE home");
 		return -1;
@@ -443,7 +444,7 @@ try_unmount_fuse(FileView *view)
 		werase(status_bar);
 		show_error_msgf("FUSE UMOUNT ERROR", "Can't unmount %s.  It may be busy.",
 				runner->source_file_name);
-		(void)my_chdir(view->curr_dir);
+		(void)vifm_chdir(view->curr_dir);
 		return -1;
 	}
 

@@ -17,24 +17,78 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <stdio.h>
-
 #include "file_streams.h"
+
+#include <stddef.h> /* NULL size_t ssize_t */
+#include <stdio.h> /* FILE */
+#include <stdlib.h> /* free() realloc() */
+#include <string.h> /* strlen() */
 
 static int get_char(FILE *fp);
 
 char *
-get_line(FILE *fp, char *buf, size_t bufsz)
+read_line(FILE *fp, char buf[])
+{
+	enum { PART_BUFFER_LEN = 512 };
+	char part_buf[PART_BUFFER_LEN];
+	char *last_allocated_block = NULL;
+	size_t len = 0;
+
+	while(get_line(fp, part_buf, sizeof(part_buf)) != NULL)
+	{
+		size_t part_len = strlen(part_buf);
+		const int eol = (part_len > 0) && (part_buf[part_len - 1] == '\n');
+		const size_t new_len = len + (part_len - eol);
+
+		if((last_allocated_block = realloc(buf, new_len + 1)) == NULL)
+		{
+			break;
+		}
+
+		if(eol)
+		{
+			part_buf[--part_len] = '\0';
+		}
+
+		buf = last_allocated_block;
+		strcpy(buf + len, part_buf);
+
+		if(eol)
+		{
+			break;
+		}
+
+		len = new_len;
+	}
+
+	if(last_allocated_block == NULL)
+	{
+		free(buf);
+		buf = NULL;
+	}
+
+	return buf;
+}
+
+char *
+get_line(FILE *fp, char buf[], size_t bufsz)
 {
 	int c = '\0';
 	char *start = buf;
 
-	while(bufsz-- > 1 && (c = get_char(fp)) != EOF)
+	if(bufsz <= 1)
+	{
+		return NULL;
+	}
+
+	while(bufsz > 1 && (c = get_char(fp)) != EOF)
 	{
 		*buf++ = c;
-		if(c == '\n')
-			break;
 		bufsz--;
+		if(c == '\n')
+		{
+			break;
+		}
 	}
 	*buf = '\0';
 
@@ -60,16 +114,6 @@ get_char(FILE *fp)
 		c = '\n';
 	}
 	return c;
-}
-
-void
-remove_eol(FILE *fp)
-{
-	int c = fgetc(fp);
-	if(c == '\r')
-		c = fgetc(fp);
-	if(c != '\n')
-		ungetc(c, fp);
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

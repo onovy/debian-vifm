@@ -17,11 +17,13 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <limits.h> /* PATH_MAX */
+#include "filetypes_menu.h"
+
 #include <stdio.h> /* snprintf() */
 #include <string.h> /* strdup() strlen() */
 
 #include "../modes/menu.h"
+#include "../utils/fs_limits.h"
 #include "../utils/macros.h"
 #include "../utils/string_array.h"
 #include "../file_magic.h"
@@ -31,11 +33,10 @@
 #include "../ui.h"
 #include "menus.h"
 
-#include "filetypes_menu.h"
-
 static const char * form_filetype_menu_entry(assoc_record_t prog,
 		int descr_width);
 static const char * form_filetype_data_entry(assoc_record_t prog);
+static int execute_filetype_cb(FileView *view, menu_info *m);
 
 int
 show_filetypes_menu(FileView *view, int background)
@@ -49,15 +50,11 @@ show_filetypes_menu(FileView *view, int background)
 	assoc_records_t ft = get_all_programs_for_file(filename);
 	assoc_records_t magic = get_magic_handlers(filename);
 
-	if(ft.count == 0 && magic.count == 0)
-	{
-		show_error_msg("Filetype is not set.",
-				"No programs set for this filetype.");
-		return 0;
-	}
+	init_menu_info(&m, FILETYPE_MENU,
+			strdup("No programs set for this filetype"));
 
-	init_menu_info(&m, FILETYPE);
 	m.title = strdup(" Filetype associated commands ");
+	m.execute_handler = &execute_filetype_cb;
 	m.extra_data = (background ? 1 : 0);
 
 	max_len = 0;
@@ -90,12 +87,7 @@ show_filetypes_menu(FileView *view, int background)
 				form_filetype_menu_entry(magic.list[i], max_len));
 	}
 
-	setup_menu();
-	draw_menu(&m);
-	move_to_menu_pos(m.pos, &m);
-	enter_menu_mode(&m, view);
-
-	return 0;
+	return display_menu(&m, view);
 }
 
 /* Returns pointer to a statically allocated buffer */
@@ -132,7 +124,9 @@ form_filetype_data_entry(assoc_record_t prog)
 	return result;
 }
 
-void
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+int
 execute_filetype_cb(FileView *view, menu_info *m)
 {
 	if(view->dir_entry[view->list_pos].type == DIRECTORY && m->pos == 0)
@@ -151,6 +145,7 @@ execute_filetype_cb(FileView *view, menu_info *m)
 
 	clean_selected_files(view);
 	redraw_view(view);
+	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

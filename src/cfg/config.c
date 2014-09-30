@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "config.h"
+
 #define HOME_EV "HOME"
 #define VIFM_EV "VIFM"
 #define MYVIFMRC_EV "MYVIFMRC"
@@ -29,17 +31,22 @@
 #define CP_RC "cp " PACKAGE_DATA_DIR "/" VIFMRC " ~/.vifm"
 #endif
 
+#include <unistd.h> /* _SC_ARG_MAX sysconf() */
+
 #include <assert.h> /* assert() */
-#include <errno.h>
-#include <limits.h> /* INT_MIN PATH_MAX */
+#include <limits.h> /* INT_MIN */
+#include <stddef.h> /* size_t */
 #include <stdio.h> /* FILE snprintf() */
 #include <stdlib.h>
-#include <string.h> /* memset() strncpy() */
+#include <string.h> /* memmove() memset() */
 
 #include "../menus/menus.h"
 #include "../utils/env.h"
+#include "../utils/file_streams.h"
 #include "../utils/fs.h"
+#include "../utils/fs_limits.h"
 #include "../utils/log.h"
+#include "../utils/macros.h"
 #include "../utils/str.h"
 #include "../utils/path.h"
 #include "../utils/string_array.h"
@@ -51,11 +58,20 @@
 #include "../filelist.h"
 #include "../opt_handlers.h"
 #include "../status.h"
+#include "../trash.h"
 #include "../ui.h"
+#include "hist.h"
 
-#include "config.h"
+/* Maximum supported by the implementation length of line in vifmrc file. */
+#define MAX_VIFMRC_LINE_LEN 4*1024
 
-#define MAX_LEN 1024
+/* Default value of shell command used if $SHELL environment variable isn't
+ * set. */
+#ifndef _WIN32
+#define DEFAULT_SHELL_CMD "sh"
+#else
+#define DEFAULT_SHELL_CMD "cmd"
+#endif
 
 config_t cfg;
 
@@ -80,27 +96,28 @@ static void create_rc_file(void);
 #endif
 static void add_default_bookmarks(void);
 static int source_file_internal(FILE *fp, const char filename[]);
+static void show_sourcing_error(const char filename[], int line_num);
 static const char * get_tmpdir(void);
+static int is_conf_file(const char file[]);
+static void disable_history(void);
 static void free_view_history(FileView *view);
+static void decrease_history(size_t new_len, size_t removed_count);
 static void reduce_view_history(FileView *view, size_t size);
+static void reallocate_history(size_t new_len);
+static void zero_new_history_items(size_t old_len, size_t delta);
+static void save_into_history(const char item[], hist_t *hist, int len);
 
 void
 init_config(void)
 {
-	cfg.num_bookmarks = 0;
-	cfg.command_num = 0;
 	cfg.vim_filter = 0;
 	cfg.show_one_window = 0;
 	cfg.history_len = 15;
 
-	cfg.search_history_num = -1;
-	cfg.search_history = calloc(cfg.history_len, sizeof(char *));
-
-	cfg.cmd_history_num = -1;
-	cfg.cmd_history = calloc(cfg.history_len, sizeof(char *));
-
-	cfg.prompt_history_num = -1;
-	cfg.prompt_history = calloc(cfg.history_len, sizeof(char *));
+	(void)hist_init(&cfg.cmd_hist, cfg.history_len);
+	(void)hist_init(&cfg.search_hist, cfg.history_len);
+	(void)hist_init(&cfg.prompt_hist, cfg.history_len);
+	(void)hist_init(&cfg.filter_hist, cfg.history_len);
 
 	cfg.auto_execute = 0;
 	cfg.time_format = strdup(" %m/%d %H:%M");
@@ -125,7 +142,7 @@ init_config(void)
 		assert(update_stat == 0);
 	}
 
-	cfg.use_screen = 0;
+	cfg.use_term_multiplexer = 0;
 	cfg.use_vim_help = 0;
 	cfg.wild_menu = 0;
 	cfg.ignore_case = 0;
@@ -154,6 +171,16 @@ init_config(void)
 
 	cfg.dot_dirs = DD_NONROOT_PARENT;
 
+	cfg.trunc_normal_sb_msgs = 0;
+
+	cfg.filter_inverted_by_default = 1;
+
+	cfg.apropos_prg = strdup("apropos %a");
+	cfg.find_prg = strdup("find %s %a -print , "
+			"-type d \\( ! -readable -o ! -executable \\) -prune");
+	cfg.grep_prg = strdup("grep -n -H -I -r %i %a %s");
+	cfg.locate_prg = strdup("locate %a");
+
 #ifndef _WIN32
 	snprintf(cfg.log_file, sizeof(cfg.log_file), "/var/log/vifm-startup-log");
 #else
@@ -163,11 +190,7 @@ init_config(void)
 	strcat(cfg.log_file, "/startup-log");
 #endif
 
-#ifndef _WIN32
-	cfg.shell = strdup(env_get_def("SHELL", "sh"));
-#else
-	cfg.shell = strdup(env_get_def("SHELL", "cmd"));
-#endif
+	cfg_set_shell(env_get_def("SHELL", DEFAULT_SHELL_CMD));
 
 #ifndef _WIN32
 	/* Maximum argument length to pass to the shell */
@@ -419,6 +442,8 @@ store_config_paths(void)
 	snprintf(cfg.config_dir, sizeof(cfg.config_dir), "%s", env_get(VIFM_EV));
 	snprintf(cfg.trash_dir, sizeof(cfg.trash_dir), "%s/" TRASH, cfg.config_dir);
 	snprintf(cfg.log_file, sizeof(cfg.log_file), "%s/" LOG, cfg.config_dir);
+
+	(void)set_trash_dir(cfg.trash_dir);
 }
 
 /* ensures existence of configuration directory */
@@ -466,7 +491,7 @@ create_help_file(void)
 	LOG_FUNC_ENTER;
 
 	char command[] = CP_HELP;
-	(void)my_system(command);
+	(void)vifm_system(command);
 }
 
 /* Copies example vifmrc file from shared files to the ~/.vifm directory. */
@@ -476,7 +501,7 @@ create_rc_file(void)
 	LOG_FUNC_ENTER;
 
 	char command[] = CP_RC;
-	(void)my_system(command);
+	(void)vifm_system(command);
 }
 #endif
 
@@ -486,29 +511,18 @@ add_default_bookmarks(void)
 {
 	LOG_FUNC_ENTER;
 
-	add_bookmark('H', cfg.home_dir, "../");
-	add_bookmark('z', cfg.config_dir, "../");
-}
-
-/* ensures existence of trash directory */
-void
-create_trash_dir(void)
-{
-	LOG_FUNC_ENTER;
-
-	if(is_dir_writable(cfg.trash_dir))
-		return;
-
-	if(make_dir(cfg.trash_dir, 0777) != 0)
-		show_error_msgf("Error Setting Trash Directory",
-				"Could not set trash directory to %s: %s",
-				cfg.trash_dir, strerror(errno));
+	set_user_bookmark('H', cfg.home_dir, "../");
+	set_user_bookmark('z', cfg.config_dir, "../");
 }
 
 void
-exec_config(void)
+source_config(void)
 {
-	(void)source_file(env_get(MYVIFMRC_EV));
+	const char *const myvifmrc = env_get(MYVIFMRC_EV);
+	if(myvifmrc != NULL)
+	{
+		(void)source_file(myvifmrc);
+	}
 }
 
 int
@@ -532,29 +546,31 @@ source_file(const char filename[])
 	return result;
 }
 
+/* Returns non-zero on error. */
 static int
 source_file_internal(FILE *fp, const char filename[])
 {
-	char line[MAX_LEN*2];
+	char line[MAX_VIFMRC_LINE_LEN + 1];
+	char *next_line = NULL;
 	int line_num;
 
 	if(fgets(line, sizeof(line), fp) == NULL)
 	{
-		return 1;
+		/* File is empty. */
+		return 0;
 	}
+	chomp(line);
 
 	line_num = 1;
 	for(;;)
 	{
-		char next_line[MAX_LEN];
 		char *p;
 		int line_num_delta = 0;
 
-		while((p = fgets(next_line, sizeof(next_line), fp)) != NULL)
+		while((p = next_line = read_line(fp, next_line)) != NULL)
 		{
 			line_num_delta++;
 			p = skip_whitespace(p);
-			chomp(p);
 			if(*p == '"')
 				continue;
 			else if(*p == '\\')
@@ -562,51 +578,72 @@ source_file_internal(FILE *fp, const char filename[])
 			else
 				break;
 		}
-		chomp(line);
 		if(exec_commands(line, curr_view, GET_COMMAND) < 0)
 		{
-			/* User choice is saved by show_error_promptf internally. */
-			(void)prompt_error_msgf("File Sourcing Error", "Error in %s at %d line",
-					filename, line_num);
+			show_sourcing_error(filename, line_num);
 		}
 		if(curr_stats.sourcing_state == SOURCING_FINISHING)
 			break;
+
 		if(p == NULL)
+		{
+			/* Artificially increment line number to simulate as if all that happens
+			 * after the loop relates to something past end of the file. */
+			line_num++;
 			break;
-		strcpy(line, p);
+		}
+
+		copy_str(line, sizeof(line), p);
 		line_num += line_num_delta;
+	}
+
+	free(next_line);
+
+	if(commands_block_finished() != 0)
+	{
+		show_sourcing_error(filename, line_num);
 	}
 
 	return 0;
 }
 
-static int
-is_conf_file(const char *file)
+/* Displays sourcing error message to a user. */
+static void
+show_sourcing_error(const char filename[], int line_num)
 {
-	FILE *fp;
-	char line[MAX_LEN];
-
-	if((fp = fopen(file, "r")) == NULL)
-		return 0;
-
-	while(fgets(line, sizeof(line), fp))
-	{
-		if(skip_whitespace(line)[0] == '#')
-		{
-			fclose(fp);
-			return 1;
-		}
-	}
-
-	fclose(fp);
-
-	return 0;
+	/* User choice is saved by prompt_error_msgf internally. */
+	(void)prompt_error_msgf("File Sourcing Error", "Error in %s at %d line",
+			filename, line_num);
 }
 
 int
 is_old_config(void)
 {
-	return is_conf_file(env_get(MYVIFMRC_EV));
+	const char *const myvifmrc = env_get(MYVIFMRC_EV);
+	return (myvifmrc != NULL) && is_conf_file(myvifmrc);
+}
+
+/* Checks whether file is configuration file (has at least one line which starts
+ * with a hash symbol).  Returns non-zero if yes, otherwise zero is returned. */
+static int
+is_conf_file(const char file[])
+{
+	FILE *const fp = fopen(file, "r");
+	char *line = NULL;
+
+	if(fp != NULL)
+	{
+		while((line = read_line(fp, line)) != NULL)
+		{
+			if(skip_whitespace(line)[0] == '#')
+			{
+				break;
+			}
+		}
+		fclose(fp);
+		free(line);
+	}
+	return line != NULL;
 }
 
 int
@@ -644,7 +681,7 @@ generate_tmp_file_name(const char prefix[], char buf[], size_t buf_len)
 #ifdef _WIN32
 	to_forward_slash(buf);
 #endif
-	strncpy(buf, make_name_unique(buf), buf_len);
+	copy_str(buf, buf_len, make_name_unique(buf));
 }
 
 /* Returns path to tmp directory.  Uses environment variables to determine the
@@ -658,64 +695,49 @@ get_tmpdir(void)
 void
 resize_history(size_t new_len)
 {
-	int delta;
-	const int old_len = cfg.history_len;
+	const int old_len = MAX(cfg.history_len, 0);
+	const int delta = (int)new_len - old_len;
 
 	if(new_len == 0)
 	{
-		free_view_history(&lwin);
-		free_view_history(&rwin);
-
-		cfg.cmd_history_num = -1;
-		cfg.prompt_history_num = -1;
-		cfg.search_history_num = -1;
+		disable_history();
 		return;
 	}
 
-	if(old_len > new_len)
+	if(delta < 0)
 	{
-		reduce_view_history(&lwin, new_len);
-		reduce_view_history(&rwin, new_len);
+		decrease_history(new_len, -delta);
 	}
 
-	delta = (int)new_len - old_len;
-	if(delta < 0 && old_len > 0)
-	{
-		const size_t abs_delta = -delta;
-		free_strings(cfg.cmd_history + new_len, abs_delta);
-		free_strings(cfg.prompt_history + new_len, abs_delta);
-		free_strings(cfg.search_history + new_len, abs_delta);
-		free_history_items(lwin.history + new_len, abs_delta);
-		free_history_items(rwin.history + new_len, abs_delta);
-	}
-
-	lwin.history = realloc(lwin.history, sizeof(history_t)*new_len);
-	rwin.history = realloc(rwin.history, sizeof(history_t)*new_len);
+	reallocate_history(new_len);
 
 	if(delta > 0)
 	{
-		memset(lwin.history + old_len, 0, sizeof(history_t)*delta);
-		memset(rwin.history + old_len, 0, sizeof(history_t)*delta);
+		zero_new_history_items(old_len, delta);
 	}
 
 	cfg.history_len = new_len;
 
-	if(old_len <= 0)
+	if(old_len == 0)
 	{
 		save_view_history(&lwin, NULL, NULL, -1);
 		save_view_history(&rwin, NULL, NULL, -1);
 	}
+}
 
-	cfg.cmd_history = realloc(cfg.cmd_history, new_len*sizeof(char *));
-	cfg.prompt_history = realloc(cfg.prompt_history, new_len*sizeof(char *));
-	cfg.search_history = realloc(cfg.search_history, new_len*sizeof(char *));
-	if(delta > 0)
-	{
-		const size_t len = sizeof(char *)*delta;
-		memset(cfg.cmd_history + old_len, 0, len);
-		memset(cfg.prompt_history + old_len, 0, len);
-		memset(cfg.search_history + old_len, 0, len);
-	}
+/* Completely disables all histories and clears all of them. */
+static void
+disable_history(void)
+{
+	free_view_history(&lwin);
+	free_view_history(&rwin);
+
+	(void)hist_reset(&cfg.search_hist, cfg.history_len);
+	(void)hist_reset(&cfg.cmd_hist, cfg.history_len);
+	(void)hist_reset(&cfg.prompt_hist, cfg.history_len);
+	(void)hist_reset(&cfg.filter_hist, cfg.history_len);
+
+	cfg.history_len = 0;
 }
 
 /* Clears and frees directory history of the view. */
@@ -730,13 +752,26 @@ free_view_history(FileView *view)
 	view->history_pos = 0;
 }
 
+/* Reduces amount of memory taken by the history.  The new_len specifies new
+ * size of the history, while removed_count parameter designates number of
+ * removed elements. */
+static void
+decrease_history(size_t new_len, size_t removed_count)
+{
+	reduce_view_history(&lwin, new_len);
+	reduce_view_history(&rwin, new_len);
+
+	hist_trunc(&cfg.search_hist, new_len, removed_count);
+	hist_trunc(&cfg.cmd_hist, new_len, removed_count);
+	hist_trunc(&cfg.prompt_hist, new_len, removed_count);
+	hist_trunc(&cfg.filter_hist, new_len, removed_count);
+}
+
 /* Moves items of directory history when size of history becomes smaller. */
 static void
 reduce_view_history(FileView *view, size_t size)
 {
-	int delta;
-
-	delta = MIN(view->history_num - (int)size, view->history_pos);
+	const int delta = MIN(view->history_num - (int)size, view->history_pos);
 	if(delta <= 0)
 		return;
 
@@ -747,6 +782,40 @@ reduce_view_history(FileView *view, size_t size)
 	if(view->history_num >= size)
 		view->history_num = size - 1;
 	view->history_pos -= delta;
+}
+
+/* Reallocates memory taken by history elements.  The new_len specifies new
+ * size of the history. */
+static void
+reallocate_history(size_t new_len)
+{
+	const size_t hist_item_len = sizeof(history_t)*new_len;
+	const size_t str_item_len = sizeof(char *)*new_len;
+
+	lwin.history = realloc(lwin.history, hist_item_len);
+	rwin.history = realloc(rwin.history, hist_item_len);
+
+	cfg.cmd_hist.items = realloc(cfg.cmd_hist.items, str_item_len);
+	cfg.search_hist.items = realloc(cfg.search_hist.items, str_item_len);
+	cfg.prompt_hist.items = realloc(cfg.prompt_hist.items, str_item_len);
+	cfg.filter_hist.items = realloc(cfg.filter_hist.items, str_item_len);
+}
+
+/* Zeroes new elements of the history.  The old_len specifies old history size,
+ * while delta parameter designates number of new elements. */
+static void
+zero_new_history_items(size_t old_len, size_t delta)
+{
+	const size_t hist_item_len = sizeof(history_t)*delta;
+	const size_t str_item_len = sizeof(char *)*delta;
+
+	memset(lwin.history + old_len, 0, hist_item_len);
+	memset(rwin.history + old_len, 0, hist_item_len);
+
+	memset(cfg.cmd_hist.items + old_len, 0, str_item_len);
+	memset(cfg.search_hist.items + old_len, 0, str_item_len);
+	memset(cfg.prompt_hist.items + old_len, 0, str_item_len);
+	memset(cfg.filter_hist.items + old_len, 0, str_item_len);
 }
 
 int
@@ -760,7 +829,22 @@ set_fuse_home(const char new_value[])
 	new_value = with_forward_slashes;
 #endif
 	canonicalize_path(new_value, canonicalized, sizeof(canonicalized));
+
+	if(!is_path_absolute(new_value))
+	{
+		show_error_msgf("Error Setting FUSE Home Directory",
+				"The path is not absolute: %s", canonicalized);
+		return 1;
+	}
+
 	return replace_string(&cfg.fuse_home, canonicalized);
+}
+
+void
+set_use_term_multiplexer(int use_term_multiplexer)
+{
+	cfg.use_term_multiplexer = use_term_multiplexer;
+	set_using_term_multiplexer(use_term_multiplexer);
 }
 
 void
@@ -771,6 +855,53 @@ free_history_items(const history_t history[], size_t len)
 	{
 		free(history[i].dir);
 		free(history[i].file);
+	}
+}
+
+void
+save_command_history(const char command[])
+{
+	if(is_history_command(command))
+	{
+		update_last_cmdline_command(command);
+		save_into_history(command, &cfg.cmd_hist, cfg.history_len);
+	}
+}
+
+void
+save_search_history(const char pattern[])
+{
+	save_into_history(pattern, &cfg.search_hist, cfg.history_len);
+}
+
+void
+save_prompt_history(const char input[])
+{
+	save_into_history(input, &cfg.prompt_hist, cfg.history_len);
+}
+
+void
+save_filter_history(const char input[])
+{
+	save_into_history(input, &cfg.filter_hist, cfg.history_len);
+}
+
+/* Adaptor for the hist_add() function, which handles signed history length. */
+static void
+save_into_history(const char item[], hist_t *hist, int len)
+{
+	if(len >= 0)
+	{
+		hist_add(hist, item, len);
+	}
+}
+
+void
+cfg_set_shell(const char shell[])
+{
+	if(replace_string(&cfg.shell, shell) == 0)
+	{
+		stats_update_shell_type(cfg.shell);
 	}
 }
 

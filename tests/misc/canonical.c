@@ -1,24 +1,13 @@
 #include "seatest.h"
 
-#include "../../src/filelist.h"
+#include "../../src/utils/fs_limits.h"
+#include "../../src/utils/path.h"
 
 #ifndef _WIN32
 #define ABS_PREFIX
 #else
 #define ABS_PREFIX "c:"
 #endif
-
-static void
-treat_many_dots_right(void)
-{
-	char buf[PATH_MAX];
-
-	canonicalize_path("...", buf, sizeof(buf));
-	assert_string_equal(".../", buf);
-
-	canonicalize_path(ABS_PREFIX "/a/.../.", buf, sizeof(buf));
-	assert_string_equal(ABS_PREFIX "/a/.../", buf);
-}
 
 static void
 root_updir(void)
@@ -116,12 +105,67 @@ allow_unc(void)
 }
 #endif
 
+static void
+treat_many_dots_right(void)
+{
+	char buf[PATH_MAX];
+
+	canonicalize_path("...", buf, sizeof(buf));
+#ifndef _WIN32
+	assert_string_equal(".../", buf);
+#else
+	assert_string_equal("./", buf);
+#endif
+
+	canonicalize_path(".../", buf, sizeof(buf));
+#ifndef _WIN32
+	assert_string_equal(".../", buf);
+#else
+	assert_string_equal("./", buf);
+#endif
+
+	canonicalize_path("...abc", buf, sizeof(buf));
+	assert_string_equal("...abc/", buf);
+
+	canonicalize_path(".abc", buf, sizeof(buf));
+	assert_string_equal(".abc/", buf);
+
+	canonicalize_path("abc...", buf, sizeof(buf));
+	assert_string_equal("abc.../", buf);
+
+	canonicalize_path("abc.", buf, sizeof(buf));
+	assert_string_equal("abc./", buf);
+
+	canonicalize_path(ABS_PREFIX "/a/.../.", buf, sizeof(buf));
+#ifndef _WIN32
+	assert_string_equal(ABS_PREFIX "/a/.../", buf);
+#else
+	assert_string_equal(ABS_PREFIX "/a/", buf);
+#endif
+
+	canonicalize_path(ABS_PREFIX "/windows/.../", buf, sizeof(buf));
+#ifndef _WIN32
+	assert_string_equal(ABS_PREFIX "/windows/.../", buf);
+#else
+	assert_string_equal(ABS_PREFIX "/windows/", buf);
+#endif
+
+	canonicalize_path(ABS_PREFIX "/windows/...abc", buf, sizeof(buf));
+	assert_string_equal(ABS_PREFIX "/windows/...abc/", buf);
+
+	canonicalize_path(ABS_PREFIX "/windows/..................", buf, sizeof(buf));
+#ifndef _WIN32
+	assert_string_equal(ABS_PREFIX "/windows/................../", buf);
+#else
+	assert_string_equal(ABS_PREFIX "/windows/", buf);
+#endif
+}
+
 void
 canonical(void)
 {
 	test_fixture_start();
 
-	run_test(treat_many_dots_right);
 	run_test(root_updir);
 	run_test(not_root_updir);
 	run_test(remove_dots);
@@ -130,6 +174,7 @@ canonical(void)
 #ifdef _WIN32
 	run_test(allow_unc);
 #endif
+	run_test(treat_many_dots_right);
 
 	test_fixture_end();
 }

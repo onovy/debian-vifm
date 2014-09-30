@@ -1,5 +1,5 @@
-dirs := commands column_view completion env filetype keys misc options parsing
-dirs += undo variables viewcolumns_parser
+dirs := colmgr commands column_view completion env escape filetype filter keys
+dirs += misc options parsing undo variables viewcolumns_parser
 # generate names for build sub-targets (one for each directory)
 dirs_b := $(addsuffix _b, $(dirs))
 # generate names for clean sub-targets (one for each directory)
@@ -62,6 +62,7 @@ bin:
 
 clean: $(dirs_c)
 	-$(RM) -r bin/
+	-$(RM) seatest/*.o seatest/*.d
 
 $(dirs_c):
 	$(MAKE) --directory=$(subst _c,,$@) --makefile=../Makefile.inc clean

@@ -17,9 +17,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "sort_dialog.h"
+
 #include <curses.h>
 
-#include <assert.h>
+#include <assert.h> /* assert() */
 #include <ctype.h>
 #include <string.h>
 
@@ -36,8 +38,6 @@
 #include "../cmdline.h"
 #include "../modes.h"
 
-#include "sort_dialog.h"
-
 static int *mode;
 static FileView *view;
 static int top, bottom, curr, col;
@@ -48,7 +48,7 @@ static const char * caps[] = { "a-z", "z-a" };
 #ifndef _WIN32
 #define CORRECTION 0
 #else
-#define CORRECTION -5
+#define CORRECTION -6
 #endif
 
 static int indexes[] = {
@@ -56,19 +56,23 @@ static int indexes[] = {
 	0,               /* SORT_BY_EXTENSION */
 	1,               /* SORT_BY_NAME */
 #ifndef _WIN32
-	3,               /* SORT_BY_GROUP_ID */
-	4,               /* SORT_BY_GROUP_NAME */
-	5,               /* SORT_BY_MODE */
-	6,               /* SORT_BY_OWNER_ID */
-	7,               /* SORT_BY_OWNER_NAME */
+	4,               /* SORT_BY_GROUP_ID */
+	5,               /* SORT_BY_GROUP_NAME */
+	6,               /* SORT_BY_MODE */
+	8,               /* SORT_BY_OWNER_ID */
+	9,               /* SORT_BY_OWNER_NAME */
 #endif
-	8 + CORRECTION,  /* SORT_BY_SIZE */
-	9 + CORRECTION,  /* SORT_BY_TIME_ACCESSED */
-	10 + CORRECTION, /* SORT_BY_TIME_CHANGED */
-	11 + CORRECTION, /* SORT_BY_TIME_MODIFIED */
+	10 + CORRECTION, /* SORT_BY_SIZE */
+	11 + CORRECTION, /* SORT_BY_TIME_ACCESSED */
+	12 + CORRECTION, /* SORT_BY_TIME_CHANGED */
+	13 + CORRECTION, /* SORT_BY_TIME_MODIFIED */
 	2,               /* SORT_BY_INAME */
+#ifndef _WIN32
+	7,               /* SORT_BY_PERMISSIONS */
+#endif
+	3,               /* SORT_BY_TYPE */
 };
-ARRAY_GUARD(indexes, NUM_SORT_OPTIONS + 1);
+ARRAY_GUARD(indexes, 1 + SORT_OPTION_COUNT);
 
 static void leave_sort_mode(void);
 static void cmd_ctrl_c(key_info_t key_info, keys_info_t *keys_info);
@@ -137,8 +141,8 @@ enter_sort_mode(FileView *active_view)
 	curs_set(FALSE);
 	update_all_windows();
 
-	top = 3;
-	bottom = top + NUM_SORT_OPTIONS - 1;
+	top = 4;
+	bottom = top + SORT_OPTION_COUNT - 1;
 	curr = top + indexes[abs(view->sort[0])];
 	col = 6;
 
@@ -150,22 +154,24 @@ redraw_sort_dialog(void)
 {
 	int x, y, cy;
 
-	wresize(sort_win, NUM_SORT_OPTIONS + 5, SORT_WIN_WIDTH);
+	wresize(sort_win, SORT_OPTION_COUNT + 6, SORT_WIN_WIDTH);
 
 	werase(sort_win);
 	box(sort_win, ACS_VLINE, ACS_HLINE);
 
 	getmaxyx(sort_win, y, x);
 	mvwaddstr(sort_win, 0, (x - 6)/2, " Sort ");
-	mvwaddstr(sort_win, top - 1, 2, " Sort files by:");
+	mvwaddstr(sort_win, top - 2, 2, " Sort files by:");
 	cy = top;
 	mvwaddstr(sort_win, cy++, 4, " [   ] File Extenstion");
 	mvwaddstr(sort_win, cy++, 4, " [   ] Name");
 	mvwaddstr(sort_win, cy++, 4, " [   ] Name (ignore case)");
+	mvwaddstr(sort_win, cy++, 4, " [   ] Type");
 #ifndef _WIN32
 	mvwaddstr(sort_win, cy++, 4, " [   ] Group ID");
 	mvwaddstr(sort_win, cy++, 4, " [   ] Group Name");
 	mvwaddstr(sort_win, cy++, 4, " [   ] Mode");
+	mvwaddstr(sort_win, cy++, 4, " [   ] Permissions");
 	mvwaddstr(sort_win, cy++, 4, " [   ] Owner ID");
 	mvwaddstr(sort_win, cy++, 4, " [   ] Owner Name");
 #endif
@@ -177,6 +183,8 @@ redraw_sort_dialog(void)
 	mvwaddstr(sort_win, cy++, 4, " [   ] Time Created");
 #endif
 	mvwaddstr(sort_win, cy++, 4, " [   ] Time Modified");
+	assert(cy - top == SORT_OPTION_COUNT &&
+			"Sort dialog and sort options should not diverge");
 	mvwaddstr(sort_win, curr, 6, caps[descending]);
 
 	getmaxyx(stdscr, y, x);
@@ -189,8 +197,7 @@ leave_sort_mode(void)
 {
 	*mode = NORMAL_MODE;
 
-	clean_selected_files(view);
-	load_saving_pos(view, 1);
+	ui_view_reset_selection_and_reload(view);
 
 	update_all_windows();
 }

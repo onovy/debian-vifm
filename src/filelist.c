@@ -17,20 +17,17 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#if(defined(BSD) && (BSD>=199103))
-	#include <sys/types.h> /* required for regex.h on FreeBSD 4.2 */
-#endif
+#include "filelist.h"
 
 #ifdef _WIN32
+#include <fcntl.h>
+#include <lm.h>
+#include <ntdef.h>
 #include <windows.h>
 #include <winioctl.h>
-#include <lm.h>
-#include <fcntl.h>
 #endif
 
 #include <curses.h>
-
-#include <regex.h>
 
 #include <dirent.h> /* DIR */
 #include <sys/stat.h> /* stat */
@@ -42,12 +39,13 @@
 #endif
 
 #include <assert.h> /* assert() */
-#include <errno.h>
-#include <limits.h> /* PATH_MAX */
-#include <stddef.h> /* size_t */
+#include <errno.h> /* errno */
+#include <math.h> /* abs() */
+#include <stddef.h> /* NULL size_t */
 #include <stdint.h> /* uint64_t */
-#include <stdlib.h> /* calloc() malloc() */
-#include <string.h> /* strcat() strlen() */
+#include <stdio.h> /* snprintf() */
+#include <stdlib.h> /* calloc() free() malloc() */
+#include <string.h> /* memset() strcat() strcmp() strcpy() strlen() */
 #include <time.h>
 
 #include "cfg/config.h"
@@ -55,9 +53,11 @@
 #include "modes/file_info.h"
 #include "modes/modes.h"
 #include "utils/env.h"
+#include "utils/filter.h"
 #include "utils/fs.h"
 #include "utils/fs_limits.h"
 #include "utils/log.h"
+#include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/string_array.h"
@@ -68,7 +68,6 @@
 #include "background.h"
 #include "color_scheme.h"
 #include "column_view.h"
-#include "filelist.h"
 #include "fileops.h"
 #include "fileops.h"
 #include "filetype.h"
@@ -79,23 +78,36 @@
 #include "running.h"
 #include "sort.h"
 #include "status.h"
-#include "term_title.h"
 #include "types.h"
 #include "ui.h"
+
+#ifdef _WIN32
+#define CASE_SENSATIVE_FILTER 0
+#else
+#define CASE_SENSATIVE_FILTER 1
+#endif
+
+/* Mark for a cursor position of inactive pane. */
+#define INACTIVE_CURSOR_MARK "*"
 
 /* Packet set of parameters to pass as user data for processing columns. */
 typedef struct
 {
-	FileView *view;
-	size_t line;
-	int current;
-	size_t current_line;
-	size_t column_offset;
+	FileView *view;  /* View on which cell is being drawn. */
+	size_t line_pos; /* File position in the file list (the view). */
+	int is_current;  /* Whether this file is selected with the cursor. */
+
+	size_t current_line;  /* Line of the cell. */
+	size_t column_offset; /* Offset in characters of the column. */
 }
 column_data_t;
 
 static void column_line_print(const void *data, int column_id, const char *buf,
 		size_t offset);
+static int prepare_primary_col_color(FileView *view, int line_color,
+		int selected, int current);
+static int prepare_secondary_col_color(FileView *view, int selected,
+		int current);
 static void format_name(int id, const void *data, size_t buf_len, char *buf);
 static void format_size(int id, const void *data, size_t buf_len, char *buf);
 static void format_ext(int id, const void *data, size_t buf_len, char *buf);
@@ -105,27 +117,48 @@ static void format_mode(int id, const void *data, size_t buf_len, char *buf);
 static void format_owner(int id, const void *data, size_t buf_len, char *buf);
 #endif
 static void format_time(int id, const void *data, size_t buf_len, char *buf);
+#ifndef _WIN32
+static void format_perms(int id, const void *data, size_t buf_len, char buf[]);
+#endif
 static void init_view(FileView *view);
-static void prepare_view(FileView *view);
+static void reset_view(FileView *view);
+static void reset_filter(filter_t *filter);
 static void init_view_history(FileView *view);
 static int get_line_color(FileView* view, int pos);
 static char * get_viewer_command(const char *viewer);
 static void consider_scroll_bind(FileView *view);
 static void correct_list_pos_down(FileView *view, size_t pos_delta);
 static void correct_list_pos_up(FileView *view, size_t pos_delta);
+static void draw_cell(const FileView *view, const column_data_t *cdt,
+		size_t col_width);
 static int calculate_top_position(FileView *view, int top);
 static size_t calculate_print_width(const FileView *view, int i,
 		size_t max_width);
 static void calculate_table_conf(FileView *view, size_t *count, size_t *width);
+static void calculate_number_width(FileView *view);
+static int count_digits(int num);
 size_t calculate_columns_count(FileView *view);
 static size_t calculate_column_width(FileView *view);
 static size_t get_effective_scroll_offset(const FileView *view);
 static void save_selection(FileView *view);
-static int consider_scroll_offset(FileView *view);
 static void free_saved_selection(FileView *view);
+TSTATIC int file_is_visible(FileView *view, const char filename[], int is_dir);
 static size_t get_filetype_decoration_width(FileType type);
+static int populate_dir_list_internal(FileView *view, int reload);
+static int is_dir_big(const char path[]);
+static void sort_dir_list(int msg, FileView *view);
 static void rescue_from_empty_filelist(FileView * view);
 static void add_parent_dir(FileView *view);
+static void local_filter_finish(FileView *view);
+static void update_filtering_lists(FileView *view, int add, int clear);
+static int load_unfiltered_list(FileView *const view);
+static int get_unfiltered_pos(const FileView *const view, int pos);
+static void store_local_filter_position(FileView *const view, int pos);
+static int extract_previously_selected_pos(FileView *const view);
+static void clear_local_filter_hist_after(FileView *const view, int pos);
+static int find_nearest_neighour(const FileView *const view);
+static int add_dir_entry(dir_entry_t **list, size_t *list_size,
+		const dir_entry_t *entry);
 static int file_can_be_displayed(const char directory[], const char filename[]);
 static int parent_dir_is_visible(int in_root);
 
@@ -150,9 +183,15 @@ init_filelists(void)
 	columns_add_column_desc(SORT_BY_TIME_ACCESSED, format_time);
 	columns_add_column_desc(SORT_BY_TIME_CHANGED, format_time);
 	columns_add_column_desc(SORT_BY_TIME_MODIFIED, format_time);
+#ifndef _WIN32
+	columns_add_column_desc(SORT_BY_PERMISSIONS, format_perms);
+#endif
 
 	init_view(&rwin);
 	init_view(&lwin);
+
+	curr_view = &lwin;
+	other_view = &rwin;
 }
 
 /* Print callback for column_view unit. */
@@ -160,65 +199,119 @@ static void
 column_line_print(const void *data, int column_id, const char *buf,
 		size_t offset)
 {
-	int line_color;
-	col_attr_t col;
+	int line_attrs;
 	char print_buf[strlen(buf) + 1];
 	size_t width_left;
 	size_t trim_pos;
 
-	const column_data_t *cdt = data;
-	size_t i = cdt->line;
+	const column_data_t *const cdt = data;
+	const size_t i = cdt->line_pos;
 	FileView *view = cdt->view;
-	dir_entry_t *entry = &view->dir_entry[cdt->line];
-	wmove(view->win, cdt->current_line, 1 + cdt->column_offset + offset);
+	dir_entry_t *entry = &view->dir_entry[i];
 
-	col = view->cs.color[WIN_COLOR];
+	const size_t prefix_len = view->real_num_width + 1;
+	const size_t final_offset = prefix_len + cdt->column_offset + offset;
+
 	if(column_id == SORT_BY_NAME || column_id == SORT_BY_INAME)
 	{
-		line_color = get_line_color(view, i);
-		mix_colors(&col, &view->cs.color[line_color]);
-		if(entry->selected)
-			mix_colors(&col, &view->cs.color[SELECTED_COLOR]);
-		if(cdt->current)
-		{
-			mix_colors(&col, &view->cs.color[CURR_LINE_COLOR]);
-			line_color = CURRENT_COLOR;
-		}
-		else if(entry->selected)
-		{
-			line_color = SELECTED_COLOR;
-		}
-		init_pair(view->color_scheme + line_color, col.fg, col.bg);
+		line_attrs = prepare_primary_col_color(view, get_line_color(view, i),
+				entry->selected, cdt->is_current);
 	}
 	else
 	{
-		line_color = WIN_COLOR;
-
-		if(entry->selected)
-		{
-			mix_colors(&col, &view->cs.color[SELECTED_COLOR]);
-			line_color = SELECTED_COLOR;
-		}
-
-		if(cdt->current)
-		{
-			mix_colors(&col, &view->cs.color[CURR_LINE_COLOR]);
-			line_color = CURRENT_COLOR;
-		}
-		else
-		{
-			init_pair(view->color_scheme + line_color, col.fg, col.bg);
-		}
+		line_attrs = prepare_secondary_col_color(view, entry->selected,
+				cdt->is_current);
 	}
-	wattron(view->win, COLOR_PAIR(view->color_scheme + line_color) | col.attr);
+
+	if(offset == 0 && ui_view_displays_numbers(view))
+	{
+		char number[view->real_num_width + 1];
+		int mixed;
+		const char *format;
+		int line_number;
+		int is_current_line;
+
+		const int line_attrs = prepare_secondary_col_color(view, entry->selected,
+				cdt->is_current);
+
+		is_current_line = (i == view->list_pos);
+		mixed = is_current_line && view->num_type == NT_MIX;
+		format = mixed ? "%-*d" : "%*d";
+		line_number = ((view->num_type & NT_REL) && !mixed)
+		            ? abs(i - view->list_pos)
+		            : (i + 1);
+
+		snprintf(number, sizeof(number), format, view->real_num_width, line_number);
+
+		checked_wmove(view->win, cdt->current_line,
+				final_offset - 1 - view->real_num_width);
+		wprinta(view->win, number, line_attrs);
+	}
+
+	checked_wmove(view->win, cdt->current_line, final_offset);
 
 	strcpy(print_buf, buf);
 	width_left = view->window_width - (column_id != FILL_COLUMN_ID) - offset;
 	trim_pos = get_normal_utf8_string_widthn(buf, width_left);
 	print_buf[trim_pos] = '\0';
-	wprint(view->win, print_buf);
+	wprinta(view->win, print_buf, line_attrs);
+}
 
-	wattroff(view->win, COLOR_PAIR(view->color_scheme + line_color) | col.attr);
+/* Calculate color attributes for primary view column.  Returns attributes that
+ * can be used for drawing on a window. */
+static int
+prepare_primary_col_color(FileView *view, int line_color, int selected,
+		int current)
+{
+	col_attr_t col = view->cs.color[WIN_COLOR];
+
+	mix_colors(&col, &view->cs.color[line_color]);
+
+	if(selected)
+	{
+		mix_colors(&col, &view->cs.color[SELECTED_COLOR]);
+	}
+
+	if(current)
+	{
+		mix_colors(&col, &view->cs.color[CURR_LINE_COLOR]);
+		line_color = CURRENT_COLOR;
+	}
+	else if(selected)
+	{
+		line_color = SELECTED_COLOR;
+	}
+
+	init_pair(view->color_scheme + line_color, col.fg, col.bg);
+
+	return COLOR_PAIR(view->color_scheme + line_color) | col.attr;
+}
+
+/* Calculate color attributes for secondary view column.  Returns attributes
+ * that can be used for drawing on a window. */
+static int
+prepare_secondary_col_color(FileView *view, int selected, int current)
+{
+	col_attr_t col = view->cs.color[WIN_COLOR];
+	int line_color = WIN_COLOR;
+
+	if(selected)
+	{
+		mix_colors(&col, &view->cs.color[SELECTED_COLOR]);
+		line_color = SELECTED_COLOR;
+	}
+
+	if(current)
+	{
+		mix_colors(&col, &view->cs.color[CURR_LINE_COLOR]);
+		line_color = CURRENT_COLOR;
+	}
+	else
+	{
+		init_pair(view->color_scheme + line_color, col.fg, col.bg);
+	}
+
+	return COLOR_PAIR(view->color_scheme + line_color) | col.attr;
 }
 
 /* File name format callback for column_view unit. */
@@ -226,30 +319,7 @@ static void
 format_name(int id, const void *data, size_t buf_len, char *buf)
 {
 	const column_data_t *cdt = data;
-	FileView *view = cdt->view;
-	dir_entry_t *entry = &view->dir_entry[cdt->line];
-	const char prefix[2] = { cfg.decorations[entry->type][DECORATION_PREFIX] };
-	const char suffix[2] = { cfg.decorations[entry->type][DECORATION_SUFFIX] };
-	size_t name_len = 1;
-
-	/* FIXME: remove this hack for directories. */
-	if(entry->type == DIRECTORY)
-	{
-		name_len = strlen(entry->name);
-		if(name_len > 0)
-		{
-			entry->name[name_len - 1] = '\0';
-		}
-	}
-	snprintf(buf, buf_len + 1, "%s%s%s", prefix, entry->name, suffix);
-	/* FIXME: remove this hack for directories. */
-	if(entry->type == DIRECTORY)
-	{
-		if(name_len > 0)
-		{
-			entry->name[name_len - 1] = '/';
-		}
-	}
+	format_entry_name(cdt->view, cdt->line_pos, buf_len + 1, buf);
 }
 
 /* File size format callback for column_view unit. */
@@ -258,7 +328,7 @@ format_size(int id, const void *data, size_t buf_len, char *buf)
 {
 	char str[24] = "";
 	const column_data_t *cdt = data;
-	uint64_t size = get_file_size_by_entry(cdt->view, cdt->line);
+	uint64_t size = get_file_size_by_entry(cdt->view, cdt->line_pos);
 	friendly_size_notation(size, sizeof(str), str);
 	snprintf(buf, buf_len + 1, " %s", str);
 }
@@ -268,7 +338,7 @@ static void
 format_ext(int id, const void *data, size_t buf_len, char *buf)
 {
 	const column_data_t *cdt = data;
-	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line];
+	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line_pos];
 	const char *dot = strrchr(entry->name,  '.');
 	snprintf(buf, buf_len + 1, "%s", (dot == NULL) ? "" : (dot + 1));
 	chosp(buf);
@@ -281,7 +351,7 @@ static void
 format_group(int id, const void *data, size_t buf_len, char *buf)
 {
 	const column_data_t *cdt = data;
-	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line];
+	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line_pos];
 	if(id == SORT_BY_GROUP_NAME)
 	{
 		struct group *grp_buf;
@@ -300,7 +370,7 @@ static void
 format_owner(int id, const void *data, size_t buf_len, char *buf)
 {
 	const column_data_t *cdt = data;
-	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line];
+	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line_pos];
 	if(id == SORT_BY_OWNER_NAME)
 	{
 		struct passwd *pwd_buf;
@@ -319,7 +389,7 @@ static void
 format_mode(int id, const void *data, size_t buf_len, char *buf)
 {
 	const column_data_t *cdt = data;
-	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line];
+	dir_entry_t *entry = &cdt->view->dir_entry[cdt->line_pos];
 	snprintf(buf, buf_len, " %s", get_mode_str(entry->mode));
 }
 
@@ -332,7 +402,8 @@ format_time(int id, const void *data, size_t buf_len, char *buf)
 	struct tm *tm_ptr;
 	const column_data_t *cdt = data;
 	FileView *view = cdt->view;
-	dir_entry_t *entry = &view->dir_entry[cdt->line];
+	dir_entry_t *entry = &view->dir_entry[cdt->line_pos];
+
 	switch(id)
 	{
 		case SORT_BY_TIME_MODIFIED:
@@ -347,10 +418,31 @@ format_time(int id, const void *data, size_t buf_len, char *buf)
 
 		default:
 			assert(0 && "Unknown sort by time type");
+			tm_ptr = NULL;
 			break;
 	}
-	strftime(buf, buf_len + 1, cfg.time_format, tm_ptr);
+
+	if(tm_ptr != NULL)
+	{
+		strftime(buf, buf_len + 1, cfg.time_format, tm_ptr);
+	}
+	else
+	{
+		buf[0] = '\0';
+	}
 }
+
+#ifndef _WIN32
+/* File permissions mask format callback for column_view unit. */
+static void
+format_perms(int id, const void *data, size_t buf_len, char buf[])
+{
+	const column_data_t *cdt = data;
+	FileView *view = cdt->view;
+	dir_entry_t *entry = &view->dir_entry[cdt->line_pos];
+	get_perm_string(buf, buf_len, entry->mode);
+}
+#endif
 
 /* Loads initial display values into view structure. */
 static void
@@ -370,42 +462,63 @@ init_view(FileView *view)
 	view->columns = columns_create();
 	view->view_columns = strdup("");
 
-	prepare_view(view);
+	reset_view(view);
 
 	init_view_history(view);
 	reset_view_sort(view);
 }
 
 void
-prepare_views(void)
+reset_views(void)
 {
-	prepare_view(&lwin);
-	prepare_view(&rwin);
+	reset_view(&lwin);
+	reset_view(&rwin);
 }
 
 /* Loads some of view parameters that should be restored on configuration
  * reloading (e.g. on :restart command). */
 static void
-prepare_view(FileView *view)
+reset_view(FileView *view)
 {
-	int i;
-
 	strncpy(view->regexp, "", sizeof(view->regexp));
-	(void)replace_string(&view->prev_filter, "");
-	set_filename_filter(view, "");
-	view->invert = 1;
+	view->invert = cfg.filter_inverted_by_default ? 1 : 0;
 	view->prev_invert = view->invert;
 	view->ls_view = 0;
 	view->max_filename_len = 0;
 	view->column_count = 1;
 
-#ifndef _WIN32
-	view->sort[0] = SORT_BY_NAME;
-#else
-	view->sort[0] = SORT_BY_INAME;
-#endif
-	for(i = 1; i < NUM_SORT_OPTIONS; i++)
-		view->sort[i] = NUM_SORT_OPTIONS + 1;
+	view->num_type = NT_NONE;
+	view->num_width = 4;
+	view->real_num_width = 0;
+
+	(void)replace_string(&view->prev_manual_filter, "");
+	reset_filter(&view->manual_filter);
+	(void)replace_string(&view->prev_auto_filter, "");
+	reset_filter(&view->auto_filter);
+
+	(void)replace_string(&view->local_filter.prev, "");
+	reset_filter(&view->local_filter.filter);
+	view->local_filter.in_progress = 0;
+	view->local_filter.saved = NULL;
+	view->local_filter.poshist = NULL;
+	view->local_filter.poshist_len = 0U;
+
+	memset(&view->sort[0], NO_SORT_OPTION, sizeof(view->sort));
+	ui_view_sort_list_ensure_well_formed(view->sort);
+}
+
+/* Resets filter to empty state (either initializes or clears it). */
+static void
+reset_filter(filter_t *filter)
+{
+	if(filter->raw == NULL)
+	{
+		filter_init(filter, CASE_SENSATIVE_FILTER);
+	}
+	else
+	{
+		filter_clear(filter);
+	}
 }
 
 /* Allocates memory for view history smartly (handles huge values). */
@@ -459,17 +572,12 @@ get_line_color(FileView* view, int pos)
 			else
 			{
 				char full[PATH_MAX];
-				char linkto[PATH_MAX];
 				snprintf(full, sizeof(full), "%s/%s", view->curr_dir,
 						view->dir_entry[pos].name);
-				if(get_link_target(full, linkto, sizeof(linkto)) != 0)
+				if(get_link_target_abs(full, view->curr_dir, full, sizeof(full)) != 0)
+				{
 					return BROKEN_LINK_COLOR;
-
-				if(is_path_absolute(linkto))
-					strcpy(full, linkto);
-				else
-					snprintf(full, sizeof(full), "%s/%s", view->curr_dir, linkto);
-
+				}
 				return path_exists(full) ? LINK_COLOR : BROKEN_LINK_COLOR;
 			}
 #ifndef _WIN32
@@ -590,15 +698,13 @@ get_viewer_command(const char *viewer)
 	char *result;
 	if(strchr(viewer, '%') == NULL)
 	{
-		char *escaped = escape_filename(
-				curr_view->dir_entry[curr_view->list_pos].name, 0);
-		char *t = malloc(strlen(viewer) + 1 + strlen(escaped) + 1);
-		sprintf(t, "%s %s", viewer, escaped);
-		result = t;
+		char *const escaped = escape_filename(get_current_file_name(curr_view), 0);
+		result = format_str("%s %s", viewer, escaped);
+		free(escaped);
 	}
 	else
 	{
-		result = expand_macros(curr_view, viewer, NULL, NULL);
+		result = expand_macros(viewer, NULL, NULL, 1);
 	}
 	return result;
 }
@@ -659,7 +765,7 @@ get_all_selected_files(FileView *view)
 	{
 		if(!view->dir_entry[x].selected)
 			continue;
-		if(stroscmp(view->dir_entry[x].name, "../") == 0)
+		if(is_parent_dir(view->dir_entry[x].name))
 		{
 			view->dir_entry[x].selected = 0;
 			continue;
@@ -697,7 +803,7 @@ get_selected_files(FileView *view, int count, const int *indexes)
 	y = 0;
 	for(x = 0; x < count; x++)
 	{
-		if(stroscmp(view->dir_entry[indexes[x]].name, "../") == 0)
+		if(is_parent_dir(view->dir_entry[indexes[x]].name))
 			continue;
 
 		view->selected_filelist[y] = strdup(view->dir_entry[indexes[x]].name);
@@ -722,99 +828,17 @@ count_selected(FileView *view)
 }
 
 int
-find_file_pos_in_list(FileView *view, const char *file)
+find_file_pos_in_list(const FileView *const view, const char file[])
 {
-	int x;
-	for(x = 0; x < view->list_rows; x++)
+	int i;
+	for(i = 0; i < view->list_rows; i++)
 	{
-		if(stroscmp(view->dir_entry[x].name, file) == 0)
-			return x;
+		if(stroscmp(view->dir_entry[i].name, file) == 0)
+		{
+			return i;
+		}
 	}
 	return -1;
-}
-
-void
-update_view_title(FileView *view)
-{
-	char *buf;
-	size_t len;
-	int gen_view = get_mode() == VIEW_MODE && !curr_view->explore_mode;
-	FileView *selected = gen_view ? other_view : curr_view;
-
-	if(gen_view && view == other_view)
-		return;
-
-	if(curr_stats.load_stage < 2)
-		return;
-
-	if(view == selected)
-	{
-		col_attr_t col;
-
-		col = cfg.cs.color[TOP_LINE_COLOR];
-		mix_colors(&col, &cfg.cs.color[TOP_LINE_SEL_COLOR]);
-		init_pair(DCOLOR_BASE + TOP_LINE_SEL_COLOR, col.fg, col.bg);
-
-		wbkgdset(view->title, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_SEL_COLOR) |
-				(col.attr & A_REVERSE));
-		wattrset(view->title, col.attr & ~A_REVERSE);
-	}
-	else
-	{
-		wbkgdset(view->title, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-				(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
-		wattrset(view->title, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-		wbkgdset(top_line, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-				(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
-		wattrset(top_line, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-		werase(top_line);
-	}
-	werase(view->title);
-
-	if(curr_stats.load_stage < 2)
-		return;
-
-	buf = replace_home_part(view->curr_dir);
-	if(view == selected)
-	{
-		set_term_title(replace_home_part(view->curr_dir));
-	}
-
-	if(view->explore_mode)
-	{
-		if(!is_root_dir(buf))
-			strcat(buf, "/");
-		strcat(buf, get_current_file_name(view));
-	}
-
-	len = get_utf8_string_length(buf);
-	if(len > view->window_width + 1 && view == selected)
-	{ /* Truncate long directory names */
-		const char *ptr;
-
-		ptr = buf;
-		while(len > view->window_width - 2)
-		{
-			len--;
-			ptr += get_char_width(ptr);
-		}
-
-		wprintw(view->title, "...");
-		wprint(view->title, ptr);
-	}
-	else if(len > view->window_width + 1 && view != selected)
-	{
-		size_t len = get_normal_utf8_string_widthn(buf, view->window_width - 3 + 1);
-		buf[len] = '\0';
-		wprint(view->title, buf);
-		wprintw(view->title, "...");
-	}
-	else
-	{
-		wprint(view->title, buf);
-	}
-
-	wnoutrefresh(view->title);
 }
 
 void
@@ -842,26 +866,38 @@ reset_view_sort(FileView *view)
 }
 
 void
+invert_sorting_order(FileView *view)
+{
+	view->sort[0] = -view->sort[0];
+}
+
+void
 draw_dir_list(FileView *view)
 {
 	int attr;
 	int x;
-	int y;
+	int cell;
 	size_t col_width;
 	size_t col_count;
 	int top = view->top_line;
 
 	if(curr_stats.load_stage < 2)
+	{
 		return;
+	}
 
 	calculate_table_conf(view, &col_count, &col_width);
 
 	if(top + view->window_rows > view->list_rows)
+	{
 		top = view->list_rows - view->window_rows;
+	}
 	if(top < 0)
+	{
 		top = 0;
+	}
 
-	update_view_title(view);
+	ui_view_title_update(view);
 
 	/* This is needed for reloading a list that has had files deleted */
 	while((view->list_rows - view->list_pos) <= 0)
@@ -881,29 +917,40 @@ draw_dir_list(FileView *view)
 	wbkgdset(view->win, COLOR_PAIR(WIN_COLOR + view->color_scheme) | attr);
 	werase(view->win);
 
-	y = 0;
+	cell = 0;
 	for(x = top; x < view->list_rows; x++)
 	{
-		wmove(view->win, y, 1);
-		wclrtoeol(view->win);
-		column_data_t cdt = {view, x, 0, y/col_count, (y%col_count)*col_width};
-		columns_format_line(view->columns, &cdt, col_width);
-		y++;
-		if(y >= view->window_cells)
+		const column_data_t cdt =
+		{
+			.view = view,
+			.line_pos = x,
+			.is_current = 0,
+			.current_line = cell/col_count,
+			.column_offset = (cell%col_count)*col_width,
+		};
+
+		draw_cell(view, &cdt, col_width);
+
+		if(++cell >= view->window_cells)
+		{
 			break;
+		}
 	}
+
+	view->top_line = top;
+	view->curr_line = view->list_pos - view->top_line;
 
 	if(view != curr_view)
 	{
 		put_inactive_mark(view);
 	}
 
-	view->top_line = top;
-
 	if(view == curr_view)
 	{
 		consider_scroll_bind(view);
 	}
+
+	ui_view_win_changed(view);
 }
 
 /* Corrects top of the other view to synchronize it with the current view if
@@ -1017,7 +1064,7 @@ get_corrected_list_pos_up(const FileView *view, size_t pos_delta)
 {
 	int scroll_offset = get_effective_scroll_offset(view);
 	int last = get_last_visible_file(view);
-	if(view->list_pos >= last - scroll_offset - (MAX(pos_delta, 1) - 1))
+	if(view->list_pos >= last - scroll_offset - (MAX((int)pos_delta, 1) - 1))
 	{
 		size_t column_correction = (view->column_count - 1) -
 				view->list_pos%view->column_count;
@@ -1040,7 +1087,6 @@ erase_current_line_bar(FileView *view)
 	int old_pos = view->top_line + old_cursor;
 	size_t col_width;
 	size_t col_count;
-	size_t print_width;
 	column_data_t cdt = {view, old_pos, 0};
 
 	if(old_cursor < 0)
@@ -1056,19 +1102,28 @@ erase_current_line_bar(FileView *view)
 	}
 
 	calculate_table_conf(view, &col_count, &col_width);
-	print_width = calculate_print_width(view, old_pos, col_width);
 
 	cdt.current_line = old_cursor/col_count;
 	cdt.column_offset = (old_cursor%col_count)*col_width;
 
-	column_line_print(&cdt, FILL_COLUMN_ID, " ", -1);
-	columns_format_line(view->columns, &cdt, col_width);
-	column_line_print(&cdt, FILL_COLUMN_ID, " ", print_width);
+	draw_cell(view, &cdt, col_width);
 
 	if(view == other_view)
 	{
 		put_inactive_mark(view);
 	}
+}
+
+/* Draws a full cell of the file list. */
+static void
+draw_cell(const FileView *view, const column_data_t *cdt, size_t col_width)
+{
+	const size_t print_width = calculate_print_width(view, cdt->line_pos,
+			col_width);
+
+	column_line_print(cdt, FILL_COLUMN_ID, " ", -1);
+	columns_format_line(view->columns, cdt, col_width);
+	column_line_print(cdt, FILL_COLUMN_ID, " ", print_width);
 }
 
 int
@@ -1102,17 +1157,20 @@ move_curr_line(FileView *view)
 	else if(pos > last)
 	{
 		scroll_down(view, pos - last);
-		redraw = 1;
+		redraw++;
 	}
 	else if(pos < view->top_line)
 	{
 		scroll_up(view, view->top_line - pos);
-		redraw = 1;
+		redraw++;
 	}
 
-	redraw = consider_scroll_offset(view) ? 1 : redraw;
+	if(consider_scroll_offset(view))
+	{
+		redraw++;
+	}
 
-	return redraw;
+	return redraw != 0 || (view->num_type & NT_REL);
 }
 
 /* Calculates top position basing on window and list size and trying to show as
@@ -1175,7 +1233,7 @@ move_to_list_pos(FileView *view, int pos)
 	calculate_table_conf(view, &col_count, &col_width);
 	print_width = calculate_print_width(view, view->list_pos, col_width);
 
-	cdt.line = pos;
+	cdt.line_pos = pos;
 	cdt.current_line = view->curr_line/col_count;
 	cdt.column_offset = (view->curr_line%col_count)*col_width;
 
@@ -1217,18 +1275,29 @@ put_inactive_mark(FileView *view)
 {
 	size_t col_width;
 	size_t col_count;
+	int is_selected;
+	int line_attrs;
+	int line, column;
 
 	calculate_table_conf(view, &col_count, &col_width);
 
-	mvwaddstr(view->win, view->curr_line/col_count,
-			(view->curr_line%col_count)*col_width, "*");
+	is_selected = view->dir_entry[view->list_pos].selected;
+	line_attrs = prepare_secondary_col_color(view, is_selected, 0);
+
+	line = view->curr_line/col_count;
+	column = view->real_num_width + (view->curr_line%col_count)*col_width;
+	checked_wmove(view->win, line, column);
+
+	wprinta(view->win, INACTIVE_CURSOR_MARK, line_attrs);
 }
 
 /* Calculates number of columns and maximum width of column in a view. */
 static void
 calculate_table_conf(FileView *view, size_t *count, size_t *width)
 {
-	*width = view->window_width - 1;
+	calculate_number_width(view);
+
+	*width = MAX(0, (int)view->window_width - 1 - view->real_num_width);
 	*count = 1;
 
 	if(view->ls_view)
@@ -1238,6 +1307,39 @@ calculate_table_conf(FileView *view, size_t *count, size_t *width)
 	}
 	view->column_count = *count;
 	view->window_cells = *count*(view->window_rows + 1);
+}
+
+/* Calculates real number of characters that should be allocated in view for
+ * numbers column. */
+static void
+calculate_number_width(FileView *view)
+{
+	if(ui_view_displays_numbers(view))
+	{
+		const int digit_count = count_digits(view->list_rows);
+		const int min = view->num_width;
+		const int max = view->window_width - 1;
+		view->real_num_width = MIN(MAX(1 + digit_count, min), max);
+	}
+	else
+	{
+		view->real_num_width = 0;
+	}
+}
+
+/* Counts number of digits in a number assuming that zero takes on digit.
+ * Returns the count. */
+static int
+count_digits(int num)
+{
+	int count = 0;
+	do
+	{
+		count++;
+		num /= 10;
+	}
+	while(num != 0);
+	return count;
 }
 
 size_t
@@ -1308,7 +1410,7 @@ save_view_history(FileView *view, const char *path, const char *file, int pos)
 	if(view->history_num > 0 &&
 			stroscmp(view->history[view->history_pos].dir, path) == 0)
 	{
-		if(curr_stats.load_stage < 2)
+		if(curr_stats.load_stage < 2 || file[0] == '\0')
 			return;
 		x = view->history_pos;
 		(void)replace_string(&view->history[x].file, file);
@@ -1394,8 +1496,8 @@ check_view_dir_history(FileView *view)
 				strchr(view->last_dir + strlen(view->curr_dir) + 1, '/') == NULL)
 		{
 			char buf[NAME_MAX];
-			strcpy(buf, view->last_dir + strlen(view->curr_dir));
-			strcat(buf, "/");
+			snprintf(buf, sizeof(buf), "%s/",
+					view->last_dir + strlen(view->curr_dir));
 
 			pos = find_file_pos_in_list(view, buf);
 			rel_pos = -1;
@@ -1434,9 +1536,7 @@ check_view_dir_history(FileView *view)
 	(void)consider_scroll_offset(view);
 }
 
-/* Updates current and top line of a view according to scrolloff option value.
- * Returns non-zero if redraw is needed. */
-static int
+int
 consider_scroll_offset(FileView *view)
 {
 	int need_redraw = 0;
@@ -1653,8 +1753,25 @@ erase_selection(FileView *view)
 }
 
 void
-leave_invalid_dir(FileView *view, char *path)
+invert_selection(FileView *view)
 {
+	int i;
+	for(i = 0; i < view->list_rows; i++)
+	{
+		dir_entry_t *const e = &view->dir_entry[i];
+		if(!is_parent_dir(e->name))
+		{
+			e->selected = !e->selected;
+		}
+	}
+	view->selected_files = view->list_rows - view->selected_files;
+}
+
+void
+leave_invalid_dir(FileView *view)
+{
+	char *const path = view->curr_dir;
+
 	if(try_updir_from_fuse_mount(path, view))
 	{
 		return;
@@ -1816,6 +1933,16 @@ handle_mount_points(const char *path)
 }
 #endif
 
+void
+navigate_to(FileView *view, const char path[])
+{
+	if(change_directory(view, path) >= 0)
+	{
+		load_dir_list(view, 0);
+		move_to_list_pos(view, view->list_pos);
+	}
+}
+
 /*
  * The directory can either be relative to the current
  * directory - ../
@@ -1834,6 +1961,7 @@ change_directory(FileView *view, const char *directory)
 {
 	char newdir[PATH_MAX];
 	char dir_dup[PATH_MAX];
+	int location_changed;
 
 	if(is_dir_list_loaded(view))
 	{
@@ -1869,15 +1997,22 @@ change_directory(FileView *view, const char *directory)
 	if(!is_valid_dir(dir_dup))
 	{
 		show_error_msgf("Directory Access Error", "Cannot open %s", dir_dup);
-		leave_invalid_dir(view, dir_dup);
+		copy_str(view->curr_dir, sizeof(view->curr_dir), dir_dup);
+		leave_invalid_dir(view);
+		copy_str(dir_dup, sizeof(dir_dup), view->curr_dir);
 	}
 
-	snprintf(view->last_dir, sizeof(view->last_dir), "%s", view->curr_dir);
+	location_changed = stroscmp(dir_dup, view->curr_dir) != 0;
+
+	if(location_changed)
+	{
+		copy_str(view->last_dir, sizeof(view->last_dir), view->curr_dir);
+	}
 
 	/* Check if we're exiting from a FUSE mounted top level directory and the
 	 * other pane isn't in it or any of it subdirectories.
 	 * If so, unmount & let FUSE serialize */
-	if(!stroscmp(directory, "../") && in_mounted_dir(view->curr_dir))
+	if(is_parent_dir(directory) && in_mounted_dir(view->curr_dir))
 	{
 		FileView *other = (view == curr_view) ? other_view : curr_view;
 		if(!path_starts_with(other->curr_dir, view->curr_dir))
@@ -1930,14 +2065,14 @@ change_directory(FileView *view, const char *directory)
 		LOG_SERROR_MSG(errno, "Can't access(, R_OK) \"%s\"", dir_dup);
 		log_cwd();
 
-		if(stroscmp(view->curr_dir, dir_dup) != 0)
+		if(location_changed)
 		{
 			show_error_msgf("Directory Access Error",
 					"You do not have read access on %s", dir_dup);
 		}
 	}
 
-	if(my_chdir(dir_dup) == -1 && !is_unc_root(dir_dup))
+	if(vifm_chdir(dir_dup) != 0 && !is_unc_root(dir_dup))
 	{
 		LOG_SERROR_MSG(errno, "Can't chdir() \"%s\"", dir_dup);
 		log_cwd();
@@ -1949,8 +2084,9 @@ change_directory(FileView *view, const char *directory)
 	if(!is_root_dir(dir_dup))
 		chosp(dir_dup);
 
-	if(stroscmp(dir_dup, view->curr_dir) != 0)
+	if(location_changed)
 	{
+		filter_clear(&view->local_filter.filter);
 		free_saved_selection(view);
 	}
 	else
@@ -1962,7 +2098,7 @@ change_directory(FileView *view, const char *directory)
 	/* Need to use setenv instead of getcwd for a symlink directory */
 	env_set("PWD", dir_dup);
 
-	snprintf(view->curr_dir, sizeof(view->curr_dir), "%s", dir_dup);
+	copy_str(view->curr_dir, sizeof(view->curr_dir), dir_dup);
 
 	if(is_dir_list_loaded(view))
 	{
@@ -2007,19 +2143,6 @@ reset_selected_files(FileView *view, int need_free)
 		free_selected_file_array(view);
 		view->selected_files = x;
 	}
-}
-
-TSTATIC int
-regexp_filter_match(FileView *view, const char filename[])
-{
-	if(!view->filter_is_valid)
-		return view->invert;
-
-	if(regexec(&view->filter_regex, filename, 0, NULL, 0) == 0)
-	{
-		return !view->invert;
-	}
-	return view->invert;
 }
 
 #ifdef _WIN32
@@ -2164,7 +2287,7 @@ fill_dir_list(FileView *view)
 			}
 			with_parent_dir = 1;
 		}
-		else if(regexp_filter_match(view, d->d_name) == 0)
+		else if(!file_is_visible(view, d->d_name, d->d_type == DT_DIR))
 		{
 			view->filtered++;
 			view->list_rows--;
@@ -2211,12 +2334,7 @@ fill_dir_list(FileView *view)
 					dir_entry->name);
 			log_cwd();
 
-			dir_entry->type = type_from_dir_entry(d);
-			if(dir_entry->type == DIRECTORY)
-			{
-				strcat(dir_entry->name, "/");
-				name_len++;
-			}
+			dir_entry->type = UNKNOWN;
 			dir_entry->size = 0;
 			dir_entry->mode = 0;
 			dir_entry->uid = -1;
@@ -2224,39 +2342,46 @@ fill_dir_list(FileView *view)
 			dir_entry->mtime = 0;
 			dir_entry->atime = 0;
 			dir_entry->ctime = 0;
-
-			name_len += get_filetype_decoration_width(dir_entry->type);
-			view->max_filename_len = MAX(view->max_filename_len, name_len);
-			continue;
 		}
-
-		dir_entry->size = (uintmax_t)s.st_size;
-		dir_entry->mode = s.st_mode;
-		dir_entry->uid = s.st_uid;
-		dir_entry->gid = s.st_gid;
-		dir_entry->mtime = s.st_mtime;
-		dir_entry->atime = s.st_atime;
-		dir_entry->ctime = s.st_ctime;
-
-		if(s.st_ino)
+		else
 		{
 			dir_entry->type = get_type_from_mode(s.st_mode);
-			if(dir_entry->type == LINK)
-			{
-				struct stat st;
-				if(check_link_is_dir(dir_entry->name))
-					strcat(dir_entry->name, "/");
-				if(stat(dir_entry->name, &st) == 0)
-					dir_entry->mode = st.st_mode;
-			}
-			else if(dir_entry->type == DIRECTORY)
-			{
-					strcat(dir_entry->name, "/");
-					name_len++;
-			}
-			name_len += get_filetype_decoration_width(dir_entry->type);
-			view->max_filename_len = MAX(view->max_filename_len, name_len);
+			dir_entry->size = (uintmax_t)s.st_size;
+			dir_entry->mode = s.st_mode;
+			dir_entry->uid = s.st_uid;
+			dir_entry->gid = s.st_gid;
+			dir_entry->mtime = s.st_mtime;
+			dir_entry->atime = s.st_atime;
+			dir_entry->ctime = s.st_ctime;
 		}
+
+		if(dir_entry->type == UNKNOWN)
+		{
+			dir_entry->type = type_from_dir_entry(d);
+		}
+
+		if(dir_entry->type == LINK)
+		{
+			struct stat st;
+
+			if(check_link_is_dir(dir_entry->name))
+			{
+				strcat(dir_entry->name, "/");
+			}
+
+			if(stat(dir_entry->name, &st) == 0)
+			{
+				dir_entry->mode = st.st_mode;
+			}
+		}
+		else if(dir_entry->type == DIRECTORY)
+		{
+			strcat(dir_entry->name, "/");
+			name_len++;
+		}
+
+		name_len += get_filetype_decoration_width(dir_entry->type);
+		view->max_filename_len = MAX(view->max_filename_len, name_len);
 	}
 	closedir(dir);
 #else
@@ -2295,7 +2420,8 @@ fill_dir_list(FileView *view)
 			}
 			with_parent_dir = 1;
 		}
-		else if(regexp_filter_match(view, ffd.cFileName) == 0)
+		else if(!file_is_visible(view, ffd.cFileName,
+				ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
 		{
 			view->filtered++;
 			continue;
@@ -2386,6 +2512,44 @@ fill_dir_list(FileView *view)
 	return 0;
 }
 
+/* Checks whether file/directory passes filename filters of the view.  Returns
+ * non-zero if given filename passes filter and should be visible, otherwise
+ * zero is returned, in which case the file should be hidden. */
+TSTATIC int
+file_is_visible(FileView *view, const char filename[], int is_dir)
+{
+	char name_with_slash[NAME_MAX + 1 + 1];
+	if(is_dir)
+	{
+		sprintf(name_with_slash, "%s/", filename);
+		filename = name_with_slash;
+	}
+
+	if(filter_matches(&view->auto_filter, filename) > 0)
+	{
+		return 0;
+	}
+
+	if(filter_matches(&view->local_filter.filter, filename) == 0)
+	{
+		return 0;
+	}
+
+	if(filter_is_empty(&view->manual_filter))
+	{
+		return 1;
+	}
+
+	if(filter_matches(&view->manual_filter, filename) > 0)
+	{
+		return !view->invert;
+	}
+	else
+	{
+		return view->invert;
+	}
+}
+
 /* Returns additional number of characters which are needed to display names of
  * files of specific type. */
 static size_t
@@ -2397,35 +2561,46 @@ get_filetype_decoration_width(FileType type)
 }
 
 void
+populate_dir_list(FileView *view, int reload)
+{
+	(void)populate_dir_list_internal(view, reload);
+}
+
+void
 load_dir_list(FileView *view, int reload)
 {
-#ifndef _WIN32
-	struct stat s;
-#endif
+	if(populate_dir_list_internal(view, reload) != 0)
+	{
+		return;
+	}
+
+	draw_dir_list(view);
+
+	if(view == curr_view)
+	{
+		if(strnoscmp(view->curr_dir, cfg.fuse_home, strlen(cfg.fuse_home)) == 0 &&
+				stroscmp(other_view->curr_dir, view->curr_dir) == 0)
+			load_dir_list(other_view, 1);
+	}
+}
+
+/* Loads filelist for the view.  The reload parameter should be set in case of
+ * view refresh operation.  Returns non-zero on error. */
+static int
+populate_dir_list_internal(FileView *view, int reload)
+{
 	int old_list = view->list_rows;
 	int need_free = (view->selected_filelist == NULL);
 
 	view->filtered = 0;
 
-#ifndef _WIN32
-	if(stat(view->curr_dir, &s) != 0)
-	{
-		LOG_SERROR_MSG(errno, "Can't stat() \"%s\"", view->curr_dir);
-		return;
-	}
-#endif
-
 	if(update_dir_mtime(view) != 0 && !is_unc_root(view->curr_dir))
 	{
 		LOG_SERROR_MSG(errno, "Can't get directory mtime \"%s\"", view->curr_dir);
-		return;
+		return 1;
 	}
 
-#ifndef _WIN32
-	if(!reload && s.st_size > s.st_blksize)
-#else
-	if(!reload)
-#endif
+	if(!reload && is_dir_big(view->curr_dir))
 	{
 		if(get_mode() != CMDLINE_MODE)
 		{
@@ -2434,17 +2609,21 @@ load_dir_list(FileView *view, int reload)
 	}
 
 	if(curr_stats.load_stage < 2)
+	{
 		update_all_windows();
+	}
 
 	/* this is needed for lstat() below */
-	if(my_chdir(view->curr_dir) != 0 && !is_unc_root(view->curr_dir))
+	if(vifm_chdir(view->curr_dir) != 0 && !is_unc_root(view->curr_dir))
 	{
 		LOG_SERROR_MSG(errno, "Can't chdir() into \"%s\"", view->curr_dir);
-		return;
+		return 1;
 	}
 
 	if(reload && view->selected_files > 0 && view->selected_filelist == NULL)
+	{
 		get_all_selected_files(view);
+	}
 
 	if(view->dir_entry != NULL)
 	{
@@ -2459,7 +2638,7 @@ load_dir_list(FileView *view, int reload)
 	if(view->dir_entry == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory.");
-		return;
+		return 1;
 	}
 
 	if(fill_dir_list(view) != 0)
@@ -2470,7 +2649,7 @@ load_dir_list(FileView *view, int reload)
 		add_parent_dir(view);
 	}
 
-	resort_dir_list(!reload, view);
+	sort_dir_list(!reload, view);
 
 	if(!reload && get_mode() != CMDLINE_MODE)
 	{
@@ -2491,7 +2670,7 @@ load_dir_list(FileView *view, int reload)
 	if(view->list_rows < 1)
 	{
 		rescue_from_empty_filelist(view);
-		return;
+		return 1;
 	}
 
 	if(reload && view->selected_files)
@@ -2499,24 +2678,60 @@ load_dir_list(FileView *view, int reload)
 	else if(view->selected_files)
 		view->selected_files = 0;
 
-	if(curr_stats.load_stage >= 2)
-		draw_dir_list(view);
+	return 0;
+}
 
-	if(view == curr_view)
+/* Checks for subjectively relative size of a directory specified by the path
+ * parameter.  Returns non-zero if size of the directory in question is
+ * considered to be big. */
+static int
+is_dir_big(const char path[])
+{
+#ifndef _WIN32
+	struct stat s;
+	if(stat(path, &s) != 0)
 	{
-		if(strnoscmp(view->curr_dir, cfg.fuse_home, strlen(cfg.fuse_home)) == 0 &&
-				stroscmp(other_view->curr_dir, view->curr_dir) == 0)
-			load_dir_list(other_view, 1);
+		LOG_SERROR_MSG(errno, "Can't stat() \"%s\"", path);
+		return 1;
 	}
+	return s.st_size > s.st_blksize;
+#else
+	return 1;
+#endif
 }
 
 void
 resort_dir_list(int msg, FileView *view)
 {
+	/* Using this pointer after sorting is safe, because file entries are just
+	 * moved in the array. */
+	const char *const filename = (view->list_pos < view->list_rows) ?
+			view->dir_entry[view->list_pos].name : NULL;
+	const int top_delta = view->list_pos - view->top_line;
+
+	sort_dir_list(msg, view);
+
+	if(filename != NULL)
+	{
+		const int new_pos = find_file_pos_in_list(view, filename);
+		if(new_pos != -1)
+		{
+			view->top_line = new_pos - top_delta;
+			view->list_pos = new_pos;
+		}
+	}
+}
+
+/* Resorts view without reloading it.  msg parameter controls whether to show
+ * "Sorting..." statusbar message. */
+static void
+sort_dir_list(int msg, FileView *view)
+{
 	if(msg && view->list_rows > 2048 && get_mode() != CMDLINE_MODE)
 	{
 		status_bar_message("Sorting directory...");
 	}
+
 	sort_view(view);
 
 	if(msg && get_mode() != CMDLINE_MODE)
@@ -2535,12 +2750,13 @@ rescue_from_empty_filelist(FileView * view)
 	 * in the / directory.  All other directories will always show at least the
 	 * ../ file.  This resets the filter and reloads the directory.
 	 */
-	if(is_path_absolute(view->curr_dir) && view->filename_filter[0] != '\0')
+	if(is_path_absolute(view->curr_dir) && !filter_is_empty(&view->manual_filter))
 	{
 		show_error_msgf("Filter error",
 				"The %s\"%s\" pattern did not match any files. It was reset.",
-				view->invert ? "" : "inverted ", view->filename_filter);
-		set_filename_filter(view, "");
+				view->invert ? "" : "inverted ", view->manual_filter.raw);
+		filter_clear(&view->auto_filter);
+		filter_clear(&view->manual_filter);
 		view->invert = 1;
 
 		load_dir_list(view, 1);
@@ -2618,100 +2834,25 @@ add_parent_dir(FileView *view)
 	}
 }
 
-/*
- * Escape the filename for the purpose of using it in filename filter.
- *
- * Returns new string, caller should free it.
- */
-static char *
-escape_name_for_filter(const char *string)
-{
-	size_t len;
-	size_t i;
-	char *ret, *dup;
-
-	len = strlen(string);
-
-	dup = ret = malloc(len*2 + 2 + 1);
-
-	for(i = 0; i < len; i++)
-	{
-		switch(*string)
-		{
-			case '\\':
-			case '[':
-			case ']':
-			case '(':
-			case ')':
-			case '{':
-			case '}':
-			case '+':
-			case '*':
-			case '^':
-			case '$':
-			case '.':
-			case '?':
-			case '|':
-				*dup++ = '\\';
-				break;
-		}
-		*dup++ = *string++;
-	}
-	*dup = '\0';
-	return ret;
-}
-
 void
 filter_selected_files(FileView *view)
 {
-	char *filter = strdup(view->filename_filter);
-	int x;
+	int i;
 
 	if(!view->selected_files)
 		view->dir_entry[view->list_pos].selected = 1;
 
-	for(x = 0; x < view->list_rows; x++)
+	for(i = 0; i < view->list_rows; i++)
 	{
-		size_t buf_size;
-		char *name;
-		char *new_filter;
+		const dir_entry_t *const entry = &view->dir_entry[i];
 
-		if(!view->dir_entry[x].selected)
-			continue;
-
-		if(stroscmp(view->dir_entry[x].name, "../") == 0)
-			continue;
-
-		name = escape_name_for_filter(view->dir_entry[x].name);
-		chosp(name);
-
-		/* realloc memory allocated for filter */
-		buf_size = strlen(filter) + 1 + 1 + strlen(name) + 1 + 1;
-		new_filter = realloc(filter, buf_size);
-
-		if(new_filter != NULL)
+		if(entry->selected && !is_parent_dir(entry->name))
 		{
-			filter = new_filter;
-
-			/* add OR if needed */
-			if(filter[0] != '\0')
-			{
-				strcat(filter, "|");
-			}
-
-			/* update filename filter */
-			strcat(filter, "^");
-			strcat(filter, name);
-			strcat(filter, "$");
+			filter_append(&view->auto_filter, entry->name);
 		}
-
-		free(name);
 	}
-	set_filename_filter(view, filter);
-	free(filter);
 
 	/* reload view */
-	view->invert = 1;
 	clean_status_bar();
 	load_dir_list(view, 1);
 	move_to_list_pos(view, view->list_pos);
@@ -2734,41 +2875,328 @@ toggle_dot_files(FileView *view)
 void
 remove_filename_filter(FileView *view)
 {
-	(void)replace_string(&view->prev_filter, view->filename_filter);
-	set_filename_filter(view, "");
+	(void)replace_string(&view->prev_manual_filter, view->manual_filter.raw);
+	filter_clear(&view->manual_filter);
+	(void)replace_string(&view->prev_auto_filter, view->auto_filter.raw);
+	filter_clear(&view->auto_filter);
 
 	view->prev_invert = view->invert;
-	view->invert = 1;
+	view->invert = cfg.filter_inverted_by_default ? 1 : 0;
 	load_saving_pos(view, 0);
 }
 
 void
 restore_filename_filter(FileView *view)
 {
-	set_filename_filter(view, view->prev_filter);
+	(void)filter_set(&view->manual_filter, view->prev_manual_filter);
+	(void)filter_set(&view->auto_filter, view->prev_auto_filter);
 	view->invert = view->prev_invert;
 	load_saving_pos(view, 0);
 }
 
 void
-set_filename_filter(FileView *view, const char *filter)
+toggle_filter_inversion(FileView *view)
 {
-	int ret;
+	view->invert = !view->invert;
+	load_dir_list(view, 1);
+	move_to_list_pos(view, 0);
+}
 
-	if(view->filter_is_valid)
+void
+local_filter_set(FileView *view, const char filter[])
+{
+	const int current_file_pos = view->local_filter.in_progress
+		? get_unfiltered_pos(view, view->list_pos)
+		: load_unfiltered_list(view);
+
+	if(current_file_pos >= 0)
 	{
-		regfree(&view->filter_regex);
+		store_local_filter_position(view, current_file_pos);
 	}
 
-	(void)replace_string(&view->filename_filter, filter);
-	if(view->filename_filter[0] == '\0')
+	(void)filter_change(&view->local_filter.filter, filter,
+			!regexp_should_ignore_case(filter));
+
+	update_filtering_lists(view, 1, 0);
+}
+
+/* Loads full list of files into unfiltered list of the view.  Returns positon
+ * of file under cursor in the unfiltered list. */
+static int
+load_unfiltered_list(FileView *const view)
+{
+	int current_file_pos = view->list_pos;
+
+	view->local_filter.in_progress = 1;
+
+	view->local_filter.saved = strdup(view->local_filter.filter.raw);
+
+	if(view->filtered > 0)
 	{
-		view->filter_is_valid = 0;
+		char *const filename = strdup(view->dir_entry[view->list_pos].name);
+
+		filter_clear(&view->local_filter.filter);
+		populate_dir_list(view, 1);
+
+		/* Resolve current file position in updated list. */
+		current_file_pos = find_file_pos_in_list(view, filename);
+		free(filename);
+	}
+
+	view->local_filter.unfiltered = view->dir_entry;
+	view->local_filter.unfiltered_count = view->list_rows;
+	view->dir_entry = NULL;
+
+	return current_file_pos;
+}
+
+/* Gets position of an item in dir_entry list at position pos in the unfiltered
+ * list.  Returns index on success, otherwise -1 is returned. */
+static int
+get_unfiltered_pos(const FileView *const view, int pos)
+{
+	const size_t count = view->local_filter.unfiltered_count;
+	const char *const filename = view->dir_entry[pos].name;
+	while(pos < count)
+	{
+		/* Compare pointers, which are the same for same entry in two arrays. */
+		if(view->local_filter.unfiltered[pos].name == filename)
+		{
+			return pos;
+		}
+		pos++;
+	}
+	return -1;
+}
+
+/* Adds local filter position (in unfiltered list) to position history. */
+static void
+store_local_filter_position(FileView *const view, int pos)
+{
+	size_t *const len = &view->local_filter.poshist_len;
+	int *const arr = realloc(view->local_filter.poshist, sizeof(int)*(*len + 1));
+	if(arr != NULL)
+	{
+		view->local_filter.poshist = arr;
+		arr[*len] = pos;
+		++*len;
+	}
+}
+
+void
+local_filter_update_view(FileView *view, int rel_pos)
+{
+	int pos = extract_previously_selected_pos(view);
+
+	if(pos < 0)
+	{
+		pos = find_nearest_neighour(view);
+	}
+
+	if(pos >= 0)
+	{
+		if(pos == 0 && is_parent_dir(view->dir_entry[0].name) &&
+				view->list_rows > 0)
+		{
+			pos++;
+		}
+
+		view->list_pos = pos;
+		view->top_line = pos - rel_pos;
+	}
+}
+
+/* Finds one of previously selected files and updates list of visited files
+ * if needed.  Returns file position in current list of files or -1. */
+static int
+extract_previously_selected_pos(FileView *const view)
+{
+	size_t i;
+	for(i = 0; i < view->local_filter.poshist_len; i++)
+	{
+		const int unfiltered_pos = view->local_filter.poshist[i];
+		const char *const file = view->local_filter.unfiltered[unfiltered_pos].name;
+		const int filtered_pos = find_file_pos_in_list(view, file);
+
+		if(filtered_pos >= 0)
+		{
+			clear_local_filter_hist_after(view, i);
+			return filtered_pos;
+		}
+	}
+	return -1;
+}
+
+/* Clears all positions after the pos. */
+static void
+clear_local_filter_hist_after(FileView *const view, int pos)
+{
+	view->local_filter.poshist_len -= view->local_filter.poshist_len - (pos + 1);
+}
+
+/* Find nearest filtered neighbour.  Returns index of nearest unfiltered
+ * neighbour of the entry initially pointed to by cursor. */
+static int
+find_nearest_neighour(const FileView *const view)
+{
+	const int count = view->local_filter.unfiltered_count;
+
+	if(view->local_filter.poshist_len > 0U)
+	{
+		const int unfiltered_orig_pos = view->local_filter.poshist[0U];
+		int i;
+		for(i = unfiltered_orig_pos; i < count; i++)
+		{
+			const int filtered_pos = find_file_pos_in_list(view,
+					view->local_filter.unfiltered[i].name);
+			if(filtered_pos >= 0)
+			{
+				return filtered_pos;
+			}
+		}
+	}
+
+	assert(view->list_rows > 0 && "List of files is empty.");
+	return view->list_rows - 1;
+}
+
+void
+local_filter_accept(FileView *view)
+{
+	if(!view->local_filter.in_progress)
+	{
 		return;
 	}
 
-	ret = regcomp(&view->filter_regex, view->filename_filter, REG_EXTENDED);
-	view->filter_is_valid = ret == 0;
+	update_filtering_lists(view, 0, 1);
+
+	local_filter_finish(view);
+
+	save_filter_history(view->local_filter.filter.raw);
+}
+
+void
+local_filter_apply(FileView *view, const char filter[])
+{
+	if(view->local_filter.in_progress)
+	{
+		assert(!view->local_filter.in_progress && "Wrong local filter applying.");
+		return;
+	}
+
+	(void)filter_set(&view->local_filter.filter, filter);
+	save_filter_history(view->local_filter.filter.raw);
+}
+
+void
+local_filter_cancel(FileView *view)
+{
+	if(!view->local_filter.in_progress)
+	{
+		return;
+	}
+
+	(void)filter_set(&view->local_filter.filter, view->local_filter.saved);
+
+	free(view->dir_entry);
+	view->dir_entry = NULL;
+	view->list_rows = 0;
+
+	update_filtering_lists(view, 1, 1);
+	local_filter_finish(view);
+}
+
+/* Copies/moves elements of the unfiltered list into dir_entry list.  add
+ * parameter controls whether entries matching filter are copied into dir_entry
+ * list.  clear parameter controls whether entries not matching filter are
+ * cleared in unfiltered list. */
+static void
+update_filtering_lists(FileView *view, int add, int clear)
+{
+	size_t i;
+	size_t list_size = 0U;
+
+	for(i = 0; i < view->local_filter.unfiltered_count; i++)
+	{
+		const dir_entry_t *const entry = &view->local_filter.unfiltered[i];
+		if(is_parent_dir(entry->name))
+		{
+			if(add && parent_dir_is_visible(is_root_dir(view->curr_dir)))
+			{
+				(void)add_dir_entry(&view->dir_entry, &list_size, entry);
+			}
+		}
+		else if(filter_matches(&view->local_filter.filter, entry->name) != 0)
+		{
+			if(add)
+			{
+				(void)add_dir_entry(&view->dir_entry, &list_size, entry);
+			}
+		}
+		else
+		{
+			if(clear)
+			{
+				free(entry->name);
+			}
+		}
+	}
+
+	if(add)
+	{
+		view->list_rows = list_size;
+		view->filtered = view->local_filter.unfiltered_count - list_size;
+
+		if(list_size == 0U)
+		{
+			add_parent_dir(view);
+		}
+	}
+}
+
+/* Finishes filtering process and frees associated resources. */
+static void
+local_filter_finish(FileView *view)
+{
+	free(view->local_filter.unfiltered);
+	free(view->local_filter.saved);
+	view->local_filter.in_progress = 0;
+
+	free(view->local_filter.poshist);
+	view->local_filter.poshist = NULL;
+	view->local_filter.poshist_len = 0U;
+}
+
+void
+local_filter_remove(FileView *view)
+{
+	(void)replace_string(&view->local_filter.prev, view->local_filter.filter.raw);
+	filter_clear(&view->local_filter.filter);
+}
+
+void
+local_filter_restore(FileView *view)
+{
+	(void)filter_set(&view->local_filter.filter, view->local_filter.prev);
+	(void)replace_string(&view->local_filter.prev, "");
+}
+
+/* Adds new entry to the *list of length *list_size and updates them
+ * appropriately.  Returns zero on success, otherwise non-zero is returned. */
+static int
+add_dir_entry(dir_entry_t **list, size_t *list_size, const dir_entry_t *entry)
+{
+	dir_entry_t *const new_entry_list = realloc(*list,
+			sizeof(dir_entry_t)*(*list_size + 1));
+	if(new_entry_list == NULL)
+	{
+		return 1;
+	}
+
+	*list = new_entry_list;
+	new_entry_list[*list_size] = *entry;
+	++*list_size;
+	return 0;
 }
 
 void
@@ -2776,18 +3204,21 @@ redraw_view(FileView *view)
 {
 	if(curr_stats.need_update == UT_NONE && !curr_stats.restart_in_progress)
 	{
-		draw_dir_list(view);
-		move_to_list_pos(view, view->list_pos);
+		if(window_shows_dirlist(view))
+		{
+			draw_dir_list(view);
+			if(view == curr_view)
+			{
+				move_to_list_pos(view, view->list_pos);
+			}
+		}
 	}
 }
 
 void
 redraw_current_view(void)
 {
-	if(!curr_view->explore_mode)
-	{
-		redraw_view(curr_view);
-	}
+	redraw_view(curr_view);
 }
 
 static void
@@ -2798,7 +3229,7 @@ reload_window(FileView *view)
 
 	curr_stats.skip_history = 1;
 
-	load_saving_pos(view, 1);
+	load_saving_pos(view, is_dir_list_loaded(view));
 
 	if(view != curr_view)
 	{
@@ -2834,7 +3265,7 @@ check_if_filelists_have_changed(FileView *view)
 
 		show_error_msgf("Directory Change Check", "Cannot open %s", view->curr_dir);
 
-		leave_invalid_dir(view, view->curr_dir);
+		leave_invalid_dir(view);
 		(void)change_directory(view, view->curr_dir);
 		clean_selected_files(view);
 		reload_window(view);
@@ -2888,6 +3319,11 @@ load_saving_pos(FileView *view, int reload)
 	if(!window_shows_dirlist(view))
 		return;
 
+	if(view->local_filter.in_progress)
+	{
+		return;
+	}
+
 	snprintf(filename, sizeof(filename), "%s",
 			view->dir_entry[view->list_pos].name);
 	load_dir_list(view, reload);
@@ -2915,6 +3351,9 @@ load_saving_pos(FileView *view, int reload)
 int
 window_shows_dirlist(const FileView *const view)
 {
+	if(curr_stats.number_of_windows == 1 && view == other_view)
+		return 0;
+
 	if(view->explore_mode)
 		return 0;
 	if(view == other_view && get_mode() == VIEW_MODE)
@@ -2930,11 +3369,8 @@ window_shows_dirlist(const FileView *const view)
 void
 change_sort_type(FileView *view, char type, char descending)
 {
-	int i;
-
 	view->sort[0] = descending ? -type : type;
-	for(i = 1; i < NUM_SORT_OPTIONS; i++)
-		view->sort[i] = NUM_SORT_OPTIONS + 1;
+	memset(&view->sort[1], NO_SORT_OPTION, sizeof(view->sort) - 1);
 
 	reset_view_sort(view);
 
@@ -2990,7 +3426,7 @@ ensure_file_is_selected(FileView *view, const char name[])
 static int
 file_can_be_displayed(const char directory[], const char filename[])
 {
-	if(strcmp(filename, "..") == 0 || strcmp(filename, "../") == 0)
+	if(is_parent_dir(filename))
 	{
 		return parent_dir_is_visible(is_root_dir(directory));
 	}
@@ -3037,7 +3473,7 @@ cd(FileView *view, const char *base_dir, const char *path)
 			snprintf(dir, sizeof(dir), "%s", view->last_dir);
 		else
 			snprintf(dir, sizeof(dir), "%s/%s", base_dir, arg);
-		updir = (strcmp(arg, "..") == 0 || strcmp(arg, "../") == 0);
+		updir = is_parent_dir(arg);
 		free(arg);
 	}
 	else
@@ -3072,22 +3508,21 @@ cd(FileView *view, const char *base_dir, const char *path)
 }
 
 int
-view_is_at_path(const FileView *view, const char path[])
+view_needs_cd(const FileView *view, const char path[])
 {
 	if(path[0] == '\0' || stroscmp(view->curr_dir, path) == 0)
 		return 0;
 	return 1;
 }
 
-int
-set_view_path(FileView *view, const char *path)
+void
+set_view_path(FileView *view, const char path[])
 {
-	if(!view_is_at_path(view, path))
-		return 0;
-
-	strcpy(view->curr_dir, path);
-	exclude_file_name(view->curr_dir);
-	return 1;
+	if(view_needs_cd(view, path))
+	{
+		copy_str(view->curr_dir, sizeof(view->curr_dir), path);
+		exclude_file_name(view->curr_dir);
+	}
 }
 
 uint64_t

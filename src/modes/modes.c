@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "modes.h"
+
 #include <assert.h> /* assert() */
 #include <stdlib.h>
 
@@ -37,8 +39,6 @@
 #include "normal.h"
 #include "view.h"
 #include "visual.h"
-
-#include "modes.h"
 
 static int mode = NORMAL_MODE;
 
@@ -334,7 +334,7 @@ update_vmode_input(void)
 	if(is_input_buf_empty())
 	{
 		werase(input_win);
-		wmove(input_win, 0, 0);
+		checked_wmove(input_win, 0, 0);
 		wprintw(input_win, "%d", curr_view->selected_files);
 		wrefresh(input_win);
 	}

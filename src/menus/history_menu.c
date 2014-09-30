@@ -17,73 +17,95 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "history_menu.h"
+
 #include <stdlib.h> /* malloc() realloc() */
 #include <string.h> /* strdup() strcpy() strlen() */
 
 #include "../cfg/config.h"
 #include "../modes/menu.h"
 #include "../utils/string_array.h"
+#include "../commands.h"
 #include "../ui.h"
 #include "menus.h"
 
-#include "history_menu.h"
-
-static int show_history(FileView *view, int type, int len, char *hist[],
+static int show_history(FileView *view, int type, hist_t *hist,
 		const char title[]);
+static int execute_history_cb(FileView *view, menu_info *m);
 
 int
 show_cmdhistory_menu(FileView *view)
 {
-	return show_history(view, CMDHISTORY, cfg.cmd_history_num + 1,
-			cfg.cmd_history, " Command Line History ");
-}
-
-int
-show_prompthistory_menu(FileView *view)
-{
-	return show_history(view, PROMPTHISTORY, cfg.prompt_history_num + 1,
-			cfg.prompt_history, " Prompt History ");
+	return show_history(view, CMDHISTORY_MENU, &cfg.cmd_hist,
+			" Command Line History ");
 }
 
 int
 show_fsearchhistory_menu(FileView *view)
 {
-	return show_history(view, FSEARCHHISTORY, cfg.search_history_num + 1,
-			cfg.search_history, " Search History ");
+	return show_history(view, FSEARCHHISTORY_MENU, &cfg.search_hist,
+			" Search History ");
 }
 
 int
 show_bsearchhistory_menu(FileView *view)
 {
-	return show_history(view, BSEARCHHISTORY, cfg.search_history_num + 1,
-			cfg.search_history, " Search History ");
+	return show_history(view, BSEARCHHISTORY_MENU, &cfg.search_hist,
+			" Search History ");
 }
 
+int
+show_prompthistory_menu(FileView *view)
+{
+	return show_history(view, PROMPTHISTORY_MENU, &cfg.prompt_hist,
+			" Prompt History ");
+}
+
+int
+show_filterhistory_menu(FileView *view)
+{
+	return show_history(view, FILTERHISTORY_MENU, &cfg.filter_hist,
+			" Filter History ");
+}
+
+/* Returns non-zero if status bar message should be saved. */
 static int
-show_history(FileView *view, int type, int len, char *hist[],
-		const char title[])
+show_history(FileView *view, int type, hist_t *hist, const char title[])
 {
 	int i;
 	static menu_info m;
 
-	if(len <= 0)
-	{
-		status_bar_message("History is disabled or empty");
-		return 1;
-	}
-
-	init_menu_info(&m, type);
+	init_menu_info(&m, type, strdup("History disabled or empty"));
 	m.title = strdup(title);
+	m.execute_handler = &execute_history_cb;
 
-	for(i = 0; i < len; i++)
+	for(i = 0; i <= hist->pos; i++)
 	{
-		m.len = add_to_string_array(&m.items, m.len, 1, hist[i]);
+		m.len = add_to_string_array(&m.items, m.len, 1, hist->items[i]);
 	}
 
-	setup_menu();
-	draw_menu(&m);
-	move_to_menu_pos(m.pos, &m);
-	enter_menu_mode(&m, view);
+	return display_menu(&m, view);
+}
+
+static int
+execute_history_cb(FileView *view, menu_info *m)
+{
+	switch(m->type)
+	{
+		case CMDHISTORY_MENU:
+			save_command_history(m->items[m->pos]);
+			exec_commands(m->items[m->pos], view, GET_COMMAND);
+			break;
+		case FSEARCHHISTORY_MENU:
+			save_search_history(m->items[m->pos]);
+			exec_commands(m->items[m->pos], view, GET_FSEARCH_PATTERN);
+			break;
+		case BSEARCHHISTORY_MENU:
+			save_search_history(m->items[m->pos]);
+			exec_commands(m->items[m->pos], view, GET_BSEARCH_PATTERN);
+			break;
+	}
+
 	return 0;
 }
 

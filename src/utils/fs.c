@@ -17,22 +17,26 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "fs.h"
+
 #ifdef _WIN32
-#define _WIN32_WINNT 0x0500 /* to get GetFileSizeEx() */
+#define REQUIRED_WINVER 0x0500
+#include "windefs.h"
 #include <windows.h>
+#include <ntdef.h>
 #include <winioctl.h>
 #endif
 
-#include <sys/stat.h> /* statbuf stat() mkdir() */
+#include <sys/stat.h> /* statbuf stat() lstat() mkdir() */
 #include <sys/types.h> /* size_t mode_t */
+#include <dirent.h> /* DIR dirent opendir() readdir() closedir() */
 #include <unistd.h> /* access() */
 
-#include <assert.h>
+#include <assert.h> /* assert() */
 #include <ctype.h> /* touuper() */
 #include <errno.h> /* errno */
-#include <limits.h> /* NAME_MAX PATH_MAX */
 #include <stddef.h> /* NULL */
-#include <stdio.h> /* snprintf() */
+#include <stdio.h> /* snprintf() remove() rename() */
 #include <stdlib.h> /* realpath() */
 #include <string.h> /* strdup() strncmp() strncpy() */
 
@@ -42,9 +46,8 @@
 #ifdef _WIN32
 #include "str.h"
 #endif
+#include "string_array.h"
 #include "utils.h"
-
-#include "fs.h"
 
 static int path_exists_internal(const char *path, const char *filename);
 
@@ -85,14 +88,42 @@ is_dir(const char *path)
 }
 
 int
+is_dir_empty(const char path[])
+{
+	DIR *dir;
+	struct dirent *d;
+
+	if((dir = opendir(path)) == NULL)
+	{
+		return 0;
+	}
+
+	while((d = readdir(dir)) != NULL)
+	{
+		if(!is_builtin_dir(d->d_name))
+		{
+			break;
+		}
+	}
+	closedir(dir);
+
+	return d == NULL;
+}
+
+int
 is_valid_dir(const char *path)
 {
 	return is_dir(path) || is_unc_root(path);
 }
 
 int
-path_exists(const char *path)
+path_exists(const char path[])
 {
+	if(!is_path_absolute(path))
+	{
+		LOG_ERROR_MSG("Passed relative path where absolute one is expected: %s",
+				path);
+	}
 	return path_exists_internal(NULL, path);
 }
 
@@ -159,6 +190,27 @@ check_link_is_dir(const char *filename)
 		log_cwd();
 	}
 
+	return 0;
+}
+
+int
+get_link_target_abs(const char link[], const char cwd[], char buf[],
+		size_t buf_len)
+{
+	char link_target[PATH_MAX];
+	if(get_link_target(link, link_target, sizeof(link_target)) != 0)
+	{
+		return 1;
+	}
+	if(is_path_absolute(link_target))
+	{
+		strncpy(buf, link_target, buf_len);
+		buf[buf_len - 1] = '\0';
+	}
+	else
+	{
+		snprintf(buf, buf_len, "%s/%s", cwd, link_target);
+	}
 	return 0;
 }
 
@@ -282,12 +334,9 @@ directory_accessible(const char *path)
 	return (path_exists(path) && access(path, X_OK) == 0) || is_unc_root(path);
 }
 
-/* path should be absolute */
 int
-is_dir_writable(const char *path)
+is_dir_writable(const char path[])
 {
-	assert(is_path_absolute(path));
-
 	if(!is_unc_root(path))
 	{
 #ifdef _WIN32
@@ -341,6 +390,62 @@ get_file_size(const char *path)
 	CloseHandle(hfile);
 	return 0;
 #endif
+}
+
+char **
+list_regular_files(const char path[], int *len)
+{
+	DIR *dir;
+	char **list = NULL;
+	*len = 0;
+
+	if((dir = opendir(path)) != NULL)
+	{
+		struct dirent *d;
+		while((d = readdir(dir)) != NULL)
+		{
+			char full_path[PATH_MAX];
+			snprintf(full_path, sizeof(full_path), "%s/%s", path, d->d_name);
+
+			if(is_regular_file(full_path))
+			{
+				*len = add_to_string_array(&list, *len, 1, d->d_name);
+			}
+		}
+		closedir(dir);
+	}
+
+	return list;
+}
+
+int
+is_regular_file(const char path[])
+{
+#ifndef _WIN32
+	struct stat s;
+	return stat(path, &s) == 0 && (s.st_mode & S_IFMT) == S_IFREG;
+#else
+	const DWORD attrs = GetFileAttributesA(path);
+	if(attrs == INVALID_FILE_ATTRIBUTES)
+	{
+		return 0;
+	}
+	return (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0UL;
+#endif
+}
+
+int
+rename_file(const char src[], const char dst[])
+{
+	int error;
+#ifdef _WIN32
+	(void)remove(dst);
+#endif
+	if((error = rename(src, dst)))
+	{
+		LOG_SERROR_MSG(errno, "Rename operation failed: {%s => %s}", src, dst);
+	}
+	return error != 0;
 }
 
 #ifdef _WIN32

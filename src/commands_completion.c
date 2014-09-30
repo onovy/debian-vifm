@@ -17,8 +17,11 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "commands_completion.h"
+
 #ifdef _WIN32
-#define _WIN32_WINNT 0x0500
+#define REQUIRED_WINVER 0x0500 /* To get GetFileSizeEx() function. */
+#include "utils/windefs.h"
 #include <windows.h>
 #include <lm.h>
 #endif
@@ -31,9 +34,10 @@
 #include <pwd.h> /* getpwent setpwent */
 #endif
 
-#include <limits.h> /* PATH_MAX */
-#include <stdlib.h>
-#include <string.h>
+#include <stddef.h> /* NULL size_t */
+#include <stdlib.h> /* free() */
+#include <stdio.h> /* snprintf() */
+#include <string.h> /* strdup() strlen() strncasecmp() strncmp() strrchr() */
 
 #include "cfg/config.h"
 #include "engine/completion.h"
@@ -56,33 +60,34 @@
 #include "path_env.h"
 #include "tags.h"
 
-#include "commands_completion.h"
-
 static int cmd_ends_with_space(const char *cmd);
 static void complete_colorscheme(const char *str, size_t arg_num);
 static void complete_help(const char *str);
-static void complete_history(const char *str);
+static void complete_history(const char str[]);
+static void complete_invert(const char str[]);
+static void complete_from_string_list(const char str[], const char *list[],
+		size_t list_len);
 static int complete_chown(const char *str);
 static void complete_filetype(const char *str);
 static void complete_progs(const char *str, assoc_records_t records);
 static void complete_highlight_groups(const char *str);
 static int complete_highlight_arg(const char *str);
-static void complete_envvar(const char *str);
+static void complete_envvar(const char str[]);
 static void complete_winrun(const char *str);
-static void exec_completion(const char str[]);
+static void complete_command_name(const char beginning[]);
 static void filename_completion_in_dir(const char *path, const char *str,
 		CompletionType type);
 static void filename_completion_internal(DIR * dir, const char * dirname,
 		const char * filename, CompletionType type);
-static void add_filename_completion(const char * filename, CompletionType type);
+static void add_filename_completion(const char filename[], CompletionType type);
 static int is_entry_dir(const struct dirent *d);
 static int is_entry_exec(const struct dirent *d);
 #ifdef _WIN32
 static const char * escape_for_cd(const char *str);
 static void complete_with_shared(const char *server, const char *file);
 #endif
-static int executable_exists_in_path(const char command_name[]);
-static int executable_exists(const char full_path[]);
+static int complete_cmd_in_path(const char cmd[], size_t path_len, char path[]);
+static int executable_exists(const char path[]);
 
 int
 complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
@@ -93,22 +98,42 @@ complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
 	const char *start;
 	const char *slash;
 	const char *dollar;
+	const char *ampersand;
 
 	arg = after_last(args, ' ');
 	start = arg;
-	dollar = strrchr(arg, '$');
 	slash = strrchr(args + arg_pos, '/');
+	dollar = strrchr(arg, '$');
+	ampersand = strrchr(arg, '&');
 
 	if(id == COM_SET)
 		complete_options(args, &start);
-	else if(id == COM_LET || id == COM_ECHO)
-		complete_variables((dollar > arg) ? dollar : arg, &start);
+	else if(command_accepts_expr(id))
+	{
+		if(ampersand > dollar)
+		{
+			start = ampersand + 1;
+			complete_real_option_names(ampersand + 1);
+		}
+		else
+		{
+			complete_variables((dollar > arg) ? dollar : arg, &start);
+		}
+	}
 	else if(id == COM_UNLET)
 		complete_variables(arg, &start);
 	else if(id == COM_HELP)
 		complete_help(args);
 	else if(id == COM_HISTORY)
+	{
 		complete_history(args);
+		start = args;
+	}
+	else if(id == COM_INVERT)
+	{
+		complete_invert(args);
+		start = args;
+	}
 	else if(id == COM_CHOWN)
 		start += complete_chown(args);
 	else if(id == COM_FILE)
@@ -178,7 +203,7 @@ complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
 				if(*arg == '.')
 					filename_completion(arg, CT_DIREXEC);
 				else
-					exec_completion(arg);
+					complete_command_name(arg);
 			}
 			else
 				filename_completion(arg, CT_ALL);
@@ -239,9 +264,10 @@ complete_help(const char *str)
 }
 
 static void
-complete_history(const char *str)
+complete_history(const char str[])
 {
-	static const char *lines[] = {
+	static const char *lines[] =
+	{
 		".",
 		"dir",
 		"@",
@@ -253,13 +279,36 @@ complete_history(const char *str)
 		"bsearch",
 		":",
 		"cmd",
+		"=",
+		"filter",
 	};
-	int i;
-	size_t len = strlen(str);
-	for(i = 0; i < ARRAY_LEN(lines); i++)
+	complete_from_string_list(str, lines, ARRAY_LEN(lines));
+}
+
+static void
+complete_invert(const char str[])
+{
+	static const char *lines[] =
 	{
-		if(strncmp(str, lines[i], len) == 0)
-			add_completion(lines[i]);
+		"f",
+		"s",
+		"o",
+	};
+	complete_from_string_list(str, lines, ARRAY_LEN(lines));
+}
+
+/* Performs str completion using items in the list of length list_len. */
+static void
+complete_from_string_list(const char str[], const char *list[], size_t list_len)
+{
+	int i;
+	const size_t len = strlen(str);
+	for(i = 0; i < list_len; i++)
+	{
+		if(strncmp(str, list[i], len) == 0)
+		{
+			add_completion(list[i]);
+		}
 	}
 	completion_group_end();
 	add_completion(str);
@@ -311,7 +360,7 @@ complete_progs(const char *str, assoc_records_t records)
 	{
 		char command[NAME_MAX];
 
-		(void)get_command_name(records.list[i].command, 1, sizeof(command),
+		(void)extract_cmd_name(records.list[i].command, 1, sizeof(command),
 				command);
 
 		if(strnoscmp(command, str, len) == 0)
@@ -407,21 +456,27 @@ complete_highlight_arg(const char *str)
 	return result;
 }
 
+/* Completes name of the environment variables. */
 static void
-complete_envvar(const char *str)
+complete_envvar(const char str[])
 {
 	extern char **environ;
 	char **p = environ;
-	size_t len = strlen(str);
+	const size_t len = strlen(str);
 
 	while(*p != NULL)
 	{
 		if(strncmp(*p, str, len) == 0)
 		{
-			char *equal = strchr(*p, '=');
-			*equal = '\0';
-			add_completion(*p);
-			*equal = '=';
+			char *const equal = strchr(*p, '=');
+			/* Actually equal shouldn't be NULL unless environ content is corrupted.
+			 * But the check below won't harm. */
+			if(equal != NULL)
+			{
+				*equal = '\0';
+				add_completion(*p);
+				*equal = '=';
+			}
 		}
 		p++;
 	}
@@ -447,17 +502,23 @@ complete_winrun(const char *str)
 }
 
 char *
-fast_run_complete(const char *cmd)
+fast_run_complete(const char cmd[])
 {
 	char *result = NULL;
 	const char *args;
 	char command[NAME_MAX];
 	char *completed;
 
-	args = get_command_name(cmd, 0, sizeof(command), command);
+	args = extract_cmd_name(cmd, 0, sizeof(command), command);
+
+	if(is_path_absolute(command))
+	{
+		return strdup(cmd);
+	}
 
 	reset_completion();
-	exec_completion(command);
+	complete_command_name(command);
+	completion_groups_unite();
 	completed = next_completion();
 
 	if(get_completion_count() > 2)
@@ -486,8 +547,7 @@ fast_run_complete(const char *cmd)
 	{
 		free(completed);
 		completed = next_completion();
-		result = malloc(strlen(completed) + 1 + strlen(args) + 1);
-		sprintf(result, "%s %s", completed, args);
+		result = format_str("%s %s", completed, args);
 	}
 	free(completed);
 
@@ -496,7 +556,7 @@ fast_run_complete(const char *cmd)
 
 /* Fills list of complitions with executables in $PATH. */
 static void
-exec_completion(const char str[])
+complete_command_name(const char beginning[])
 {
 	int i;
 	char ** paths;
@@ -505,11 +565,12 @@ exec_completion(const char str[])
 	paths = get_paths(&paths_count);
 	for(i = 0; i < paths_count; i++)
 	{
-		if(my_chdir(paths[i]) != 0)
-			continue;
-		filename_completion(str, CT_EXECONLY);
+		if(vifm_chdir(paths[i]) == 0)
+		{
+			filename_completion(beginning, CT_EXECONLY);
+		}
 	}
-	add_completion(str);
+	add_completion(beginning);
 }
 
 static void
@@ -602,19 +663,23 @@ filename_completion(const char *str, CompletionType type)
 
 	dir = opendir(dirname);
 
-	if(dir == NULL || my_chdir(dirname) != 0)
+	if(dir == NULL || vifm_chdir(dirname) != 0)
 	{
 		add_completion(filename);
 	}
 	else
 	{
 		filename_completion_internal(dir, dirname, filename, type);
-		closedir(dir);
-		(void)my_chdir(curr_view->curr_dir);
+		(void)vifm_chdir(curr_view->curr_dir);
 	}
 
 	free(filename);
 	free(dirname);
+
+	if(dir != NULL)
+	{
+		closedir(dir);
+	}
 }
 
 static void
@@ -664,16 +729,36 @@ filename_completion_internal(DIR * dir, const char * dirname,
 	}
 }
 
+/* Adds completion of a filename to the list of matches taking care of escaping
+ * (depends on the type parameter). */
 static void
-add_filename_completion(const char * filename, CompletionType type)
+add_filename_completion(const char filename[], CompletionType type)
 {
 #ifndef _WIN32
-	int woe = (type == CT_ALL_WOE || type == CT_FILE_WOE);
-	char * temp = woe ? strdup(filename) : escape_filename(filename, 1);
-	add_completion(temp);
-	free(temp);
+	char *escaped = NULL;
+#endif
+
+	const int woe = (type == CT_ALL_WOE || type == CT_FILE_WOE);
+	const char *completion;
+
+	if(woe)
+	{
+		completion = filename;
+	}
+	else
+	{
+#ifndef _WIN32
+		escaped = escape_filename(filename, 1);
+		completion = escaped;
 #else
-	add_completion(escape_for_cd(filename));
+		completion = escape_for_cd(filename);
+#endif
+	}
+
+	add_completion(completion);
+
+#ifndef _WIN32
+	free(escaped);
 #endif
 }
 
@@ -826,26 +911,40 @@ complete_with_shared(const char *server, const char *file)
 #endif
 
 int
-external_command_exists(const char command[])
+external_command_exists(const char cmd[])
 {
-	if(starts_with(command, "!!"))
+	char path[PATH_MAX];
+
+	if(get_cmd_path(cmd, sizeof(path), path) == 0)
 	{
-		command += 2;
+		return executable_exists(path);
+	}
+	return 0;
+}
+
+int
+get_cmd_path(const char cmd[], size_t path_len, char path[])
+{
+	if(starts_with(cmd, "!!"))
+	{
+		cmd += 2;
 	}
 
-	if(strchr(command, '/') == NULL)
+	if(contains_slash(cmd))
 	{
-		return executable_exists_in_path(command);
+		copy_str(path, path_len, cmd);
+		return 0;
 	}
 	else
 	{
-		return executable_exists(command);
+		return complete_cmd_in_path(cmd, path_len, path);
 	}
 }
 
-/* Checks for executable in all directories in PATH environment variables. */
+/* Completes path to executable using all directories from PATH environment
+ * variable.  Returns zero on success, otherwise non-zero is returned. */
 static int
-executable_exists_in_path(const char command_name[])
+complete_cmd_in_path(const char cmd[], size_t path_len, char path[])
 {
 	size_t i;
 	size_t paths_count;
@@ -854,29 +953,30 @@ executable_exists_in_path(const char command_name[])
 	paths = get_paths(&paths_count);
 	for(i = 0; i < paths_count; i++)
 	{
-		char full_path[PATH_MAX];
-		snprintf(full_path, sizeof(full_path), "%s/%s", paths[i], command_name);
+		char tmp_path[PATH_MAX];
+		snprintf(tmp_path, sizeof(tmp_path), "%s/%s", paths[i], cmd);
 
-		if(executable_exists(full_path))
+		/* Need to check for executable, not just a file, as this additionally
+		 * checks for path with different executable extensions on Windows. */
+		if(executable_exists(tmp_path))
 		{
-			return 1;
+			copy_str(path, path_len, tmp_path);
+			return 0;
 		}
 	}
-	return 0;
+	return 1;
 }
 
-/* Checks for executable by its full path. */
+/* Checks for executable by its path.  Mutates path by appending executable
+ * prefixes on Windows.  Returns non-zero if path points to an executable,
+ * otherwise zero is returned. */
 static int
-executable_exists(const char full_path[])
+executable_exists(const char path[])
 {
 #ifndef _WIN32
-	if(!path_exists(full_path))
-	{
-		return 0;
-	}
-	return access(full_path, X_OK) == 0;
+	return access(path, X_OK) == 0;
 #else
-	return win_executable_exists(full_path);
+	return win_executable_exists(path);
 #endif
 }
 

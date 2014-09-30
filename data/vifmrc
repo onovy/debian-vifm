@@ -1,5 +1,5 @@
 " vim: filetype=vifm :
-" Sample configuration file for vifm (last updated: 2 Jun, 2012)
+" Sample configuration file for vifm (last updated: 27 Jun, 2013)
 " You can edit this file by hand.
 " The " character at the beginning of a line comments out the line.
 " Blank lines are ignored.
@@ -167,7 +167,7 @@ filetype *.wav,*.mp3,*.flac,*.ogg,*.m4a
        \ {Play using ffplay}
        \ ffplay %c,
        \ {Play using MPlayer}
-       \ play_music %f,
+       \ mplayer %f,
 fileviewer *.mp3 mp3info
 
 " Video
@@ -179,7 +179,7 @@ filextype *.avi,*.mp4,*.wmv,*.dat,*.3gp,*.ogv,*.mkv,*.mpg,*.vob,*.flv
         \ {View using mplayer}
         \ mplayer %f,
 fileviewer *.avi,*.mp4,*.wmv,*.dat,*.3gp,*.ogv,*.mkv,*.mpg,*.vob
-         \ ffprobe -show_files -pretty %f 2> /dev/null
+         \ ffprobe -pretty %c 2>&1
 
 " Web
 filetype *.html,*.htm links,mozilla,uzbl-browser %f %i &
@@ -252,7 +252,7 @@ filextype *.pro qtcreator %f &
 filextype */
         \ {View in thunar}
         \ Thunar %f &,
-fileview */ tree %f
+fileview .*/,*/ tree %f
 
 " Open all other files with default system programs (you can also remove all
 " :file[x]type commands above to ensure they don't interfere with system-wide
@@ -271,7 +271,7 @@ fileview */ tree %f
 " set vifminfo=options,filetypes,commands,bookmarks,dhistory,state,cs
 " Like in vi
 set vifminfo=dhistory,savedirs,chistory,state,tui,shistory,
-    \phistory,dirstack,registers,bookmarks
+    \phistory,fhistory,dirstack,registers,bookmarks
 
 " Sample mappings
 

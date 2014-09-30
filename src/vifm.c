@@ -27,9 +27,10 @@
 
 #include <unistd.h> /* getcwd, stat, sysconf */
 
-#include <limits.h> /* PATH_MAX */
 #include <locale.h> /* setlocale */
-#include <string.h> /* strncpy */
+#include <stdio.h> /* fputs() puts() */
+#include <stdlib.h> /* exit() */
+#include <string.h>
 
 #include "cfg/config.h"
 #include "cfg/info.h"
@@ -40,6 +41,7 @@
 #include "modes/view.h"
 #include "utils/env.h"
 #include "utils/fs.h"
+#include "utils/fs_limits.h"
 #include "utils/log.h"
 #include "utils/macros.h"
 #include "utils/path.h"
@@ -49,6 +51,7 @@
 #include "background.h"
 #include "bookmarks.h"
 #include "builtin_functions.h"
+#include "color_manager.h"
 #include "color_scheme.h"
 #include "commands.h"
 #include "commands_completion.h"
@@ -66,6 +69,7 @@
 #include "signals.h"
 #include "sort.h"
 #include "status.h"
+#include "trash.h"
 #include "ui.h"
 #include "undo.h"
 #include "version.h"
@@ -76,9 +80,12 @@
 #define CONF_DIR "(%HOME%/.vifm or %APPDATA%/Vifm)"
 #endif
 
-static void quit_on_invalid_arg(void);
+static void quit_on_arg_parsing(void);
 static void parse_recieved_arguments(char *args[]);
 static void remote_cd(FileView *view, const char *path, int handle);
+static void load_scheme(void);
+static void convert_configs(void);
+static int run_converter(int vifm_like_mode);
 
 static void
 show_version_msg(void)
@@ -109,8 +116,10 @@ show_help_msg(void)
 	puts("  If no path is given vifm will start in the current working directory.\n");
 	puts("  vifm --logging");
 	puts("    log some errors to " CONF_DIR "/log.\n");
+#ifdef ENABLE_REMOTE_CMDS
 	puts("  vifm --remote");
 	puts("    passes all arguments that left in command line to active vifm server.\n");
+#endif
 	puts("  vifm -c <command> | +<command>");
 	puts("    run <command> on startup.\n");
 	puts("  vifm --version | -v");
@@ -160,7 +169,7 @@ parse_args(int argc, char *argv[], const char *dir, char *lwin_path,
 	int x;
 	int select = 0;
 
-	(void)my_chdir(dir);
+	(void)vifm_chdir(dir);
 
 	/* Get Command Line Arguments */
 	for(x = 1; x < argc; x++)
@@ -169,14 +178,16 @@ parse_args(int argc, char *argv[], const char *dir, char *lwin_path,
 		{
 			select = 1;
 		}
+#ifdef ENABLE_REMOTE_CMDS
 		else if(!strcmp(argv[x], "--remote"))
 		{
 			if(!ipc_server())
 			{
 				ipc_send(argv + x + 1);
-				quit_on_invalid_arg();
+				quit_on_arg_parsing();
 			}
 		}
+#endif
 		else if(!strcmp(argv[x], "-f"))
 		{
 			cfg.vim_filter = 1;
@@ -187,12 +198,12 @@ parse_args(int argc, char *argv[], const char *dir, char *lwin_path,
 		else if(!strcmp(argv[x], "--version") || !strcmp(argv[x], "-v"))
 		{
 			show_version_msg();
-			quit_on_invalid_arg();
+			quit_on_arg_parsing();
 		}
 		else if(!strcmp(argv[x], "--help") || !strcmp(argv[x], "-h"))
 		{
 			show_help_msg();
-			quit_on_invalid_arg();
+			quit_on_arg_parsing();
 		}
 		else if(!strcmp(argv[x], "--logging"))
 		{
@@ -203,7 +214,7 @@ parse_args(int argc, char *argv[], const char *dir, char *lwin_path,
 			if(x == argc - 1)
 			{
 				puts("Argument missing after \"-c\"");
-				quit_on_invalid_arg();
+				quit_on_arg_parsing();
 			}
 			/* do nothing, it's handeled in exec_startup_commands() */
 			x++;
@@ -230,20 +241,26 @@ parse_args(int argc, char *argv[], const char *dir, char *lwin_path,
 		else if(curr_stats.load_stage == 0)
 		{
 			show_help_msg();
-			quit_on_invalid_arg();
+			quit_on_arg_parsing();
 		}
+#ifdef ENABLE_REMOTE_CMDS
 		else
 		{
 			show_error_msgf("--remote error", "Invalid argument: %s", argv[x]);
 		}
+#endif
 	}
 }
 
+/* Quits during argument parsing when it's allowed (e.g. not for remote
+ * commands). */
 static void
-quit_on_invalid_arg(void)
+quit_on_arg_parsing(void)
 {
 	if(curr_stats.load_stage == 0)
+	{
 		exit(1);
+	}
 }
 
 static void
@@ -263,31 +280,6 @@ check_path_for_file(FileView *view, const char *path, int handle)
 	}
 }
 
-static int
-run_converter(int vifm_like)
-{
-#ifndef _WIN32
-	char buf[PATH_MAX];
-	snprintf(buf, sizeof(buf), "vifmrc-converter %d", vifm_like);
-	return shellout(buf, -1, 1);
-#else
-	TCHAR buf[PATH_MAX + 2];
-
-	if(GetModuleFileName(NULL, buf, ARRAY_LEN(buf)) == 0)
-		return -1;
-
-	*(_tcsrchr(buf, _T('\\')) + 1) = _T('\0');
-	if(vifm_like == 2)
-		_tcscat(buf, _T("vifmrc-converter 2"));
-	else if(vifm_like == 1)
-		_tcscat(buf, _T("vifmrc-converter 1"));
-	else
-		_tcscat(buf, _T("vifmrc-converter 0"));
-
-	return exec_program(buf);
-#endif
-}
-
 int
 main(int argc, char *argv[])
 {
@@ -299,7 +291,6 @@ main(int argc, char *argv[])
 	int lwin_handle = 0, rwin_handle = 0;
 	int old_config;
 	int no_configs;
-	int lcd, rcd;
 
 	init_config();
 
@@ -327,14 +318,11 @@ main(int argc, char *argv[])
 	init_builtin_functions();
 	update_path_env(1);
 
-	if(init_status() != 0)
+	if(init_status(&cfg) != 0)
 	{
 		puts("Error during session status initialization.");
 		return -1;
 	}
-
-	curr_view = &lwin;
-	other_view = &rwin;
 
 	no_configs = is_in_string_array(argv + 1, argc - 1, "--no-configs");
 
@@ -358,40 +346,40 @@ main(int argc, char *argv[])
 
 	init_background();
 
-	lcd = set_view_path(&lwin, lwin_path);
-	rcd = set_view_path(&rwin, rwin_path);
+	set_view_path(&lwin, lwin_path);
+	set_view_path(&rwin, rwin_path);
 
-	if(lcd && !rcd && curr_view != &lwin)
+	/* Force view switch when path is specified for invisible pane. */
+	if(lwin_path[0] != '\0' && rwin_path[0] == '\0' && curr_view != &lwin)
+	{
 		change_window();
+	}
 
 	load_initial_directory(&lwin, dir);
 	load_initial_directory(&rwin, dir);
+
+	/* Force split view when two paths are specified on command-line. */
+	if(lwin_path[0] != '\0' && rwin_path[0] != '\0')
+	{
+		curr_stats.number_of_windows = 2;
+	}
 
 	/* Setup the ncurses interface. */
 	if(!setup_ncurses_interface())
 		return -1;
 
+	colmgr_init(COLOR_PAIRS);
 	init_modes();
-	init_undo_list(&perform_operation, NULL, &cfg.undo_levels);
+	init_undo_list(&perform_operation, NULL, &ui_cancellation_requested,
+			&cfg.undo_levels);
 	load_local_options(curr_view);
 
 	curr_stats.load_stage = 1;
 
 	if(!old_config && !no_configs)
 	{
-		if(are_old_color_schemes())
-		{
-			if(run_converter(2) != 0)
-			{
-				endwin();
-				fputs("Problems with running vifmrc-converter", stderr);
-				exit(0);
-			}
-		}
-		if(find_color_scheme(curr_stats.color_scheme))
-			load_color_scheme(curr_stats.color_scheme);
-		load_color_scheme_colors();
-		exec_config();
+		load_scheme();
+		source_config();
 	}
 
 	write_color_scheme_file();
@@ -399,56 +387,24 @@ main(int argc, char *argv[])
 
 	if(old_config && !no_configs)
 	{
-		int vifm_like;
-		int result;
-		if(!query_user_menu("Configuration update", "Your vifmrc will be "
-				"upgraded to a new format.  Your current configuration will be copied "
-				"before performing any changes, but if you don't want to take the risk "
-				"and would like to make one more copy say No to exit vifm.  Continue?"))
-		{
-#ifdef _WIN32
-			system("cls");
-#endif
-			endwin();
-			exit(0);
-		}
-
-		vifm_like = !query_user_menu("Configuration update", "This version of vifm "
-				"is able to save changes in the configuration files automatically when "
-				"quitting, as it was possible in older versions.  It is from now on "
-				"recommended though, to save permanent changes manually in the "
-				"configuration file as it is done in vi/vim.  Do you want vifm to "
-				"behave like vi/vim?");
-
-		result = run_converter(vifm_like);
-		if(result != 0)
-		{
-			endwin();
-			fputs("Problems with running vifmrc-converter", stderr);
-			exit(0);
-		}
-
-		show_error_msg("Configuration update", "Your vifmrc has been upgraded to "
-				"new format, you can find its old version in " CONF_DIR "/vifmrc.bak.  "
-				"vifm will not write anything to vifmrc, and all variables that are "
-				"saved between runs of vifm are stored in " CONF_DIR "/vifminfo now "
-				"(you can edit it by hand, but do it carefully).  You can control what "
-				"vifm stores in vifminfo with 'vifminfo' option.");
+		convert_configs();
 
 		curr_stats.load_stage = 0;
 		read_info_file(0);
 		curr_stats.load_stage = 1;
 
-		(void)set_view_path(&lwin, lwin_path);
-		(void)set_view_path(&rwin, rwin_path);
+		set_view_path(&lwin, lwin_path);
+		set_view_path(&rwin, rwin_path);
 
 		load_initial_directory(&lwin, dir);
 		load_initial_directory(&rwin, dir);
 
-		exec_config();
+		source_config();
 	}
 
-	create_trash_dir();
+	/* Ensure trash directories exist, it might not have been called during
+	 * configuration file sourcing if there is no `set trashdir=...` command. */
+	(void)set_trash_dir(cfg.trash_dir);
 
 	check_path_for_file(&lwin, lwin_path, lwin_handle);
 	check_path_for_file(&rwin, rwin_path, rwin_handle);
@@ -458,6 +414,14 @@ main(int argc, char *argv[])
 	exec_startup_commands(argc, argv);
 	update_screen(UT_FULL);
 	modes_update();
+
+	/* Update histories of the views to ensure that their current directories,
+	 * which might have been set using command-line parameters, are stored in the
+	 * history.  This is not done automatically as history manipulation should be
+	 * postponed until views are fully loaded, otherwise there is no correct
+	 * information about current file and relative cursor position. */
+	save_view_history(&lwin, NULL, NULL, -1);
+	save_view_history(&rwin, NULL, NULL, -1);
 
 	curr_stats.load_stage = 3;
 
@@ -473,17 +437,20 @@ parse_recieved_arguments(char *args[])
 	char rwin_path[PATH_MAX] = "";
 	int lwin_handle = 0, rwin_handle = 0;
 	int argc = 0;
-	int lcd, rcd;
 
 	while(args[argc] != NULL)
+	{
 		argc++;
+	}
 
 	parse_args(argc, args, args[0], lwin_path, rwin_path, &lwin_handle,
 			&rwin_handle);
 	exec_startup_commands(argc, args);
 
 	if(get_mode() != NORMAL_MODE && get_mode() != VIEW_MODE)
+	{
 		return;
+	}
 
 #ifdef _WIN32
 	SwitchToThisWindow(GetConsoleWindow(), TRUE);
@@ -491,14 +458,20 @@ parse_recieved_arguments(char *args[])
 	SetForegroundWindow(GetConsoleWindow());
 #endif
 
-	if((lcd = view_is_at_path(&lwin, lwin_path)))
+	if(view_needs_cd(&lwin, lwin_path))
+	{
 		remote_cd(&lwin, lwin_path, lwin_handle);
+	}
 
-	if((rcd = view_is_at_path(&rwin, rwin_path)))
+	if(view_needs_cd(&rwin, rwin_path))
+	{
 		remote_cd(&rwin, rwin_path, rwin_handle);
+	}
 
-	if(lcd && !rcd && curr_view != &lwin)
+	if(lwin_path[0] != '\0' && rwin_path[0] == '\0' && curr_view != &lwin)
+	{
 		change_window();
+	}
 
 	clean_status_bar();
 	curr_stats.save_msg = 0;
@@ -523,6 +496,109 @@ remote_cd(FileView *view, const char *path, int handle)
 
 	(void)cd(view, view->curr_dir, buf);
 	check_path_for_file(view, path, handle);
+}
+
+/* Loads color scheme.  Converts old format to the new one if needed.
+ * Terminates application with error message on error. */
+static void
+load_scheme(void)
+{
+	if(are_old_color_schemes())
+	{
+		if(run_converter(2) != 0)
+		{
+			endwin();
+			fputs("Problems with running vifmrc-converter\n", stderr);
+			exit(0);
+		}
+	}
+	if(color_scheme_exists(curr_stats.color_scheme))
+	{
+		load_color_scheme(curr_stats.color_scheme);
+	}
+	load_color_scheme_colors();
+}
+
+/* Converts old versions of configuration files to new ones.  Terminates
+ * application with error message on error or when user chooses to do not update
+ * anything. */
+static void
+convert_configs(void)
+{
+	int vifm_like_mode;
+
+	if(!query_user_menu("Configuration update", "Your vifmrc will be "
+			"upgraded to a new format.  Your current configuration will be copied "
+			"before performing any changes, but if you don't want to take the risk "
+			"and would like to make one more copy say No to exit vifm.  Continue?"))
+	{
+#ifdef _WIN32
+		system("cls");
+#endif
+		endwin();
+		exit(0);
+	}
+
+	vifm_like_mode = !query_user_menu("Configuration update", "This version of "
+			"vifm is able to save changes in the configuration files automatically "
+			"when quitting, as it was possible in older versions.  It is from now "
+			"on recommended though, to save permanent changes manually in the "
+			"configuration file as it is done in vi/vim.  Do you want vifm to "
+			"behave like vi/vim?");
+
+	if(run_converter(vifm_like_mode) != 0)
+	{
+		endwin();
+		fputs("Problems with running vifmrc-converter\n", stderr);
+		exit(0);
+	}
+
+	show_error_msg("Configuration update", "Your vifmrc has been upgraded to "
+			"new format, you can find its old version in " CONF_DIR "/vifmrc.bak.  "
+			"vifm will not write anything to vifmrc, and all variables that are "
+			"saved between runs of vifm are stored in " CONF_DIR "/vifminfo now "
+			"(you can edit it by hand, but do it carefully).  You can control what "
+			"vifm stores in vifminfo with 'vifminfo' option.");
+}
+
+/* Runs vifmrc-converter in mode specified by the vifm_like_mode argument.
+ * Returns zero on success, non-zero otherwise. */
+static int
+run_converter(int vifm_like_mode)
+{
+#ifndef _WIN32
+	char cmd[PATH_MAX];
+	snprintf(cmd, sizeof(cmd), "vifmrc-converter %d", vifm_like_mode);
+	return shellout(cmd, -1, 0);
+#else
+	char cmd[2*PATH_MAX];
+	int returned_exit_code;
+	char *name_part;
+
+	if(GetModuleFileName(NULL, cmd, PATH_MAX) == 0)
+	{
+		return -1;
+	}
+
+	/* Override last path component. */
+	name_part = strrchr(cmd, '\\');
+	name_part = (name_part == NULL) ? cmd : (name_part + 1);
+	switch(vifm_like_mode)
+	{
+		case 2:
+			strcpy(name_part, "vifmrc-converter 2");
+			break;
+		case 1:
+			strcpy(name_part, "vifmrc-converter 1");
+			break;
+
+		default:
+			strcpy(name_part, "vifmrc-converter 0");
+			break;
+	}
+
+	return win_exec_cmd(cmd, &returned_exit_code);
+#endif
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

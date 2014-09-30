@@ -16,6 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "variables.h"
+
 #include <assert.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -30,8 +32,6 @@
 #include "text_buffer.h"
 #include "var.h"
 
-#include "variables.h"
-
 #define VAR_NAME_MAX 64
 #define VAL_LEN_MAX 2048
 
@@ -43,7 +43,9 @@ typedef struct {
 	int removed;
 }envvar_t;
 
-static const char ENV_VAR_NAME_CHARS[] = "abcdefghijklmnopqrstuvwxyz"
+const char ENV_VAR_NAME_FIRST_CHAR[] = "abcdefghijklmnopqrstuvwxyz"
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ_";
+const char ENV_VAR_NAME_CHARS[] = "abcdefghijklmnopqrstuvwxyz"
 	"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
 
 static void init_var(const char *env);
@@ -153,7 +155,7 @@ clear_variables(void)
 }
 
 int
-let_variable(const char *cmd)
+let_variables(const char *cmd)
 {
 	char name[VAR_NAME_MAX + 1];
 	char *p;
@@ -326,6 +328,7 @@ get_record(const char *name)
 			return NULL;
 		vars = p;
 		p = &vars[nvars];
+		nvars++;
 	}
 
 	/* initialize new record */
@@ -339,7 +342,6 @@ get_record(const char *name)
 		free_record(p);
 		return NULL;
 	}
-	nvars++;
 	return p;
 }
 

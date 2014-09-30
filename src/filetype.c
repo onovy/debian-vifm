@@ -17,6 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "filetype.h"
+
 #include <curses.h>
 
 #include <ctype.h> /* isspace() */
@@ -28,8 +30,6 @@
 #include "utils/str.h"
 #include "utils/utils.h"
 #include "globals.h"
-
-#include "filetype.h"
 
 const assoc_record_t NONE_PSEUDO_PROG =
 {
@@ -80,7 +80,7 @@ get_default_program_for_file(const char *file, assoc_record_t *result)
 	while(j < records.count)
 	{
 		char name_buf[NAME_MAX];
-		(void)get_command_name(records.list[j].command, 0, sizeof(name_buf),
+		(void)extract_cmd_name(records.list[j].command, 0, sizeof(name_buf),
 				name_buf);
 		if(external_command_exists_func == NULL ||
 				external_command_exists_func(name_buf))
@@ -108,7 +108,7 @@ get_default_program_for_file(const char *file, assoc_record_t *result)
 }
 
 char *
-get_viewer_for_file(char *file)
+get_viewer_for_file(const char file[])
 {
 	int i = get_filetype_number(file, fileviewers);
 
@@ -443,17 +443,18 @@ add_assoc_record(assoc_records_t *records, const char *command,
 }
 
 void
-add_assoc_records(assoc_records_t *assocs, const assoc_records_t src)
+add_assoc_records(assoc_records_t *assocs, const assoc_records_t *src)
 {
 	int i;
 	void *p;
+	const int src_count = src->count;
 
-	if(src.count == 0)
+	if(src_count == 0)
 	{
 		return;
 	}
 
-	p = realloc(assocs->list, sizeof(assoc_record_t)*(assocs->count + src.count));
+	p = realloc(assocs->list, sizeof(assoc_record_t)*(assocs->count + src_count));
 	if(p == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory");
@@ -462,15 +463,15 @@ add_assoc_records(assoc_records_t *assocs, const assoc_records_t src)
 
 	assocs->list = p;
 
-	for(i = 0; i < src.count; i++)
+	for(i = 0; i < src_count; i++)
 	{
-		assocs->list[assocs->count + i].command = strdup(src.list[i].command);
+		assocs->list[assocs->count + i].command = strdup(src->list[i].command);
 		assocs->list[assocs->count + i].description =
-				strdup(src.list[i].description);
-		assocs->list[assocs->count + i].type = src.list[i].type;
+				strdup(src->list[i].description);
+		assocs->list[assocs->count + i].type = src->list[i].type;
 	}
 
-	assocs->count += src.count;
+	assocs->count += src_count;
 }
 
 static void

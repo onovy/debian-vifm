@@ -17,10 +17,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __COMMANDS_COMPLETION_H__
-#define __COMMANDS_COMPLETION_H__
+#ifndef VIFM__COMMANDS_COMPLETION_H__
+#define VIFM__COMMANDS_COMPLETION_H__
 
-/* identifiers for commands with completion */
+#include <stddef.h> /* size_t */
+
+/* Identifiers for commands with completion. */
 enum
 {
 	COM_CD,
@@ -54,33 +56,50 @@ enum
 	COM_VSPLIT,
 	COM_RENAME,
 	COM_ECHO,
+	COM_EXE,
+	COM_INVERT,
+	COM_IF_STMT,
 };
 
-/* values of type argument for filename_completion() function */
+/* Values of type argument for filename_completion() function. */
 typedef enum
 {
-	CT_ALL,      /* all files and directories */
-	CT_ALL_WOS,  /* all files and directories without trailing slash */
-	CT_ALL_WOE,  /* all files and directories without escaping */
-	CT_FILE,     /* only files in the current directory */
-	CT_FILE_WOE, /* only files in the current directory without escaping */
-	CT_DIRONLY,  /* only directories */
-	CT_EXECONLY, /* only executable files */
-	CT_DIREXEC   /* directories and executable files */
-}CompletionType;
+	CT_ALL,      /* All files and directories. */
+	CT_ALL_WOS,  /* All files and directories without trailing slash. */
+	CT_ALL_WOE,  /* All files and directories without escaping. */
+	CT_FILE,     /* Only files in the current directory. */
+	CT_FILE_WOE, /* Only files in the current directory without escaping. */
+	CT_DIRONLY,  /* Only directories. */
+	CT_EXECONLY, /* Only executable files. */
+	CT_DIREXEC   /* Directories and executable files. */
+}
+CompletionType;
 
 /* argv isn't array of pointers to constant strings to omit type conversion. */
 int complete_args(int id, const char args[], int argc, char *argv[],
 		int arg_pos);
-char * fast_run_complete(const char *cmd);
+
+/* Completes name of an executable after extracting it from the cmd.  Returns
+ * NULL and sets statusbar error message when command is ambiguous, otherwise
+ * newly allocated string, which should be returned by caller, is returned. */
+char * fast_run_complete(const char cmd[]);
+
 void filename_completion(const char *str, CompletionType type);
+
 void complete_user_name(const char *str);
+
 void complete_group_name(const char *str);
+
 /* Checks whether program with given name is an executable that present in the
  * $PATH environment variable or can be found by full path. */
-int external_command_exists(const char command[]);
+int external_command_exists(const char cmd[]);
 
-#endif
+/* Gets path to an executable expanding command name using $PATH if needed.
+ * Might not include extension of a command on Windows.  Returns zero on
+ * success, otherwise non-zero is returned. */
+int get_cmd_path(const char cmd[], size_t path_len, char path[]);
+
+#endif /* VIFM__COMMANDS_COMPLETION_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

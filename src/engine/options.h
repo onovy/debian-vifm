@@ -16,8 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __OPTIONS_H__
-#define __OPTIONS_H__
+#ifndef VIFM__ENGINE__OPTIONS_H__
+#define VIFM__ENGINE__OPTIONS_H__
 
 /* The module processes :set command arguments and handles all operations on
  * options. */
@@ -31,6 +31,8 @@ typedef enum
 	OPT_STRLIST, /* A comma separated list of strings. */
 	OPT_ENUM,    /* An enumeration (one value at a time). */
 	OPT_SET,     /* A set (multiple or none values at a time). */
+	OPT_CHARSET, /* A set of single characters (multiple or none values at a
+	                time). */
 }OPT_TYPE;
 
 /* Operation on an option. */
@@ -38,7 +40,7 @@ typedef enum
 {
 	OP_ON,       /* Boolean value was turned on. */
 	OP_OFF,      /* Boolean value was turned off. */
-	OP_SET,      /* Velue set. */
+	OP_SET,      /* Value set. */
 	OP_MODIFIED, /* Value added/removed (for OPT_INT,  OPT_SET and OPT_STR). */
 	OP_RESET,    /* Value reseted to default. */
 }OPT_OP;
@@ -75,7 +77,10 @@ int set_options(const char args[]);
 /* Completes set arguments list. */
 void complete_options(const char args[], const char **start);
 
-#endif
+/* Completes names of real options (no pseudo options like "all"). */
+void complete_real_option_names(const char beginning[]);
+
+#endif /* VIFM__ENGINE__OPTIONS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

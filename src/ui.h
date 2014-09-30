@@ -17,23 +17,23 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __UI_H__
-#define __UI_H__
+#ifndef VIFM__UI_H__
+#define VIFM__UI_H__
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 
-#include <regex.h>
-
-#include <limits.h> /* PATH_MAX */
 #include <curses.h>
+#include <stddef.h> /* size_t */
 #include <stdint.h> /* uint64_t */
 #include <stdlib.h> /* off_t mode_t... */
 #include <inttypes.h> /* uintmax_t */
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "utils/filter.h"
+#include "utils/fs_limits.h"
 #include "color_scheme.h"
 #include "column_view.h"
 #include "status.h"
@@ -44,6 +44,18 @@
 
 #define SORT_WIN_WIDTH 32
 
+/* Width of the input window (located to the left of position window). */
+#define INPUT_WIN_WIDTH 6
+
+/* Width of the position window (located in the right corner of status line). */
+#define POS_WIN_WIDTH 13
+
+/* Width of the position and input windows. */
+#define FIELDS_WIDTH (INPUT_WIN_WIDTH + POS_WIN_WIDTH)
+
+/* New values should be added at the end of enumeration to do not brake sort
+ * settings stored in vifminfo files.  Also LAST_SORT_OPTION and
+ * SORT_OPTION_COUNT should be updated accordingly. */
 enum
 {
 	SORT_BY_EXTENSION = 1,
@@ -60,8 +72,34 @@ enum
 	SORT_BY_TIME_CHANGED,
 	SORT_BY_TIME_MODIFIED,
 	SORT_BY_INAME,
-	NUM_SORT_OPTIONS = SORT_BY_INAME
+#ifndef _WIN32
+	SORT_BY_PERMISSIONS,
+#endif
+	SORT_BY_TYPE,
+
+	/* Default sort key. */
+#ifndef _WIN32
+	DEFAULT_SORT_KEY = SORT_BY_NAME,
+#else
+	DEFAULT_SORT_KEY = SORT_BY_INAME,
+#endif
+	/* Value of the last sort option. */
+	LAST_SORT_OPTION = SORT_BY_TYPE,
+	/* Number of sort options. */
+	SORT_OPTION_COUNT = LAST_SORT_OPTION,
+	/* Special value to use for unset options. */
+	NO_SORT_OPTION = LAST_SORT_OPTION + 1
 };
+
+/* Type of file numbering. */
+typedef enum
+{
+	NT_NONE = 0x00,            /* Displaying of file numbers is disabled. */
+	NT_SEQ  = 0x01,            /* Number are displayed as is (sequentially). */
+	NT_REL  = 0x02,            /* Relative numbers are used for all items. */
+	NT_MIX  = NT_SEQ | NT_REL, /* All numbers are relative except for current. */
+}
+NumberingType;
 
 typedef struct
 {
@@ -91,7 +129,7 @@ typedef struct
 	int list_num; /* to be used by sorting comparer to perform stable sort */
 }dir_entry_t;
 
-typedef struct _FileView
+typedef struct
 {
 	WINDOW *win;
 	WINDOW *title;
@@ -131,12 +169,43 @@ typedef struct _FileView
 	int user_selection;
 	int explore_mode; /* shows whether this view is used for file exploring */
 
-	char *filename_filter; /* regexp for filtering files in dir list, not NULL */
-	char *prev_filter; /* for remove/restore with filename_filter, not NULL */
-	int filter_is_valid;
-	regex_t filter_regex;
+	/* Filter which is controlled by user. */
+	filter_t manual_filter;
+	/* Stores previous raw value of the manual_filter to make filter restoring
+	 * possible.  Not NULL. */
+	char *prev_manual_filter;
 
-	char sort[NUM_SORT_OPTIONS];
+	/* Filter which is controlled automatically and never filled by user. */
+	filter_t auto_filter;
+	/* Stores previous raw value of the auto_filter to make filter restoring
+	 * possible.  Not NULL. */
+	char *prev_auto_filter;
+
+	/* Various parameters related to local filter. */
+	struct
+	{
+		/* Local filename filter. */
+		filter_t filter;
+		/* Whether interactive filtering in progress. */
+		int in_progress;
+		/* Removed value of local filename filter.  Stored for restore operation. */
+		char *prev;
+		/* Temporary storage for local filename filter, when its overwritten. */
+		char *saved;
+
+		/* Unfiltered file entries. */
+		dir_entry_t *unfiltered;
+		/* Number of unfiltered entries. */
+		size_t unfiltered_count;
+
+		/* List of previous cursor positions in the unfiltered array. */
+		int *poshist;
+		/* Number of elements in the poshist field. */
+		size_t poshist_len;
+	}
+	local_filter;
+
+	char sort[SORT_OPTION_COUNT];
 
 	int history_num;
 	int history_pos;
@@ -152,7 +221,12 @@ typedef struct _FileView
 	size_t max_filename_len; /* max length of filename in current directory */
 	size_t column_count; /* number of columns in the view, used for list view */
 	size_t window_cells; /* max number of files that can be displayed */
-}FileView;
+
+	NumberingType num_type; /* Whether and how line numbers are displayed. */
+	int num_width; /* Min number of characters reserved for number field. */
+	int real_num_width; /* Real character count reserved for number field. */
+}
+FileView;
 
 FileView lwin;
 FileView rwin;
@@ -181,6 +255,9 @@ float get_splitter_pos(int max);
  * argument). */
 void update_screen(UpdateType update_kind);
 void update_pos_window(FileView *view);
+/* Sets text to be displayed in position window (ruler).  Real window update is
+ * postponed for efficiency reasons. */
+void ui_pos_window_set(const char val[]);
 void status_bar_messagef(const char *format, ...);
 void status_bar_message(const char *message);
 void status_bar_error(const char *message);
@@ -193,8 +270,13 @@ void update_input_bar(const wchar_t *str);
 void clear_num_window(void);
 void show_progress(const char *msg, int period);
 void redraw_lists(void);
-int load_color_scheme(const char *name);
-void wprint(WINDOW *win, const char *str);
+/* Returns new value for curr_stats.save_msg. */
+int load_color_scheme(const char name[]);
+/* Prints str in current window position. */
+void wprint(WINDOW *win, const char str[]);
+/* Prints str in current window position with specified line attributes, which
+ * set during print operation only. */
+void wprinta(WINDOW *win, const char str[], int line_attrs);
 /* Sets inner flag or signals about needed view update in some other way.
  * It doesn't perform any update, just request one to happen in the future. */
 void request_view_update(FileView *view);
@@ -202,8 +284,73 @@ void request_view_update(FileView *view);
 void resize_for_menu_like(void);
 /* Performs real pane redraw in the TUI and maybe some related operations. */
 void refresh_view_win(FileView *view);
+/* Layouts the view in correct corner with correct relative position
+ * (horizontally/vertically, left-top/right-bottom). */
+void move_window(FileView *view, int horizontally, int first);
+/* Switches two panes saving current windows as the active one (left/top or
+ * right/bottom). */
+void switch_windows(void);
+/* Swaps current and other views. */
+void switch_panes(void);
+/* Switches to other pane, ignoring state of the preview and entering view mode
+ * in case the other pane has explore mode active. */
+void go_to_other_pane(void);
+/* Splits windows according to the value of orientation. */
+void split_view(SPLIT orientation);
+/* Switches view to one-window mode. */
+void only(void);
+/* File name formatter which takes 'classify' option into account and applies
+ * type dependent name decorations. */
+void format_entry_name(FileView *view, size_t pos, size_t buf_len, char buf[]);
+/* Moves cursor to position specified by coordinates checking result of the
+ * movement. */
+void checked_wmove(WINDOW *win, int y, int x);
+/* Notifies TUI module about updated window of the view. */
+void ui_view_win_changed(FileView *view);
+/* Resets selection of the view and reloads it preserving cursor position. */
+void ui_view_reset_selection_and_reload(FileView *view);
+/* Reloads visible lists of files preserving current position of cursor. */
+void ui_views_reload_visible_filelists(void);
+/* Reloads lists of files preserving current position of cursor. */
+void ui_views_reload_filelists(void);
+/* Updates title of the views. */
+void ui_views_update_titles(void);
+/* Updates title of the view. */
+void ui_view_title_update(FileView *view);
+/* Looks for the given key in sort option.  Returns non-zero when found,
+ * otherwise zero is returned. */
+int ui_view_sort_list_contains(const char sort[SORT_OPTION_COUNT], char key);
+/* Ensures that list of sorting keys contains either "name" or "iname". */
+void ui_view_sort_list_ensure_well_formed(char sort[SORT_OPTION_COUNT]);
+/* Checks whether file numbers should be displayed for the view.  Returns
+ * non-zero if so, otherwise zero is returned. */
+int ui_view_displays_numbers(const FileView *const view);
+/* Checks whether view is visible on the screen.  Returns non-zero if so,
+ * otherwise zero is returned. */
+int ui_view_is_visible(const FileView *const view);
 
-#endif
+/* Operation cancellation. */
+
+/* Resets state so that ui_cancellation_requested() returns zero. */
+void ui_cancellation_reset(void);
+
+/* Enables handling of cancellation requests through the UI. */
+void ui_cancellation_enable(void);
+
+/* External callback for notifying this unit about cancellation request.  Should
+ * be called between ui_cancellation_enable() and ui_cancellation_disable(). */
+void ui_cancellation_request(void);
+
+/* If cancellation is enabled, checks whether cancelling of current operation is
+ * requested.  Should be called between ui_cancellation_enable() and
+ * ui_cancellation_disable().  Returns non-zero if so, otherwise zero is
+ * returned. */
+int ui_cancellation_requested(void);
+
+/* Disables handling of cancellation requests through the UI. */
+void ui_cancellation_disable(void);
+
+#endif /* VIFM__UI_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

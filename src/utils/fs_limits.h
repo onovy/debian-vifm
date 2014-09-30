@@ -16,12 +16,12 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __FS_LIMITS_H__
-#define __FS_LIMITS_H__
+#ifndef VIFM__UTILS__FS_LIMITS_H__
+#define VIFM__UTILS__FS_LIMITS_H__
 
-/* Define NAME_MAX constant in a most portable way. */
+/* Define NAME_MAX and PATH_MAX constants in a most portable way. */
 
-#include <limits.h> /* NAME_MAX */
+#include <limits.h> /* NAME_MAX PATH_MAX */
 
 /* For Windows. */
 #if !defined(NAME_MAX) && defined(_WIN32)
@@ -29,7 +29,7 @@
 #define NAME_MAX (FILENAME_MAX)
 #endif
 
-/* For Solaris */
+/* For Solaris. */
 #ifndef NAME_MAX
 #include <dirent.h>
 #ifndef MAXNAMLEN
@@ -38,7 +38,12 @@
 #define NAME_MAX MAXNAMLEN
 #endif
 
-#endif /* __FS_LIMITS_H__ */
+/* For GNU Hurd (which doesn't have path length limit at all). */
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+#endif /* VIFM__UTILS__FS_LIMITS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

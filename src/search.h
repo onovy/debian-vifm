@@ -17,21 +17,34 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __SEARCH_H__
-#define __SEARCH_H__
+#ifndef VIFM__SEARCH_H__
+#define VIFM__SEARCH_H__
 
 #include "ui.h"
 
-int find_pattern(FileView *view, const char *pattern, int backward, int move);
-/* returns non-zero if pattern was found */
-int find_next_pattern(FileView *view, int wrap);
-/* returns non-zero if pattern was found */
-int find_previous_pattern(FileView *view, int wrap);
+/* Search and navigation functions. */
+
+/* The move argument specifies whether cursor in the view should be adjusted to
+ * point to just found file in case of successful search.  Sets *found to
+ * non-zero if pattern was found, otherwise it's assigned zero.  Returns
+ * non-zero when a message was printed to a user, otherwise zero is returned. */
+int find_pattern(FileView *view, const char pattern[], int backward, int move,
+		int *const found);
+
+/* Looks for a search match in specified direction from current cursor position
+ * taking search wrapping into account.  Returns non-zero if something was
+ * found, otherwise zero is returned. */
+int goto_search_match(FileView *view, int backward);
+
+/* Auxiliary functions. */
+
+/* Prints results or error message about search operation to the user. */
+void print_search_msg(const FileView *view, int backward);
 
 /* Prints error message about failed search to the user. */
-void print_search_fail_msg(FileView *view, int backward);
+void print_search_fail_msg(const FileView *view, int backward);
 
-#endif
+#endif /* VIFM__SEARCH_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

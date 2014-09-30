@@ -17,82 +17,113 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __UTILS_H__
-#define __UTILS_H__
-
-#ifdef _WIN32
-#include <windef.h>
-#endif
+#ifndef VIFM__UTILS__UTILS_H__
+#define VIFM__UTILS__UTILS_H__
 
 #include <regex.h>
 
-#include <sys/types.h> /* mode_t */
-#ifndef _WIN32
-#include <sys/wait.h> /* WEXITSTATUS() WIFEXITED() */
-#endif
+#include <sys/types.h> /* gid_t mode_t uid_t */
 
 #include <stddef.h> /* size_t */
 #include <stdint.h> /* uint64_t */
-#include <wchar.h> /* wchar_t ... */
-
-#include "macros.h"
-
-#ifdef _WIN32
-#ifndef WEXITSTATUS
-#define WEXITSTATUS(a) (a)
-#endif
-
-#ifndef WIFEXITED
-#define WIFEXITED(a) 1
-#endif
-
-#define lstat stat
-#endif
+#include <stdio.h> /* FILE */
+#include <wchar.h> /* wchar_t */
 
 /* Regular expressions. */
 
-int get_regexp_cflags(const char *pattern);
+/* Gets flags for compiling a regular expression specified by the pattern taking
+ * 'ignorecase' and 'smartcase' options into account.  Returns regex flags. */
+int get_regexp_cflags(const char pattern[]);
+
+/* Decides whether case should be ignored for the pattern.  Considers
+ * 'ignorecase' and 'smartcase' options.  Returns non-zero when case should be
+ * ignored, otherwise zero is returned. */
+int regexp_should_ignore_case(const char pattern[]);
+
 const char * get_regexp_error(int err, regex_t *re);
 
-/* Program running. */
+/* Shell and program running. */
 
-int my_system(char *command);
-void _gnuc_noreturn run_from_fork(int pipe[2], int err, char *cmd);
+/* Executes an external command.  Clears the screen up on Windows before running
+ * the command.  Returns error code, which is zero on success. */
+int vifm_system(char command[]);
+
+/* Pauses shell.  Assumes that curses interface is off. */
+void pause_shell(void);
+
+/* Called after return from a shellout to provide point to recover UI. */
+void recover_after_shellout(void);
 
 /* Other functions. */
 
-void get_perm_string(char *buf, int len, mode_t mode);
-int is_on_slow_fs(const char *full_path);
+struct mntent;
+
+/* Client of the traverse_mount_points() function.  Should return non-zero to
+ * stop traversal. */
+typedef int (*mptraverser)(struct mntent *entry, void *arg);
+
+int is_on_slow_fs(const char full_path[]);
+
 /* Fills supplied buffer with user friendly representation of file size.
  * Returns non-zero in case resulting string is a shortened variant of size. */
 int friendly_size_notation(uint64_t num, int str_size, char *str);
-const char * enclose_in_dquotes(const char *str);
-int my_chdir(const char *path);
+
+/* Returns pointer to a statically allocated buffer. */
+const char * enclose_in_dquotes(const char str[]);
+
+/* Changes current working directory of the process.  Does nothing if we already
+ * at path.  Returns zero on success, otherwise -1 is returned. */
+int vifm_chdir(const char path[]);
+
+/* Expands all environment variables and tilde in the path.  Allocates
+ * memory, that should be freed by the caller. */
+char * expand_path(const char path[]);
+
+/* Expands all environment variables in the str of form "$envvar".  Non-zero
+ * escape_vals means escaping suitable for internal use.  Allocates and returns
+ * memory that should be freed by the caller. */
+char * expand_envvars(const char str[], int escape_vals);
+
 /* Makes filename unique by adding an unique suffix to it.
  * Returns pointer to a statically allocated buffer */
-const char * make_name_unique(const char *filename);
+const char * make_name_unique(const char filename[]);
+
+/* Returns process identification in a portable way. */
+unsigned int get_pid(void);
+
 /* Finds command name in the command line and writes it to the buf.
  * Raw mode will preserve quotes on Windows.
  * Returns a pointer to the argument list. */
-char * get_command_name(const char line[], int raw, size_t buf_len, char buf[]);
+char * extract_cmd_name(const char line[], int raw, size_t buf_len, char buf[]);
 
-#ifndef _WIN32
-int get_uid(const char *user, uid_t *uid);
-int get_gid(const char *group, gid_t *gid);
-int S_ISEXE(mode_t mode);
+/* Determines columns needed for a wide character.  Returns number of columns,
+ * on error default value of 1 is returned. */
+int vifm_wcwidth(wchar_t c);
+
+/* Fills buf of the length buf_len with path to mount point of the path.
+ * Returns non-zero on error, otherwise zero is returned. */
+int get_mount_point(const char path[], size_t buf_len, char buf[]);
+
+/* Calls client traverser for each mount point.  Returns non-zero on error,
+ * otherwise zero is returned. */
+int traverse_mount_points(mptraverser client, void *arg);
+
+/* Waits until non-blocking read operation is available for given file
+ * descriptor (uses f if it's not NULL, otherwise fd is used) that is associated
+ * with a process.  Process operation cancellation requests from a user. */
+void wait_for_data_from(pid_t pid, FILE *f, int fd);
+
+/* Blocks/unblocks SIGCHLD signal.  Returns zero on success, otherwise non-zero
+ * is returned. */
+int set_sigchld(int block);
+
+#ifdef _WIN32
+#include "utils_win.h"
 #else
-int wcwidth(wchar_t c);
-int wcswidth(const wchar_t *str, size_t len);
-int exec_program(TCHAR *cmd);
-/* Checks executable existence trying to add executable extensions if needed. */
-int win_executable_exists(const char *path);
-int is_win_executable(const char *name);
-int is_vista_and_above(void);
-const char *attr_str(DWORD attr);
-const char *attr_str_long(DWORD attr);
+#include "utils_nix.h"
 #endif
 
-#endif
+#endif /* VIFM__UTILS__UTILS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

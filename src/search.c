@@ -17,11 +17,14 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "search.h"
+
 #include <sys/types.h>
 
 #include <curses.h>
 #include <regex.h>
 
+#include <assert.h> /* assert() */
 #include <string.h>
 
 #include "cfg/config.h"
@@ -32,89 +35,95 @@
 #include "filelist.h"
 #include "ui.h"
 
-#include "search.h"
+static int find_and_goto_pattern(FileView *view, int wrap_start, int backward);
+static int find_and_goto_match(FileView *view, int start, int backward);
+static void print_result(const FileView *const view, int found, int backward);
 
-enum
+int
+goto_search_match(FileView *view, int backward)
 {
-	PREVIOUS,
-	NEXT
-};
+	const int wrap_start = backward ? view->list_rows : -1;
+	return find_and_goto_pattern(view, wrap_start, backward);
+}
 
+/* Looks for a search match in specified direction navigates to it if match is
+ * found.  Wraps search around specified wrap start position, when requested.
+ * Returns non-zero if something was found, otherwise zero is returned. */
 static int
-find_next_pattern_match(FileView *view, int start, int direction)
+find_and_goto_pattern(FileView *view, int wrap_start, int backward)
 {
-	int found = 0;
-	int x;
-
-	if(direction == PREVIOUS)
+	if(!find_and_goto_match(view, view->list_pos, backward))
 	{
-		for(x = start - 1; x > 0; x--)
+		if(!cfg.wrap_scan || !find_and_goto_match(view, wrap_start, backward))
 		{
-			if(view->dir_entry[x].search_match)
-			{
-				found = 1;
-				view->list_pos = x;
-				break;
-			}
+			return 0;
 		}
 	}
-	else if(direction == NEXT)
-	{
-		for(x = start + 1; x < view->list_rows; x++)
-		{
-			if(view->dir_entry[x].search_match)
-			{
-				found = 1;
-				view->list_pos = x;
-				break;
-			}
-		}
-	}
-	return found;
-}
-
-/* returns non-zero if pattern was found */
-int
-find_previous_pattern(FileView *view, int wrap)
-{
-	if(find_next_pattern_match(view, view->list_pos, PREVIOUS))
-		move_to_list_pos(view, view->list_pos);
-	else if(wrap && find_next_pattern_match(view, view->list_rows, PREVIOUS))
-		move_to_list_pos(view, view->list_pos);
-	else
-		return 0;
+	move_to_list_pos(view, view->list_pos);
 	return 1;
 }
 
-/* returns non-zero if pattern was found */
-int
-find_next_pattern(FileView *view, int wrap)
+/* Looks for a search match in specified direction from given start position and
+ * navigates to it if match is found.  Starting position is not included in
+ * searched range.  Returns non-zero if something was found, otherwise zero is
+ * returned. */
+static int
+find_and_goto_match(FileView *view, int start, int backward)
 {
-	if(find_next_pattern_match(view, view->list_pos, NEXT))
-		move_to_list_pos(view, view->list_pos);
-	else if(wrap && find_next_pattern_match(view, 0, NEXT))
-		move_to_list_pos(view, view->list_pos);
+	int i;
+	int begin, end, step;
+
+	if(backward)
+	{
+		begin = start - 1;
+		end = -1;
+		step = -1;
+
+		assert(begin >= end && "Wrong range.");
+	}
 	else
-		return 0;
-	return 1;
+	{
+		begin = start + 1;
+		end = view->list_rows;
+		step = 1;
+
+		assert(begin <= end && "Wrong range.");
+	}
+
+	for(i = begin; i != end; i += step)
+	{
+		if(view->dir_entry[i].search_match)
+		{
+			view->list_pos = i;
+			break;
+		}
+	}
+
+	return i != end;
 }
 
 int
-find_pattern(FileView *view, const char *pattern, int backward, int move)
+find_pattern(FileView *view, const char pattern[], int backward, int move,
+		int *const found)
 {
 	int cflags;
-	int found = 0;
+	int nmatches = 0;
 	regex_t re;
 	int x;
 	int err;
 
-	if(move)
+	if(move && cfg.hl_search)
 		clean_selected_files(view);
 	for(x = 0; x < view->list_rows; x++)
 		view->dir_entry[x].search_match = 0;
 
+	*found = 0;
+
 	if(pattern[0] == '\0')
+	{
+		*found = 1;
 		return 0;
+	}
 
 	cflags = get_regexp_cflags(pattern);
 	if((err = regcomp(&re, pattern, cflags)) == 0)
@@ -126,10 +135,10 @@ find_pattern(FileView *view, const char *pattern, int backward, int move)
 		{
 			char buf[NAME_MAX];
 
-			if(stroscmp(view->dir_entry[x].name, "../") == 0)
+			if(is_parent_dir(view->dir_entry[x].name))
 				continue;
 
-			strncpy(buf, view->dir_entry[x].name, sizeof(buf));
+			copy_str(buf, sizeof(buf), view->dir_entry[x].name);
 			chosp(buf);
 			if(regexec(&re, buf, 0, NULL, 0) != 0)
 				continue;
@@ -140,7 +149,7 @@ find_pattern(FileView *view, const char *pattern, int backward, int move)
 				view->dir_entry[x].selected = 1;
 				view->selected_files++;
 			}
-			found++;
+			nmatches++;
 		}
 		regfree(&re);
 	}
@@ -154,28 +163,21 @@ find_pattern(FileView *view, const char *pattern, int backward, int move)
 	/* Need to redraw the list so that the matching files are highlighted */
 	draw_dir_list(view);
 
-	if(found > 0)
+	view->matches = nmatches;
+	if(nmatches > 0)
 	{
-		int was_found = 1;
-		if(move)
+		const int was_found = move ? goto_search_match(view, backward) : 1;
+		*found = was_found;
+
+		if(cfg.hl_search && !was_found)
 		{
-			if(backward)
-				was_found = find_previous_pattern(view, cfg.wrap_scan);
-			else
-				was_found = find_next_pattern(view, cfg.wrap_scan);
+			/* Update the view.  It look might have changed, because of selection. */
+			move_to_list_pos(view, view->list_pos);
 		}
+
 		if(!cfg.hl_search)
 		{
-			view->matches = found;
-
-			if(!was_found)
-			{
-				print_search_fail_msg(view, backward);
-				return 1;
-			}
-
-			status_bar_messagef("%d matching file%s for: %s", found,
-					(found == 1) ? "" : "s", view->regexp);
+			print_result(view, was_found, backward);
 			return 1;
 		}
 		return 0;
@@ -188,8 +190,37 @@ find_pattern(FileView *view, const char *pattern, int backward, int move)
 	}
 }
 
+/* Prints success or error message, determined by the found argument, about
+ * search results to a user. */
+static void
+print_result(const FileView *const view, int found, int backward)
+{
+	if(found)
+	{
+		print_search_msg(view, backward);
+	}
+	else
+	{
+		print_search_fail_msg(view, backward);
+	}
+}
+
 void
-print_search_fail_msg(FileView *view, int backward)
+print_search_msg(const FileView *view, int backward)
+{
+	if(view->matches == 0)
+	{
+		print_search_fail_msg(view, backward);
+	}
+	else
+	{
+		status_bar_messagef("%d matching file%s for: %s", view->matches,
+				(view->matches == 1) ? "" : "s", view->regexp);
+	}
+}
+
+void
+print_search_fail_msg(const FileView *view, int backward)
 {
 	if(!cfg.wrap_scan)
 	{

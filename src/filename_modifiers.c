@@ -16,21 +16,22 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <limits.h> /* PATH_MAX */
+#include "filename_modifiers.h"
+
 #include <stddef.h> /* size_t */
 #include <stdio.h> /* snprintf() */
-#include <string.h> /* strcpy() strchr() strlen() strrchr() */
+#include <string.h> /* memmove() strchr() strlen() strrchr() */
 
 #include "cfg/config.h"
+#include "utils/fs_limits.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "fileops.h"
+#include "status.h"
 #include "ui.h"
 
-#include "filename_modifiers.h"
-
 static const char * apply_mod(const char *path, const char *parent,
-		const char *mod, int *mod_len);
+		const char *mod, int *mod_len, int for_shell);
 static int apply_p_mod(const char *path, const char *parent, char *buf,
 		size_t buf_len);
 static int apply_tilde_mod(const char *path, char *buf, size_t buf_len);
@@ -47,28 +48,33 @@ static int apply_s_gs_mod(const char *path, const char *mod,
 static const char * find_nth_chr(const char *str, char c, int n);
 
 const char *
-apply_mods(const char *path, const char *parent, const char *mod)
+apply_mods(const char path[], const char parent[], const char mod[],
+		int for_shell)
 {
 	static char buf[PATH_MAX];
 	int napplied = 0;
 
-	strcpy(buf, path);
+	copy_str(buf, sizeof(buf), path);
 	while(*mod != '\0')
 	{
 		int mod_len;
-		const char *p = apply_mod(buf, parent, mod, &mod_len);
+		const char *const p = apply_mod(buf, parent, mod, &mod_len, for_shell);
 		if(p == NULL)
+		{
 			break;
-		strcpy(buf, p);
+		}
+		copy_str(buf, sizeof(buf), p);
 		mod += mod_len;
 		napplied++;
 	}
 
 #ifdef _WIN32
-	/* this is needed to run something like explorer.exe, which isn't smart enough
-	 * to understand forward slashes */
-	if(napplied == 0 && stroscmp(cfg.shell, "cmd") != 0)
+	/* This is needed to run something like explorer.exe, which isn't smart enough
+	 * to understand forward slashes. */
+	if(for_shell && curr_stats.shell_type != ST_CMD && napplied == 0)
+	{
 		to_back_slash(buf);
+	}
 #endif
 
 	return buf;
@@ -76,7 +82,8 @@ apply_mods(const char *path, const char *parent, const char *mod)
 
 /* Applies one filename modifiers per call. */
 static const char *
-apply_mod(const char *path, const char *parent, const char *mod, int *mod_len)
+apply_mod(const char *path, const char *parent, const char *mod, int *mod_len,
+		int for_shell)
 {
 	char path_buf[PATH_MAX];
 	static char buf[PATH_MAX];
@@ -87,36 +94,38 @@ apply_mod(const char *path, const char *parent, const char *mod, int *mod_len)
 #endif
 
 	*mod_len = 2;
-	if(strncmp(mod, ":p", 2) == 0)
+	if(starts_with_lit(mod, ":p"))
 		*mod_len += apply_p_mod(path_buf, parent, buf, sizeof(buf));
-	else if(strncmp(mod, ":~", 2) == 0)
+	else if(starts_with_lit(mod, ":~"))
 		*mod_len += apply_tilde_mod(path_buf, buf, sizeof(buf));
-	else if(strncmp(mod, ":.", 2) == 0)
+	else if(starts_with_lit(mod, ":."))
 		*mod_len += apply_dot_mod(path_buf, buf, sizeof(buf));
-	else if(strncmp(mod, ":h", 2) == 0)
+	else if(starts_with_lit(mod, ":h"))
 		*mod_len += apply_h_mod(path_buf, buf, sizeof(buf));
 #ifdef _WIN32
-	else if(strncmp(mod, ":u", 2) == 0)
+	else if(starts_with_lit(mod, ":u"))
 		*mod_len += apply_u_mod(path_buf, buf, sizeof(buf));
 #endif
-	else if(strncmp(mod, ":t", 2) == 0)
+	else if(starts_with_lit(mod, ":t"))
 		*mod_len += apply_t_mod(path_buf, buf, sizeof(buf));
-	else if(strncmp(mod, ":r", 2) == 0)
+	else if(starts_with_lit(mod, ":r"))
 		*mod_len += apply_r_mod(path_buf, buf, sizeof(buf));
-	else if(strncmp(mod, ":e", 2) == 0)
+	else if(starts_with_lit(mod, ":e"))
 		*mod_len += apply_e_mod(path_buf, buf, sizeof(buf));
-	else if(strncmp(mod, ":s", 2) == 0 || strncmp(mod, ":gs", 3) == 0)
+	else if(starts_with_lit(mod, ":s") || starts_with_lit(mod, ":gs"))
 		*mod_len += apply_s_gs_mod(path_buf, mod, buf, sizeof(buf));
 	else
 		return NULL;
 
 #ifdef _WIN32
-	/* this is needed to run something like explorer.exe, which isn't smart enough
-	 * to understand forward slashes */
-	if(strncmp(mod, ":s", 2) != 0 && strncmp(mod, ":gs", 3) != 0)
+	/* This is needed to run something like explorer.exe, which isn't smart enough
+	 * to understand forward slashes. */
+	if(for_shell && curr_stats.shell_type != ST_CMD)
 	{
-		if(stroscmp(cfg.shell, "cmd") != 0)
+		if(!starts_with_lit(mod, ":s") && !starts_with_lit(mod, ":gs"))
+		{
 			to_back_slash(buf);
+		}
 	}
 #endif
 
@@ -221,13 +230,12 @@ apply_t_mod(const char *path, char *buf, size_t buf_len)
 static int
 apply_r_mod(const char *path, char *buf, size_t buf_len)
 {
-	char *slash = strrchr(path, '/');
-	char *dot = strrchr(path, '.');
-	snprintf(buf, buf_len, "%s", path);
-	if(dot == NULL || (slash != NULL && dot < slash) || dot == path ||
-			dot == slash + 1)
-		return 0;
-	buf[dot - path] = '\0';
+	int root_len;
+	const char *ext_pos;
+
+	copy_str(buf, buf_len, path);
+	split_ext(buf, &root_len, &ext_pos);
+
 	return 0;
 }
 
@@ -235,13 +243,13 @@ apply_r_mod(const char *path, char *buf, size_t buf_len)
 static int
 apply_e_mod(const char *path, char *buf, size_t buf_len)
 {
-	char *slash = strrchr(path, '/');
-	char *dot = strrchr(path, '.');
-	if(dot == NULL || (slash != NULL && dot < slash) || dot == path ||
-			dot == slash + 1)
-		snprintf(buf, buf_len, "%s", "");
-	else
-		snprintf(buf, buf_len, "%s", dot + 1);
+	int root_len;
+	const char *ext_pos;
+
+	copy_str(buf, buf_len, path);
+	split_ext(buf, &root_len, &ext_pos);
+	memmove(buf, ext_pos, strlen(ext_pos) + 1);
+
 	return 0;
 }
 

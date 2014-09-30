@@ -17,17 +17,18 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __CONFIG_H__
-#define __CONFIG_H__
+#ifndef VIFM__CFG__CONFIG_H__
+#define VIFM__CFG__CONFIG_H__
 
 #include <curses.h>
 
 #include <stddef.h> /* size_t */
-#include <limits.h> /* PATH_MAX */
 
+#include "../utils/fs_limits.h"
 #include "../color_scheme.h"
 #include "../types.h"
 #include "../ui.h"
+#include "hist.h"
 
 #define VIFM_HELP "vifm-help.txt"
 #define SCRIPTS_DIR "scripts"
@@ -37,7 +38,8 @@ typedef enum
 	DD_ROOT_PARENT    = 1 << 0,
 	DD_NONROOT_PARENT = 1 << 1,
 	NUM_DOT_DIRS      =      2
-}DotDirs;
+}
+DotDirs;
 
 /* Indexes for cfg.decorations. */
 enum
@@ -46,22 +48,24 @@ enum
 	DECORATION_SUFFIX, /* The symbol, which is appended to file name. */
 };
 
-typedef struct
+typedef struct config_t
 {
 	char home_dir[PATH_MAX]; /* ends with a slash */
 	char config_dir[PATH_MAX];
+	/* This one should be set using set_trash_dir() function. */
 	char trash_dir[PATH_MAX];
 	char log_file[PATH_MAX];
 	char *vi_command;
 	int vi_cmd_bg;
 	char *vi_x_command;
 	int vi_x_cmd_bg;
-	int num_bookmarks; /* Number of active bookmarks (set at the moment) */
 	int use_trash;
 	int vim_filter;
-	int use_screen;
+
+	/* Whether support of terminal multiplexers is enabled. */
+	int use_term_multiplexer;
+
 	int use_vim_help;
-	int command_num;
 	int history_len;
 
 	int auto_execute;
@@ -72,14 +76,14 @@ typedef struct
 	char *time_format;
 	char *fuse_home; /* This one should be set using set_fuse_home() function. */
 
-	char **search_history;
-	int search_history_num;
-
-	char **cmd_history;
-	int cmd_history_num;
-
-	char **prompt_history;
-	int prompt_history_num;
+	/* History of command-line commands. */
+	hist_t cmd_hist;
+	/* History of search patterns. */
+	hist_t search_hist;
+	/* History of prompt input. */
+	hist_t prompt_hist;
+	/* History of local filter patterns. */
+	hist_t filter_hist;
 
 	col_scheme_t cs;
 
@@ -112,31 +116,54 @@ typedef struct
 	char *status_line;
 	int lines; /* Terminal height in lines. */
 	int columns; /* Terminal width in characters. */
-	int dot_dirs; /* Controls displaying of dot directories. */
+	/* Controls displaying of dot directories.  Combination of DotDirs flags. */
+	int dot_dirs;
 	char decorations[FILE_TYPE_COUNT][2]; /* Prefixes and suffixes of files. */
+	int trunc_normal_sb_msgs; /* Truncate normal status bar messages if needed. */
+	int filter_inverted_by_default; /* Default inversion value for :filter. */
+	char *apropos_prg; /* apropos tool calling pattern. */
+	char *find_prg; /* find tool calling pattern. */
+	char *grep_prg; /* grep tool calling pattern. */
+	char *locate_prg; /* locate tool calling pattern. */
 }config_t;
 
 extern config_t cfg;
 
 void init_config(void);
 void set_config_paths(void);
-void exec_config(void);
+/* Sources vifmrc file (pointed to by the $MYVIFMRC). */
+void source_config(void);
+/* Returns non-zero on error. */
 int source_file(const char filename[]);
+/* Checks whether vifmrc file (pointed to by the $MYVIFMRC) has old format.
+ * Returns non-zero if so, otherwise zero is returned. */
 int is_old_config(void);
 int are_old_color_schemes(void);
 const char * get_vicmd(int *bg);
 /* Generates name of file inside tmp folder. */
 void generate_tmp_file_name(const char prefix[], char buf[], size_t buf_len);
-void create_trash_dir(void);
 /* Changes size of all histories. */
 void resize_history(size_t new_len);
-/* Sets value of cfg.fuse_home.  Returns non-zero in case of memory allocation
- * error. */
+/* Sets value of cfg.fuse_home.  Returns non-zero in case of error, otherwise
+ * zero is returned. */
 int set_fuse_home(const char new_value[]);
+/* Sets whether support of terminal multiplexers is enabled. */
+void set_use_term_multiplexer(int use_term_multiplexer);
 /* Frees memory previously allocated for specified history items. */
 void free_history_items(const history_t history[], size_t len);
+/* Saves command to command history. */
+void save_command_history(const char command[]);
+/* Saves pattern to search history. */
+void save_search_history(const char pattern[]);
+/* Saves input to prompt history. */
+void save_prompt_history(const char input[]);
+/* Saves input to local filter history. */
+void save_filter_history(const char pattern[]);
 
-#endif
+/* Sets shell invocation command. */
+void cfg_set_shell(const char shell[]);
+
+#endif /* VIFM__CFG__CONFIG_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

@@ -16,10 +16,16 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __VARIABLES_H__
-#define __VARIABLES_H__
+#ifndef VIFM__ENGINE__VARIABLES_H__
+#define VIFM__ENGINE__VARIABLES_H__
 
 /* This module handles :let command */
+
+/* List of valid first characters in the name of an environment variable. */
+extern const char ENV_VAR_NAME_FIRST_CHAR[];
+
+/* List of valid non-first characters in the name of an environment variable. */
+extern const char ENV_VAR_NAME_CHARS[];
 
 /* Initializes variables module.  Should be called before any of other
  * functions.
@@ -39,7 +45,7 @@ void clear_variables(void);
 /* Processes :let command arguments
  * Returns non-zero on error
  */
-int let_variable(const char *cmd);
+int let_variables(const char *cmd);
 
 /* Processes :unlet command arguments
  * Returns non-zero on error
@@ -49,7 +55,7 @@ int unlet_variables(const char *cmd);
 /* Performs :let command completion */
 void complete_variables(const char *cmd, const char **start);
 
-#endif
+#endif /* VIFM__ENGINE__VARIABLES_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

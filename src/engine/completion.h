@@ -16,21 +16,21 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __COMPLETION_H__
-#define __COMPLETION_H__
+#ifndef VIFM__ENGINE__COMPLETION_H__
+#define VIFM__ENGINE__COMPLETION_H__
 
-/*
- * Returns zero on success
- */
+/* Returns zero on success. */
 int add_completion(const char *completion);
 
 void completion_group_end(void);
 
+/* Squashes all existing completion groups into one.  Performs resorting and
+ * de-duplication of resulting single group. */
+void completion_groups_unite(void);
+
 void reset_completion(void);
 
-/*
- * Returns copy of the string or NULL
- */
+/* Returns copy of the string or NULL. */
 char * next_completion(void);
 
 int get_completion_count(void);
@@ -41,12 +41,10 @@ const char ** get_completion_list(void);
 
 int get_completion_pos(void);
 
-/*
- * Go to the last item (probably to user input)
- */
+/* Go to the last item (probably to user input). */
 void rewind_completion(void);
 
-#endif
+#endif /* VIFM__ENGINE__COMPLETION_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

@@ -4,8 +4,10 @@
 #include "seatest.h"
 
 #include "../../src/cfg/config.h"
+#include "../../src/utils/str.h"
 #include "../../src/filelist.h"
 #include "../../src/macros.h"
+#include "../../src/registers.h"
 #include "../../src/ui.h"
 
 #ifdef _WIN32
@@ -86,12 +88,12 @@ test_b_both_have_selection(void)
 {
 	char *expanded;
 
-	expanded = expand_macros(&lwin, "/%b ", "", NULL);
+	expanded = expand_macros("/%b ", "", NULL, 1);
 	assert_string_equal(
 			"/lfi\\ le0 lfile\\\"2 " SL "rwin" SL "rfile1 " SL "rwin" SL "rfile3 " SL "rwin" SL "rfile5 ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "%b", "", NULL);
+	expanded = expand_macros("%b", "", NULL, 1);
 	assert_string_equal(
 			"lfi\\ le0 lfile\\\"2 " SL "rwin" SL "rfile1 " SL "rwin" SL "rfile3 " SL "rwin" SL "rfile5", expanded);
 	free(expanded);
@@ -105,11 +107,11 @@ test_f_both_have_selection(void)
 	lwin.dir_entry[2].selected = 0;
 	lwin.selected_files--;
 
-	expanded = expand_macros(&lwin, "/%f ", "", NULL);
+	expanded = expand_macros("/%f ", "", NULL, 0);
 	assert_string_equal("/lfi\\ le0 ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "%f", "", NULL);
+	expanded = expand_macros("%f", "", NULL, 0);
 	assert_string_equal("lfi\\ le0", expanded);
 	free(expanded);
 }
@@ -121,12 +123,12 @@ test_b_only_lwin_has_selection(void)
 
 	clean_selected_files(&lwin);
 
-	expanded = expand_macros(&lwin, "/%b ", "", NULL);
+	expanded = expand_macros("/%b ", "", NULL, 1);
 	assert_string_equal("/lfile\\\"2 " SL "rwin" SL "rfile1 " SL "rwin" SL "rfile3 " SL "rwin" SL "rfile5 ",
 			expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "%b", "", NULL);
+	expanded = expand_macros("%b", "", NULL, 1);
 	assert_string_equal("lfile\\\"2 " SL "rwin" SL "rfile1 " SL "rwin" SL "rfile3 " SL "rwin" SL "rfile5",
 			expanded);
 	free(expanded);
@@ -139,12 +141,12 @@ test_b_only_rwin_has_selection(void)
 
 	clean_selected_files(&rwin);
 
-	expanded = expand_macros(&lwin, "/%b ", "", NULL);
+	expanded = expand_macros("/%b ", "", NULL, 1);
 	assert_string_equal("/lfi\\ le0 lfile\\\"2 " SL "rwin" SL "rfile5 ",
 			expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "%b", "", NULL);
+	expanded = expand_macros("%b", "", NULL, 1);
 	assert_string_equal("lfi\\ le0 lfile\\\"2 " SL "rwin" SL "rfile5", expanded);
 	free(expanded);
 }
@@ -157,11 +159,11 @@ test_b_noone_has_selection(void)
 	clean_selected_files(&lwin);
 	clean_selected_files(&rwin);
 
-	expanded = expand_macros(&lwin, "/%b ", "", NULL);
+	expanded = expand_macros("/%b ", "", NULL, 1);
 	assert_string_equal("/lfile\\\"2 " SL "rwin" SL "rfile5 ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "%b", "", NULL);
+	expanded = expand_macros("%b", "", NULL, 1);
 	assert_string_equal("lfile\\\"2 " SL "rwin" SL "rfile5", expanded);
 	free(expanded);
 }
@@ -174,8 +176,25 @@ test_no_slash_after_dirname(void)
 	rwin.list_pos = 6;
 	curr_view = &rwin;
 	other_view = &lwin;
-	expanded = expand_macros(&rwin, "%c", "", NULL);
+	expanded = expand_macros("%c", "", NULL, 0);
 	assert_string_equal("rdir6", expanded);
+	free(expanded);
+}
+
+static void
+test_forward_slashes_on_win_for_non_shell(void)
+{
+	char *expanded;
+
+	clean_selected_files(&lwin);
+	clean_selected_files(&rwin);
+
+	expanded = expand_macros("/%b ", "", NULL, 0);
+	assert_string_equal("/lfile\\\"2 /rwin/rfile5 ", expanded);
+	free(expanded);
+
+	expanded = expand_macros("%b", "", NULL, 0);
+	assert_string_equal("lfile\\\"2 /rwin/rfile5", expanded);
 	free(expanded);
 }
 
@@ -188,10 +207,83 @@ test_m(void)
 	rwin.list_pos = 6;
 	curr_view = &rwin;
 	other_view = &lwin;
-	expanded = expand_macros(&rwin, "%M echo log", "", &flags);
+	expanded = expand_macros("%M echo log", "", &flags, 0);
 	assert_string_equal(" echo log", expanded);
 	assert_int_equal(MACRO_MENU_NAV_OUTPUT, flags);
 	free(expanded);
+}
+
+static void
+test_r_well_formed(void)
+{
+	const char *p;
+
+	chdir("test-data/existing-files");
+
+	init_registers();
+
+	p = valid_registers;
+	while(*p != '\0')
+	{
+		char line[32];
+		char *expanded;
+		const char key = *p++;
+		snprintf(line, sizeof(line), "%%r%c", key);
+
+		append_to_register(key, "a");
+		append_to_register(key, "b");
+		append_to_register(key, "c");
+
+		expanded = expand_macros(line, NULL, NULL, 0);
+		if(key == '_')
+		{
+			assert_string_equal("", expanded);
+		}
+		else
+		{
+			assert_string_equal("a b c", expanded);
+		}
+		free(expanded);
+	}
+
+	clear_registers();
+
+	chdir("../..");
+}
+
+static void
+test_r_ill_formed(void)
+{
+	char key;
+	char expected[] = "a b cx";
+
+	chdir("test-data/existing-files");
+
+	init_registers();
+
+	append_to_register(DEFAULT_REG_NAME, "a");
+	append_to_register(DEFAULT_REG_NAME, "b");
+	append_to_register(DEFAULT_REG_NAME, "c");
+
+	key = '\0';
+	do
+	{
+		char line[32];
+		snprintf(line, sizeof(line), "%%r%c", ++key);
+
+		if(!char_is_one_of(valid_registers, key) && key != '%')
+		{
+			char *const expanded = expand_macros(line, NULL, NULL, 0);
+			expected[5] = key;
+			assert_string_equal(expected, expanded);
+			free(expanded);
+		}
+	}
+	while(key != '\0');
+
+	clear_registers();
+
+	chdir("../..");
 }
 
 static void
@@ -199,40 +291,54 @@ test_with_quotes(void)
 {
 	char *expanded;
 
-	expanded = expand_macros(&lwin, "/%\"b ", "", NULL);
+	expanded = expand_macros("/%\"b ", "", NULL, 1);
 	assert_string_equal(
 			"/\"lfi le0\" \"lfile\\\"2\" "
 			"\"" SL "rwin" SL "rfile1\" \"" SL "rwin" SL "rfile3\" \"" SL "rwin" SL "rfile5\" ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "/%\"f ", "", NULL);
+	expanded = expand_macros("/%\"f ", "", NULL, 1);
 	assert_string_equal("/\"lfi le0\" \"lfile\\\"2\" ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "/%\"F ", "", NULL);
+	expanded = expand_macros("/%\"F ", "", NULL, 1);
 	assert_string_equal("/\"" SL "rwin" SL "rfile1\" \"" SL "rwin" SL "rfile3\" \"" SL "rwin" SL "rfile5\" ",
 			expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "/%\"c ", "", NULL);
+	expanded = expand_macros("/%\"c ", "", NULL, 1);
 	assert_string_equal("/\"lfile\\\"2\" ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "/%\"C ", "", NULL);
+	expanded = expand_macros("/%\"C ", "", NULL, 1);
 	assert_string_equal("/\"" SL "rwin" SL "rfile5\" ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "/%\"d ", "", NULL);
+	expanded = expand_macros("/%\"d ", "", NULL, 1);
 	assert_string_equal("/\"" SL "lwin\" ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, "/%\"D ", "", NULL);
+	expanded = expand_macros("/%\"D ", "", NULL, 1);
 	assert_string_equal("/\"" SL "rwin\" ", expanded);
 	free(expanded);
 
-	expanded = expand_macros(&lwin, " %\"a %\"m %\"M %\"s ", "", NULL);
+	expanded = expand_macros(" %\"a %\"m %\"M %\"s ", "", NULL, 0);
 	assert_string_equal(" a m M s ", expanded);
 	free(expanded);
+
+	chdir("test-data/existing-files");
+	init_registers();
+
+	append_to_register(DEFAULT_REG_NAME, "a");
+	append_to_register(DEFAULT_REG_NAME, "b");
+	append_to_register(DEFAULT_REG_NAME, "c");
+
+	expanded = expand_macros("/%\"r ", "", NULL, 1);
+	assert_string_equal("/\"a\" \"b\" \"c\" ", expanded);
+	free(expanded);
+
+	clear_registers();
+	chdir("../..");
 }
 
 static void
@@ -240,7 +346,7 @@ test_single_percent_sign(void)
 {
 	char *expanded;
 
-	expanded = expand_macros(&lwin, "%", "", NULL);
+	expanded = expand_macros("%", "", NULL, 0);
 	assert_string_equal("", expanded);
 	free(expanded);
 }
@@ -250,7 +356,7 @@ test_percent_sign_and_double_quote(void)
 {
 	char *expanded;
 
-	expanded = expand_macros(&lwin, "%\"", "", NULL);
+	expanded = expand_macros("%\"", "", NULL, 0);
 	assert_string_equal("", expanded);
 	free(expanded);
 }
@@ -260,7 +366,7 @@ test_empty_line_ok(void)
 {
 	char *expanded;
 
-	expanded = expand_macros(&lwin, "", "", NULL);
+	expanded = expand_macros("", "", NULL, 0);
 	assert_string_equal("", expanded);
 	free(expanded);
 }
@@ -279,7 +385,10 @@ test_expand_macros(void)
 	run_test(test_b_only_rwin_has_selection);
 	run_test(test_b_noone_has_selection);
 	run_test(test_no_slash_after_dirname);
+	run_test(test_forward_slashes_on_win_for_non_shell);
 	run_test(test_m);
+	run_test(test_r_well_formed);
+	run_test(test_r_ill_formed);
 	run_test(test_with_quotes);
 	run_test(test_single_percent_sign);
 	run_test(test_percent_sign_and_double_quote);
@@ -288,4 +397,5 @@ test_expand_macros(void)
 	test_fixture_end();
 }
 
-/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 : */

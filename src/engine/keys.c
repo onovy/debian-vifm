@@ -16,7 +16,9 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#include <assert.h>
+#include "keys.h"
+
+#include <assert.h> /* assert() */
 #include <ctype.h>
 #include <limits.h> /* INT_MAX */
 #include <stdlib.h>
@@ -27,8 +29,6 @@
 #include "../utils/str.h"
 #include "../utils/string_array.h"
 #include "../utils/test_helpers.h"
-
-#include "keys.h"
 
 typedef struct key_chunk_t
 {
@@ -53,6 +53,8 @@ static default_handler *def_handlers;
 static size_t counter;
 /* Main external functions enter recursion level. */
 static size_t enters_counter;
+/* Shows whether a mapping handler is being executed at the moment. */
+static int inside_mapping;
 
 static void free_forest(key_chunk_t *forest, size_t size);
 static void free_tree(key_chunk_t *root);
@@ -72,6 +74,9 @@ static int execute_next_keys(key_chunk_t *curr, const wchar_t *keys,
 		int no_remap);
 static int run_cmd(key_info_t key_info, keys_info_t *keys_info,
 		key_chunk_t *curr, const wchar_t *keys);
+static int execute_after_remapping(const wchar_t rhs[],
+		const wchar_t left_keys[], keys_info_t keys_info, key_info_t key_info,
+		key_chunk_t *curr);
 static void enter_chunk(key_chunk_t *chunk);
 static void leave_chunk(key_chunk_t *chunk);
 static void init_keys_info(keys_info_t *keys_info, int mapped);
@@ -84,6 +89,10 @@ static key_chunk_t * add_keys_inner(key_chunk_t *root, const wchar_t *keys);
 static int fill_list(const key_chunk_t *curr, size_t len, wchar_t **list);
 static void inc_counter(const keys_info_t *const keys_info, const size_t by);
 static int is_recursive(void);
+static int execute_mapping_handler(const key_conf_t *const info,
+		key_info_t key_info, keys_info_t *const keys_info);
+static void pre_execute_mapping_handler(const keys_info_t *const keys_info);
+static void post_execute_mapping_handler(const keys_info_t *const keys_info);
 
 void
 init_keys(int modes_count, int *key_mode, int *key_mode_flags)
@@ -259,6 +268,7 @@ execute_keys_inner(const wchar_t keys[], keys_info_t *keys_info, int no_remap,
 		return 0;
 	keys = get_count(keys, &key_info.count);
 	key_info.count = combine_counts(key_info.count, prev_count);
+	key_info.multi = L'\0';
 	root = keys_info->selector ? &selectors_root[*mode] : &user_cmds_root[*mode];
 
 	if(!no_remap)
@@ -445,36 +455,16 @@ run_cmd(key_info_t key_info, keys_info_t *keys_info, key_chunk_t *curr,
 
 	if(info->type != USER_CMD && info->type != BUILTIN_CMD)
 	{
-		if(info->data.handler == NULL)
-			return KEYS_UNKNOWN;
-		info->data.handler(key_info, keys_info);
-		return 0;
+		return execute_mapping_handler(info, key_info, keys_info);
 	}
 	else
 	{
 		int result = (def_handlers[*mode] == NULL) ? KEYS_UNKNOWN : 0;
-		keys_info_t ki;
-		if(curr->conf.followed == FOLLOWED_BY_SELECTOR)
-			ki = *keys_info;
-		else
-			init_keys_info(&ki, 1);
 
 		if(curr->enters == 0)
 		{
-			wchar_t buf[16 + wcslen(info->data.cmd) + 1 + wcslen(keys) + 1];
-
-			buf[0] = '\0';
-			if(key_info.reg != NO_REG_GIVEN)
-				my_swprintf(buf, ARRAY_LEN(buf), L"\"%c", key_info.reg);
-			if(key_info.count != NO_COUNT_GIVEN)
-				my_swprintf(buf + wcslen(buf), ARRAY_LEN(buf) - wcslen(buf), L"%d",
-						key_info.count);
-			wcscat(buf, info->data.cmd);
-			wcscat(buf, keys);
-
-			enter_chunk(curr);
-			result = execute_keys_inner(buf, &ki, curr->no_remap, NO_COUNT_GIVEN);
-			leave_chunk(curr);
+			result = execute_after_remapping(info->data.cmd, keys, *keys_info,
+					key_info, curr);
 		}
 		else if(def_handlers[*mode] != NULL)
 		{
@@ -502,6 +492,56 @@ run_cmd(key_info_t key_info, keys_info_t *keys_info, key_chunk_t *curr,
 		}
 		return result;
 	}
+}
+
+/* Processes remapping of a key.  Returns error code. */
+static int
+execute_after_remapping(const wchar_t rhs[], const wchar_t left_keys[],
+		keys_info_t keys_info, key_info_t key_info, key_chunk_t *curr)
+{
+	int result;
+	if(rhs[0] == L'\0' && left_keys[0] == L'\0')
+	{
+		/* Nop command executed correctly. */
+		result = 0;
+	}
+	else if(rhs[0] == L'\0')
+	{
+		keys_info_t keys_info;
+		init_keys_info(&keys_info, 1);
+		enter_chunk(curr);
+		result = execute_keys_inner(left_keys, &keys_info, curr->no_remap,
+				NO_COUNT_GIVEN);
+		leave_chunk(curr);
+	}
+	else
+	{
+		wchar_t buf[16 + wcslen(rhs) + 1 + wcslen(left_keys) + 1];
+
+		buf[0] = '\0';
+		if(key_info.reg != NO_REG_GIVEN)
+		{
+			vifm_swprintf(buf, ARRAY_LEN(buf), L"\"%c", key_info.reg);
+		}
+		if(key_info.count != NO_COUNT_GIVEN)
+		{
+			vifm_swprintf(buf + wcslen(buf), ARRAY_LEN(buf) - wcslen(buf), L"%d",
+					key_info.count);
+		}
+		wcscat(buf, rhs);
+		wcscat(buf, left_keys);
+
+		if(curr->conf.followed != FOLLOWED_BY_SELECTOR)
+		{
+			init_keys_info(&keys_info, 1);
+		}
+
+		enter_chunk(curr);
+		result = execute_keys_inner(buf, &keys_info, curr->no_remap,
+				NO_COUNT_GIVEN);
+		leave_chunk(curr);
+	}
+	return result;
 }
 
 static void
@@ -627,10 +667,12 @@ add_user_keys(const wchar_t *keys, const wchar_t *cmd, int mode, int no_r)
 
 	curr = add_keys_inner(&user_cmds_root[mode], keys);
 	if(curr->conf.type == USER_CMD)
+	{
 		free((void*)curr->conf.data.cmd);
+	}
 
 	curr->conf.type = USER_CMD;
-	curr->conf.data.cmd = my_wcsdup(cmd);
+	curr->conf.data.cmd = vifm_wcsdup(cmd);
 	curr->no_remap = no_r;
 	return 0;
 }
@@ -665,14 +707,14 @@ remove_user_keys(const wchar_t *keys, int mode)
 
 	do
 	{
-		key_chunk_t *parent = curr->parent;
+		key_chunk_t *const parent = curr->parent;
 		if(curr->prev != NULL)
 			curr->prev->next = curr->next;
 		else
 			parent->child = curr->next;
 		if(curr->next != NULL)
 			curr->next->prev = curr->prev;
-		free(curr);
+		free_chunk(curr);
 		curr = parent;
 	}
 	while(curr->parent != NULL && curr->parent->conf.data.handler == NULL &&
@@ -685,10 +727,10 @@ remove_user_keys(const wchar_t *keys, int mode)
 static key_chunk_t *
 find_user_keys(const wchar_t *keys, int mode)
 {
-	key_chunk_t *curr = &user_cmds_root[mode], *p;
+	key_chunk_t *curr = &user_cmds_root[mode];
 	while(*keys != L'\0')
 	{
-		p = curr->child;
+		key_chunk_t *p = curr->child;
 		while(p != NULL && p->key < *keys)
 			p = p->next;
 		if(p == NULL || p->key != *keys)
@@ -696,10 +738,7 @@ find_user_keys(const wchar_t *keys, int mode)
 		curr = p;
 		keys++;
 	}
-
-	if(curr->conf.type != USER_CMD)
-		return NULL;
-	return curr;
+	return (curr->conf.type == USER_CMD) ? curr : NULL;
 }
 
 TSTATIC key_conf_t *
@@ -839,7 +878,7 @@ list_cmds(int mode)
 	if(j == -1)
 		j = i;
 
-	result[j++] = my_wcsdup(L"");
+	result[j++] = vifm_wcsdup(L"");
 
 	if(fill_list(&builtin_cmds_root[mode], 0, result + j) < 0)
 	{
@@ -953,6 +992,44 @@ static int
 is_recursive(void)
 {
 	return enters_counter > 1;
+}
+
+int
+is_inside_mapping(void)
+{
+	return inside_mapping != 0;
+}
+
+/* Executes handler for a mapping, if any.  Error or success code is
+ * returned. */
+static int
+execute_mapping_handler(const key_conf_t *const info, key_info_t key_info,
+		keys_info_t *const keys_info)
+{
+	if(info->data.handler != NULL)
+	{
+		pre_execute_mapping_handler(keys_info);
+		info->data.handler(key_info, keys_info);
+		post_execute_mapping_handler(keys_info);
+		return 0;
+	}
+	return KEYS_UNKNOWN;
+}
+
+/* Pre-execution of a mapping handler callback. */
+static void
+pre_execute_mapping_handler(const keys_info_t *const keys_info)
+{
+	inside_mapping += keys_info->mapped != 0;
+	assert(inside_mapping >= 0 && "Calls to pre/post funcs should be balanced");
+}
+
+/* Post-execution of a mapping handler callback. */
+static void
+post_execute_mapping_handler(const keys_info_t *const keys_info)
+{
+	inside_mapping -= keys_info->mapped != 0;
+	assert(inside_mapping >= 0 && "Calls to pre/post funcs should be balanced");
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0: */

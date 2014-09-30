@@ -17,8 +17,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __STATUS_H__
-#define __STATUS_H__
+#ifndef VIFM__STATUS_H__
+#define VIFM__STATUS_H__
 
 #include <sys/stat.h>
 
@@ -29,18 +29,22 @@
 
 #include "color_scheme.h"
 
+struct config_t;
+
 typedef enum
 {
 	HSPLIT,
 	VSPLIT,
-}SPLIT;
+}
+SPLIT;
 
 typedef enum
 {
 	SOURCING_NONE,
 	SOURCING_PROCESSING,
 	SOURCING_FINISHING,
-}SourcingState;
+}
+SourcingState;
 
 /* Type of execution environment. */
 typedef enum
@@ -48,27 +52,46 @@ typedef enum
 	ENVTYPE_LINUX_NATIVE, /* Running in linux native console. */
 	ENVTYPE_EMULATOR, /* Running in terminal emulator with no DISPLAY defined. */
 	ENVTYPE_EMULATOR_WITH_X, /* Running in emulator within accessible X. */
-}EnvType;
+}
+EnvType;
+
+/* List of terminal multiplexers. */
+typedef enum
+{
+	TM_NONE,   /* Plain console. */
+	TM_SCREEN, /* GNU screen. */
+	TM_TMUX,   /* tmux. */
+}
+TermMultiplexer;
 
 typedef enum
 {
 	UT_NONE, /* no update needed */
 	UT_REDRAW, /* screen redraw requested */
 	UT_FULL, /* file lists reload followed by screen redraw requested */
-}UpdateType;
+}
+UpdateType;
+
+typedef enum
+{
+	/* Shell that is aware of command escaping and backslashes in paths. */
+	ST_NORMAL,
+	/* Dumb cmd.exe shell on Windows. */
+	ST_CMD,
+}
+ShellType;
 
 typedef struct
 {
 	UpdateType need_update;
 	int last_char;
-	int search;
 	int save_msg; /* zero - don't save, 2 - save after resize, other - save */
 	int use_register;
 	int use_input_bar;
 	int curr_register;
 	int register_saved;
 	int number_of_windows;
-	int view;
+	int view; /* Shows whether preview mode is activated. */
 	int skip_history;
 	int load_stage; /* 0 - no TUI, 1 - part of TUI, 2 - TUI, 3 - all */
 
@@ -84,23 +107,17 @@ typedef struct
 
 	int confirmed;
 
-	int auto_redraws;
+	/* Whether to skip complete UI redraw after returning from a shellout. */
+	int skip_shellout_redraw;
 
 	int cs_base;
 	col_scheme_t *cs;
 	char color_scheme[NAME_MAX];
 
-#ifdef HAVE_LIBGTK
-	int gtk_available; /* for mimetype detection */
-#endif
-
 	int msg_head, msg_tail;
 	char *msgs[51];
 	int save_msg_in_list;
-
-#ifdef _WIN32
-	int as_admin;
-#endif
+	int allow_sb_msg_truncation; /* Whether truncation can be performed. */
 
 	int scroll_bind_off;
 	SPLIT split;
@@ -112,14 +129,37 @@ typedef struct
 	int restart_in_progress;
 
 	EnvType env_type; /* Specifies execution environment type. */
-}status_t;
+
+	/* Shows which of supported terminal multiplexers is currently in use, if
+	 * any. */
+	TermMultiplexer term_multiplexer;
+
+	/* Stores last command-line mode command that was executed or an empty line
+	 * (e.g. right after startup or :restart command). */
+	char *last_cmdline_command;
+
+	int initial_lines; /* Initial terminal height in lines. */
+	int initial_columns; /* Initial terminal width in characters. */
+
+	ShellType shell_type; /* Specifies type of shell. */
+
+#ifdef HAVE_LIBGTK
+	int gtk_available; /* for mimetype detection */
+#endif
+
+#ifdef _WIN32
+	int as_admin;
+#endif
+}
+status_t;
 
 extern status_t curr_stats;
 
 /* Returns non-zero on error. */
-int init_status(void);
+int init_status(struct config_t *config);
 
-/* Returns non-zero on error. */
+/* Resets some part of runtime status information to its initial values.
+ * Returns non-zero on error. */
 int reset_status(void);
 
 /* Sets internal flag to schedule postponed redraw operation. */
@@ -129,7 +169,17 @@ void schedule_redraw(void);
  * was scheduled and resets internal flag. */
 int is_redraw_scheduled(void);
 
-#endif
+/* Updates curr_stats to reflect whether terminal multiplexers support is
+ * enabled. */
+void set_using_term_multiplexer(int use_term_multiplexer);
+
+/* Updates last_cmdline_command field of the status structure. */
+void update_last_cmdline_command(const char cmd[]);
+
+/* Updates curr_stats.shell_type field according to passed shell command. */
+void stats_update_shell_type(const char shell_cmd[]);
+
+#endif /* VIFM__STATUS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */

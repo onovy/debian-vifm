@@ -17,36 +17,54 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "locate_menu.h"
+
 #include <stdio.h> /* snprintf() */
+#include <stdlib.h> /* free() */
 #include <string.h> /* strdup() */
 
+#include "../cfg/config.h"
+#include "../utils/macros.h"
 #include "../utils/path.h"
+#include "../utils/str.h"
+#include "../macros.h"
 #include "../ui.h"
 #include "menus.h"
 
-#include "locate_menu.h"
+static int execute_locate_cb(FileView *view, menu_info *m);
 
 int
 show_locate_menu(FileView *view, const char args[])
 {
-	char cmd_buf[256];
-	int were_errors;
+	char *cmd;
+	int save_msg;
+	custom_macro_t macros[] =
+	{
+		{ .letter = 'a', .value = args, .uses_left = 1, .group = -1 },
+	};
 
 	static menu_info m;
-	init_menu_info(&m, LOCATE);
+	init_menu_info(&m, LOCATE_MENU, strdup("No files found"));
 	m.args = (args[0] == '-') ? strdup(args) : escape_filename(args, 0);
-
-	snprintf(cmd_buf, sizeof(cmd_buf), "locate %s", m.args);
-	m.title = strdup(cmd_buf);
+	m.title = format_str(" Locate %s ", m.args);
+	m.execute_handler = &execute_locate_cb;
+	m.key_handler = &filelist_khandler;
 
 	status_bar_message("locate...");
 
-	were_errors = capture_output_to_menu(view, cmd_buf, &m);
-	if(!were_errors && m.len < 1)
-	{
-		status_bar_error("No files found");
-		return 1;
-	}
+	cmd = expand_custom_macros(cfg.locate_prg, ARRAY_LEN(macros), macros);
+	save_msg = capture_output_to_menu(view, cmd, &m);
+	free(cmd);
+
+	return save_msg;
+}
+
+/* Callback that is called when menu item is selected.  Should return non-zero
+ * to stay in menu mode. */
+static int
+execute_locate_cb(FileView *view, menu_info *m)
+{
+	goto_selected_file(view, m->items[m->pos], 0);
 	return 0;
 }
 

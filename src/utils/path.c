@@ -17,14 +17,15 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
+#include "path.h"
+
 #ifdef _WIN32
 #include <ctype.h>
 #endif
-#include <limits.h> /* NAME_MAX PATH_MAX */
 #include <stddef.h> /* size_t */
 #include <stdlib.h> /* malloc() free() */
 #include <string.h> /* strcat() strcmp() strcasecmp() strncmp() strncasecmp()
-                       strncat() strncpy() strchr() strcpy() strlen() */
+                       strncat() strchr() strcpy() strlen() strrchr() */
 
 #ifndef _WIN32
 #include <pwd.h> /* getpwnam() */
@@ -38,7 +39,7 @@
 #include "fs_limits.h"
 #include "str.h"
 
-#include "path.h"
+static int skip_dotdir_if_any(const char *path[], int fully);
 
 /* like chomp() but removes trailing slash */
 void
@@ -92,71 +93,121 @@ paths_are_equal(const char s[], const char t[])
 	return 0;
 }
 
-/* Removes excess slashes, "../" and "./" from the path.  buf will always
- * contain trailing forward slash. */
 void
-canonicalize_path(const char *directory, char *buf, size_t buf_size)
+canonicalize_path(const char directory[], char buf[], size_t buf_size)
 {
-	const char *p; /* source string pointer */
-	char *q; /* destination string pointer */
+	/* Source string pointer. */
+	const char *p = directory;
+	/* Destination string pointer. */
+	char *q = buf - 1;
 
 	buf[0] = '\0';
 
-	q = buf - 1;
-	p = directory;
-
 #ifdef _WIN32
+	/* Handle first component of a UNC path. */
 	if(p[0] == '/' && p[1] == '/' && p[2] != '/')
 	{
 		strcpy(buf, "//");
 		q = buf + 1;
 		p += 2;
 		while(*p != '\0' && *p != '/')
+		{
 			*++q = *p++;
+		}
 		buf = q + 1;
 	}
 #endif
 
 	while(*p != '\0' && (size_t)((q + 1) - buf) < buf_size - 1)
 	{
-		int prev_dir_present;
-
-		prev_dir_present = (q != buf - 1 && *q == '/');
-		if(prev_dir_present && strnoscmp(p, "./", 2) == 0)
-			p++;
-		else if(prev_dir_present && stroscmp(p, ".") == 0)
-			;
-		else if(prev_dir_present &&
-				(strnoscmp(p, "../", 3) == 0 || stroscmp(p, "..") == 0) &&
-				stroscmp(buf, "../") != 0)
+		const int prev_dir_present = (q != buf - 1 && *q == '/');
+		if(skip_dotdir_if_any(&p, prev_dir_present))
 		{
+			/* skip_dotdir_if_any() function did all job for us. */
+		}
+		else if(prev_dir_present &&
+				(strncmp(p, "../", 3) == 0 || strcmp(p, "..") == 0) &&
+				strcmp(buf, "../") != 0)
+		{
+			/* Remove the last path component added. */
 #ifdef _WIN32
+			/* Special handling of Windows disk name. */
 			if(*(q - 1) != ':')
 #endif
 			{
 				p++;
 				q--;
 				while(q >= buf && *q != '/')
+				{
 					q--;
+				}
 			}
 		}
 		else if(*p == '/')
 		{
+			/* Don't add more than one slash between path components. */
 			if(!prev_dir_present)
+			{
 				*++q = '/';
+			}
 		}
 		else
 		{
+			/* Copy current path component till the end. */
 			*++q = *p;
+			while(p[1] != '\0' && p[1] != '/' &&
+					(size_t)((q + 1) - buf) < buf_size - 1)
+			{
+				*++q = *++p;
+			}
 		}
 
 		p++;
 	}
 
 	if(*q != '/')
+	{
 		*++q = '/';
+	}
 
 	*++q = '\0';
+}
+
+/* Checks whether *path begins with current directory component ('./') and moves
+ * *path to the last character of such component (to slash if present) if fully
+ * is non-zero, otherwise to the previous of the last character. When fully is
+ * zero the function normalizes '\.\.\.+/?' on Windows to '\./?'. Returns
+ * non-zero if a path component was fully skipped. */
+static int
+skip_dotdir_if_any(const char *path[], int fully)
+{
+	size_t dot_count = 0;
+	while((*path)[dot_count] == '.')
+	{
+		dot_count++;
+	}
+	if((dot_count == 1
+#ifdef _WIN32
+				|| dot_count > 2
+#endif
+				) &&
+			strchr("/", (*path)[dot_count]) != NULL)
+	{
+		if(!fully)
+		{
+			dot_count--;
+		}
+		if((*path)[dot_count] == '\0')
+		{
+			*path += dot_count - 1;
+		}
+		else
+		{
+			*path += dot_count;
+		}
+		return fully;
+	}
+	return 0;
 }
 
 const char *
@@ -332,7 +383,7 @@ escape_filename(const char *string, int quote_percent)
 }
 
 char *
-replace_home_part(const char *directory)
+replace_home_part(const char directory[])
 {
 	static char buf[PATH_MAX];
 	size_t len;
@@ -340,9 +391,14 @@ replace_home_part(const char *directory)
 	len = strlen(cfg.home_dir) - 1;
 	if(strnoscmp(directory, cfg.home_dir, len) == 0 &&
 			(directory[len] == '\0' || directory[len] == '/'))
+	{
 		strncat(strcpy(buf, "~"), directory + len, sizeof(buf) - strlen(buf) - 1);
+	}
 	else
-		strncpy(buf, directory, sizeof(buf));
+	{
+		copy_str(buf, sizeof(buf), directory);
+	}
+
 	if(!is_root_dir(buf))
 		chosp(buf);
 
@@ -350,7 +406,7 @@ replace_home_part(const char *directory)
 }
 
 char *
-expand_tilde(char *path)
+expand_tilde(char path[])
 {
 #ifndef _WIN32
 	char name[NAME_MAX];
@@ -363,13 +419,8 @@ expand_tilde(char *path)
 
 	if(path[1] == '\0' || path[1] == '/')
 	{
-		char *result;
-
-		result = malloc((strlen(cfg.home_dir) + strlen(path) + 1));
-		if(result == NULL)
-			return NULL;
-
-		sprintf(result, "%s%s", cfg.home_dir, (path[1] == '/') ? (path + 2) : "");
+		char *const result = format_str("%s%s", cfg.home_dir,
+				(path[1] == '/') ? (path + 2) : "");
 		free(path);
 		return result;
 	}
@@ -378,7 +429,7 @@ expand_tilde(char *path)
 	if((p = strchr(path, '/')) == NULL)
 	{
 		p = path + strlen(path);
-		strcpy(name, path + 1);
+		copy_str(name, sizeof(name), path + 1);
 	}
 	else
 	{
@@ -390,16 +441,35 @@ expand_tilde(char *path)
 		return path;
 
 	chosp(pw->pw_dir);
-	result = malloc(strlen(pw->pw_dir) + strlen(path) + 1);
-	if(result == NULL)
-		return NULL;
-	sprintf(result, "%s/%s", pw->pw_dir, p);
+	result = format_str("%s/%s", pw->pw_dir, p);
 	free(path);
 
 	return result;
 #else
 	return path;
 #endif
+}
+
+char *
+get_last_path_component(const char path[])
+{
+	char *slash = strrchr(path, '/');
+	if(slash == NULL)
+	{
+		slash = (char *)path;
+	}
+	else if(slash[1] == '\0')
+	{
+		while(slash > path && slash[0] == '/')
+			slash--;
+		while(slash > path + 1 && slash[-1] != '/')
+			slash--;
+	}
+	else
+	{
+		slash++;
+	}
+	return slash;
 }
 
 void
@@ -469,7 +539,7 @@ find_slashr(const char *path)
 }
 
 char *
-extract_extension(char *path)
+cut_extension(char path[])
 {
 	char *e;
 	char *ext;
@@ -489,10 +559,44 @@ extract_extension(char *path)
 }
 
 void
+split_ext(char path[], int *root_len, const char **ext_pos)
+{
+	const char *const slash = strrchr(path, '/');
+	char *const dot = strrchr(path, '.');
+	if(dot == NULL || (slash != NULL && dot < slash) || dot == path ||
+			dot == slash + 1)
+	{
+		const size_t len = strlen(path);
+		*root_len = len;
+		*ext_pos = path + len;
+	}
+	else
+	{
+		*dot = '\0';
+		*root_len = dot - path;
+		*ext_pos = dot + 1;
+	}
+}
+
+void
 exclude_file_name(char *path)
 {
 	if(path_exists(path) && !is_valid_dir(path))
 		remove_last_path_component(path);
+}
+
+int
+is_parent_dir(const char path[])
+{
+	return path[0] == '.' && path[1] == '.' &&
+		((path[2] == '/' && path[3] == '\0') || path[2] == '\0');
+}
+
+int
+is_builtin_dir(const char name[])
+{
+	return name[0] == '.'
+	    && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
 }
 
 #ifdef _WIN32

@@ -16,8 +16,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
  */
 
-#ifndef __OPS_H__
-#define __OPS_H__
+#ifndef VIFM__OPS_H__
+#define VIFM__OPS_H__
 
 typedef enum
 {
@@ -26,8 +26,9 @@ typedef enum
 	OP_REMOVE,   /* rm -rf */
 	OP_REMOVESL, /* cl */
 	OP_COPY,     /* copy and clone */
+	OP_COPYF,    /* copy with file overwrite */
 	OP_MOVE,     /* move, rename and substitute */
-	OP_MOVETMP0, /* multiple files rename */
+	OP_MOVEF,    /* move with file overwrite */
 	OP_MOVETMP1, /* multiple files rename */
 	OP_MOVETMP2, /* multiple files rename */
 	OP_MOVETMP3, /* multiple files rename */
@@ -51,7 +52,7 @@ typedef enum
 
 int perform_operation(OPS op, void *data, const char *src, const char *dst);
 
-#endif
+#endif /* VIFM__OPS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
 /* vim: set cinoptions+=t0 : */
