@@ -38,7 +38,7 @@
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/tree.h"
-#include "color_scheme.h"
+#include "colors.h"
 
 /* Environment variables by which application hosted by terminal multiplexer can
  * identify the host. */
@@ -70,7 +70,7 @@ init_status(config_t *config)
 	set_env_type(&curr_stats);
 	stats_update_shell_type(config->shell);
 
-	return reset_status();
+	return reset_status(config);
 }
 
 /* Initializes most fields of the status structure, some are left to be
@@ -112,7 +112,7 @@ load_def_values(status_t *stats, config_t *config)
 
 	stats->restart_in_progress = 0;
 
-	stats->env_type = ENVTYPE_EMULATOR;
+	stats->exec_env_type = EET_EMULATOR;
 
 	stats->term_multiplexer = TM_NONE;
 
@@ -120,6 +120,8 @@ load_def_values(status_t *stats, config_t *config)
 	stats->initial_columns = INT_MIN;
 
 	stats->shell_type = ST_NORMAL;
+
+	stats->file_picker_mode = 0;
 
 #ifdef HAVE_LIBGTK
 	stats->gtk_available = 0;
@@ -158,23 +160,27 @@ set_env_type(status_t *stats)
 	const char *term = env_get("TERM");
 	if(term != NULL && ends_with(term, "linux"))
 	{
-		curr_stats.env_type = ENVTYPE_LINUX_NATIVE;
+		curr_stats.exec_env_type = EET_LINUX_NATIVE;
 	}
 	else
 	{
 		const char *display = env_get("DISPLAY");
-		curr_stats.env_type = is_null_or_empty(display) ?
-			ENVTYPE_EMULATOR : ENVTYPE_EMULATOR_WITH_X;
+		curr_stats.exec_env_type = is_null_or_empty(display)
+		                         ? EET_EMULATOR
+		                         : EET_EMULATOR_WITH_X;
 	}
 #else
-	curr_stats.env_type = ENVTYPE_EMULATOR_WITH_X;
+	curr_stats.exec_env_type = EET_EMULATOR_WITH_X;
 #endif
 }
 
 int
-reset_status(void)
+reset_status(const config_t *config)
 {
 	set_last_cmdline_command("");
+
+	curr_stats.initial_lines = config->lines;
+	curr_stats.initial_columns = config->columns;
 
 	return reset_dircache(&curr_stats);
 }

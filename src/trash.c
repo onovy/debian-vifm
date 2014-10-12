@@ -18,10 +18,6 @@
 
 #include "trash.h"
 
-#ifdef _WIN32
-#include <dirent.h> /* DIR */
-#endif
-
 #include <sys/stat.h> /* stat */
 #include <unistd.h> /* lstat */
 
@@ -85,11 +81,11 @@ static int validate_spec(const char spec[]);
 static int create_trash_dir(const char trash_dir[]);
 static void empty_trash_dirs(void);
 static void empty_trash_dir(const char trash_dir[]);
+static void empty_trash_in_bg(void *arg);
 static void empty_trash_list(void);
 static trashes_list get_list_of_trashes(void);
 static int get_list_of_trashes_traverser(struct mntent *entry, void *arg);
 static int is_trash_valid(const char trash_dir[]);
-static char * pick_trash_dir(const char base_dir[]);
 static int pick_trash_dir_traverser(const char base_dir[],
 		const char trash_dir[], void *arg);
 static int is_rooted_trash_dir(const char spec[]);
@@ -239,33 +235,29 @@ empty_trash_dirs(void)
 static void
 empty_trash_dir(const char trash_dir[])
 {
-#ifndef _WIN32
-	char cmd[25 + strlen(trash_dir)*2 + 1];
-	char *escaped;
+	char *const task_desc = format_str("Empty trash: %s", trash_dir);
 
-	escaped = escape_filename(trash_dir, 0);
-	snprintf(cmd, sizeof(cmd), "sh -c 'rm -rf %s/* %s/.[!.]*'", escaped, escaped);
-	free(escaped);
+	char *const trash_dir_copy = strdup(trash_dir);
 
-	start_background_job(cmd, 0);
-#else
-	DIR *dir;
-	struct dirent *d;
-
-	dir = opendir(trash_dir);
-	if(dir == NULL)
-		return;
-	while((d = readdir(dir)) != NULL)
+	if(bg_execute(task_desc, BG_UNDEFINED_TOTAL, &empty_trash_in_bg,
+			trash_dir_copy) != 0)
 	{
-		if(!is_builtin_dir(d->d_name))
-		{
-			char full[PATH_MAX];
-			snprintf(full, sizeof(full), "%s/%s", trash_dir, d->d_name);
-			perform_operation(OP_REMOVESL, NULL, full, NULL);
-		}
+		free(trash_dir_copy);
 	}
-	closedir(dir);
-#endif
+
+	free(task_desc);
+}
+
+/* Entry point for a background task that removes files in a single trash
+ * directory. */
+static void
+empty_trash_in_bg(void *arg)
+{
+	char *const trash_dir = arg;
+
+	remove_dir_content(trash_dir);
+
+	free(trash_dir);
 }
 
 static void
@@ -420,10 +412,10 @@ restore_from_trash(const char trash_name[])
 	}
 	if(i >= nentries)
 		return -1;
-	
+
 	copy_str(buf, sizeof(buf), trash_list[i].path);
 	copy_str(full, sizeof(full), trash_list[i].trash_name);
-	if(perform_operation(OP_MOVE, NULL, full, trash_list[i].path) == 0)
+	if(perform_operation(OP_MOVE, NULL, NULL, full, trash_list[i].path) == 0)
 	{
 		char *msg, *p;
 		size_t len;
@@ -498,10 +490,7 @@ gen_trash_name(const char base_dir[], const char name[])
 	return strdup(buf);
 }
 
-/* Picks trash directory basing on original directory of a file that is being
- * trashed.  Returns absolute path to picked trash directory on success,
- * otherwise NULL is returned. */
-static char *
+char *
 pick_trash_dir(const char base_dir[])
 {
 	char *trash_dir = NULL;
@@ -666,6 +655,26 @@ get_real_name_from_trash_name(const char trash_path[])
 	}
 
 	return real_name;
+}
+
+void
+trash_prune_dead_entries(void)
+{
+	int i, j;
+
+	j = 0;
+	for(i = 0; i < nentries; ++i)
+	{
+		if(!path_exists(trash_list[i].trash_name))
+		{
+			free(trash_list[i].path);
+			free(trash_list[i].trash_name);
+			continue;
+		}
+
+		trash_list[j++] = trash_list[i];
+	}
+	nentries = j;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

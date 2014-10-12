@@ -25,20 +25,14 @@
 
 #include <curses.h>
 
-#include <dirent.h> /* DIR */
-#include <sys/stat.h>
-#include <sys/types.h> /* pid_t */
 #include <unistd.h> /* access() F_OK R_OK */
 
 #include <assert.h> /* assert() */
-#include <ctype.h> /* isspace() */
-#include <errno.h> /* errno */
 #include <stddef.h> /* NULL size_t */
 #include <stdlib.h> /* free() malloc() */
 #include <string.h> /* memmove() memset() strdup() strcat() strncat() strchr()
                        strlen() strrchr() */
 #include <stdarg.h>
-#include <signal.h>
 #include <wchar.h> /* wchar_t wcscmp() */
 
 #include "../cfg/config.h"
@@ -47,7 +41,9 @@
 #include "../modes/modes.h"
 #include "../utils/file_streams.h"
 #include "../utils/fs.h"
+#include "../utils/fs_limits.h"
 #include "../utils/log.h"
+#include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
@@ -56,6 +52,8 @@
 #include "../utils/utils.h"
 #include "../background.h"
 #include "../bookmarks.h"
+#include "../color_scheme.h"
+#include "../colors.h"
 #include "../filelist.h"
 #include "../macros.h"
 #include "../running.h"
@@ -827,7 +825,7 @@ display_menu(menu_info *m, FileView *view)
 }
 
 int
-query_user_menu(char *title, char *message)
+query_user_menu(const char title[], const char message[])
 {
 	int key;
 	char *dup = strdup(message);
@@ -895,7 +893,10 @@ redraw_error_msg(const char title_arg[], const char message_arg[],
 	werase(error_win);
 
 	getmaxyx(stdscr, sy, sx);
-	getmaxyx(error_win, y, x);
+
+	y = sy - 3 + !cfg.last_status;
+	x = sx - 2;
+	wresize(error_win, y, x);
 
 	z = strlen(message);
 	if(z <= x - 2 && strchr(message, '\n') == NULL)

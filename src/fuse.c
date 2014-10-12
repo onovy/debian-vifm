@@ -19,9 +19,14 @@
 
 #include "fuse.h"
 
+#include <curses.h> /* werase() def_prog_mode() */
+
 #include <sys/stat.h> /* S_IRWXU */
+#include <unistd.h> /* rmdir() unlink() */
 
 #include <stddef.h> /* NULL */
+#include <stdio.h> /* snprintf() fclose() fopen() */
+#include <stdlib.h> /* WIFEXITED free() */
 #include <string.h> /* memmove() strcpy() strlen() strcmp() strcat() */
 
 #include "cfg/config.h"
@@ -29,6 +34,7 @@
 #include "utils/fs.h"
 #include "utils/fs_limits.h"
 #include "utils/log.h"
+#include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/test_helpers.h"
@@ -158,6 +164,7 @@ fuse_mount(FileView *view, char *file_full_path, const char *param,
 	int clear_before_mount = 0;
 	char errors_file[PATH_MAX];
 	int status;
+	int cancelled;
 
 	escaped_filename = escape_filename(get_current_file_name(view), 0);
 
@@ -211,12 +218,12 @@ fuse_mount(FileView *view, char *file_full_path, const char *param,
 	strcat(buf, " 2> ");
 	strcat(buf, errors_file);
 	LOG_INFO_MSG("FUSE mount command: `%s`", buf);
-	status = background_and_wait_for_status(buf);
+	status = background_and_wait_for_status(buf, 1, &cancelled);
 
 	clean_status_bar();
 
 	/* check child status */
-	if(!WIFEXITED(status) || (WIFEXITED(status) && WEXITSTATUS(status)))
+	if(!WIFEXITED(status) || WEXITSTATUS(status))
 	{
 		FILE *ef = fopen(errors_file, "r");
 		print_errors(ef);
@@ -226,7 +233,17 @@ fuse_mount(FileView *view, char *file_full_path, const char *param,
 		/* remove the directory we created for the mount */
 		if(path_exists(mount_point))
 			rmdir(mount_point);
-		show_error_msg("FUSE MOUNT ERROR", file_full_path);
+
+		if(cancelled)
+		{
+			status_bar_message("FUSE mount cancelled");
+			curr_stats.save_msg = 1;
+		}
+		else
+		{
+			show_error_msg("FUSE MOUNT ERROR", file_full_path);
+		}
+
 		(void)vifm_chdir(view->curr_dir);
 		return -1;
 	}
@@ -293,17 +310,17 @@ format_mount_command(const char mount_point[], const char file_name[],
 			if(!strcmp(cmd_buf, "%SOURCE_FILE"))
 			{
 				copy_str(buf_pos, buf_size - (buf_pos - buf), escaped_path);
-				buf_pos += strlen(escaped_path);
+				buf_pos += strlen(buf_pos);
 			}
 			else if(!strcmp(cmd_buf, "%PARAM"))
 			{
 				copy_str(buf_pos, buf_size - (buf_pos - buf), param);
-				buf_pos += strlen(param);
+				buf_pos += strlen(buf_pos);
 			}
 			else if(!strcmp(cmd_buf, "%DESTINATION_DIR"))
 			{
 				copy_str(buf_pos, buf_size - (buf_pos - buf), escaped_mount_point);
-				buf_pos += strlen(escaped_mount_point);
+				buf_pos += strlen(buf_pos);
 			}
 			else if(!strcmp(cmd_buf, "%CLEAR"))
 			{
@@ -436,10 +453,10 @@ try_unmount_fuse(FileView *view)
 	}
 
 	status_bar_message("FUSE unmounting selected file, please stand by..");
-	status = background_and_wait_for_status(buf);
+	status = background_and_wait_for_status(buf, 0, NULL);
 	clean_status_bar();
 	/* check child status */
-	if(!WIFEXITED(status) || (WIFEXITED(status) && WEXITSTATUS(status)))
+	if(!WIFEXITED(status) || WEXITSTATUS(status))
 	{
 		werase(status_bar);
 		show_error_msgf("FUSE UMOUNT ERROR", "Can't unmount %s.  It may be busy.",

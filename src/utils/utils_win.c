@@ -42,6 +42,7 @@
 #include "log.h"
 #include "macros.h"
 #include "mntent.h"
+#include "path.h"
 #include "str.h"
 
 #define PE_HDR_SIGNATURE 0x00004550U
@@ -118,6 +119,12 @@ wait_for_data_from(pid_t pid, FILE *f, int fd)
 
 int
 set_sigchld(int block)
+{
+	return 0;
+}
+
+int
+refers_to_slower_fs(const char from[], const char to[])
 {
 	return 0;
 }
@@ -299,32 +306,6 @@ strtoupper(char *s)
 }
 
 int
-win_executable_exists(const char path[])
-{
-	const char *p;
-	char path_buf[NAME_MAX];
-	size_t pos;
-
-	if(strchr(after_last(path, '/'), '.') != NULL)
-	{
-		return path_exists(path);
-	}
-
-	snprintf(path_buf, sizeof(path_buf), "%s", path);
-	pos = strlen(path_buf);
-
-	p = env_get_def("PATHEXT", PATHEXT_EXT_DEF);
-	while((p = extract_part(p, ';', path_buf + pos)) != NULL)
-	{
-		if(path_exists(path_buf))
-		{
-			return 1;
-		}
-	}
-	return 0;
-}
-
-int
 is_win_executable(const char name[])
 {
 	const char *p;
@@ -391,6 +372,27 @@ attr_str_long(DWORD attr)
 	return buf;
 }
 
+const char *
+escape_for_cd(const char str[])
+{
+	static char buf[PATH_MAX*2];
+	char *p;
+
+	p = buf;
+	while(*str != '\0')
+	{
+		if(char_is_one_of("\\ $", *str))
+			*p++ = '\\';
+		else if(*str == '%')
+			*p++ = '%';
+		*p++ = *str;
+
+		str++;
+	}
+	*p = '\0';
+	return buf;
+}
+
 int
 get_mount_point(const char path[], size_t buf_len, char buf[])
 {
@@ -418,6 +420,47 @@ traverse_mount_points(mptraverser client, void *arg)
 	}
 
 	return 0;
+}
+
+int
+executable_exists(const char path[])
+{
+	const char *p;
+	char path_buf[NAME_MAX];
+	size_t pos;
+
+	if(strchr(after_last(path, '/'), '.') != NULL)
+	{
+		return path_exists(path) && !is_dir(path);
+	}
+
+	copy_str(path_buf, sizeof(path_buf), path);
+	pos = strlen(path_buf);
+
+	p = env_get_def("PATHEXT", PATHEXT_EXT_DEF);
+	while((p = extract_part(p, ';', path_buf + pos)) != NULL)
+	{
+		if(path_exists(path_buf) && !is_dir(path_buf))
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+int
+get_exe_dir(char dir_buf[], size_t dir_buf_len)
+{
+	(void)GetModuleFileNameA(NULL, dir_buf, dir_buf_len);
+	to_forward_slash(dir_buf);
+	break_atr(dir_buf, '/');
+	return 0;
+}
+
+EnvType
+get_env_type(void)
+{
+	return ET_WIN;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

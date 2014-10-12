@@ -41,6 +41,14 @@ void read_file_lines_tests(void);
 void if_else_tests(void);
 void split_ext_tests(void);
 void parse_spec_tests(void);
+void minmax_tests(void);
+void ui_view_schedule_tests(void);
+void string_escape_tests(void);
+void split_and_get_tests(void);
+void functional_tests(void);
+void cmdline_emark_tests(void);
+void is_dir_tests(void);
+void builtin_functions_tests(void);
 
 void
 all_tests(void)
@@ -86,6 +94,14 @@ all_tests(void)
 	if_else_tests();
 	split_ext_tests();
 	parse_spec_tests();
+	minmax_tests();
+	ui_view_schedule_tests();
+	string_escape_tests();
+	split_and_get_tests();
+	functional_tests();
+	cmdline_emark_tests();
+	is_dir_tests();
+	builtin_functions_tests();
 }
 
 int

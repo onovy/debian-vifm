@@ -22,6 +22,13 @@
 
 #include <stddef.h> /* size_t */
 
+/* String with path items separator supported by the system. */
+#ifndef _WIN32
+#define PATH_SEPARATORS "/"
+#else
+#define PATH_SEPARATORS "/\\"
+#endif
+
 /* Various functions to work with paths */
 
 void chosp(char *path);
@@ -53,7 +60,13 @@ char * escape_filename(const char *string, int quote_percent);
  * statically allocated buffer of size PATH_MAX. */
 char * replace_home_part(const char directory[]);
 
-char * expand_tilde(char path[]);
+/* Expands tilde in the front of the path.  Returns newly allocated string
+ * without tilde. */
+char * expand_tilde(const char path[]);
+
+/* Expands tilde in the front of the path.  Can free the path.  Returns the path
+ * or newly allocated string without tilde. */
+char * replace_tilde(char path[]);
 
 /* Find beginning of the last component in the path ignoring trailing
  * slashes. */
@@ -95,13 +108,19 @@ int is_parent_dir(const char path[]);
  * otherwise zero is returned. */
 int is_builtin_dir(const char name[]);
 
+/* Finds path to executable using all directories from PATH environment
+ * variable.  Uses executable extensions on Windows.  Puts discovered path to
+ * the path buffer if it's not NULL.  Returns zero on success, otherwise
+ * non-zero is returned. */
+int find_cmd_in_path(const char cmd[], size_t path_len, char path[]);
+
 #ifdef _WIN32
 
 int is_unc_path(const char *path);
 
-void to_forward_slash(char *path);
+void to_forward_slash(char path[]);
 
-void to_back_slash(char *path);
+void to_back_slash(char path[]);
 
 #endif
 

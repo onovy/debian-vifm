@@ -19,11 +19,13 @@
 
 #include "info.h"
 
+#include <unistd.h> /* R_OK access() */
+
 #include <assert.h> /* assert() */
 #include <ctype.h> /* isdigit() */
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* fscanf() fgets() fputc() snprintf() */
-#include <stdlib.h> /* free() realloc() */
+#include <stdlib.h> /* abs() free() realloc() */
 #include <string.h> /* memset() strtol() strcmp() strchr() strlen() */
 
 #include "../engine/cmds.h"
@@ -32,6 +34,7 @@
 #include "../utils/fs.h"
 #include "../utils/fs_limits.h"
 #include "../utils/log.h"
+#include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
@@ -47,6 +50,7 @@
 #include "../trash.h"
 #include "../ui.h"
 #include "config.h"
+#include "hist.h"
 #include "info_chars.h"
 
 static void get_sort_info(FileView *view, const char line[]);
@@ -127,7 +131,7 @@ read_info_file(int reread)
 				if(!ends_with(line2, "}" VIFM_PSEUDO_CMD))
 				{
 					set_programs(line_val, line2, 0,
-							curr_stats.env_type == ENVTYPE_EMULATOR_WITH_X);
+							curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
 				}
 			}
 		}
@@ -136,7 +140,7 @@ read_info_file(int reread)
 			if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 			{
 				set_programs(line_val, line2, 1,
-						curr_stats.env_type == ENVTYPE_EMULATOR_WITH_X);
+						curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
 			}
 		}
 		else if(type == LINE_TYPE_FILEVIEWER)
@@ -187,9 +191,12 @@ read_info_file(int reread)
 		}
 		else if(type == LINE_TYPE_WIN_COUNT)
 		{
-			const int i = atoi(line_val);
-			cfg.show_one_window = (i == 1);
-			curr_stats.number_of_windows = (i == 1) ? 1 : 2;
+			if(!reread)
+			{
+				const int i = atoi(line_val);
+				cfg.show_one_window = (i == 1);
+				curr_stats.number_of_windows = (i == 1) ? 1 : 2;
+			}
 		}
 		else if(type == LINE_TYPE_SPLIT_ORIENTATION)
 		{
@@ -317,14 +324,14 @@ static void
 get_sort_info(FileView *view, const char line[])
 {
 	int j = 0;
-	while(*line != '\0' && j < SORT_OPTION_COUNT)
+	while(*line != '\0' && j < SK_COUNT)
 	{
 		char *endptr;
 		const int sort_opt = strtol(line, &endptr, 10);
 		if(endptr != line)
 		{
 			line = endptr;
-			view->sort[j++] = MIN(LAST_SORT_OPTION, MAX(-LAST_SORT_OPTION, sort_opt));
+			view->sort[j++] = MIN(SK_LAST, MAX(-SK_LAST, sort_opt));
 		}
 		else
 		{
@@ -332,7 +339,7 @@ get_sort_info(FileView *view, const char line[])
 		}
 		line = skip_char(line, ',');
 	}
-	memset(&view->sort[j], NO_SORT_OPTION, sizeof(view->sort) - j);
+	memset(&view->sort[j], SK_NONE, sizeof(view->sort) - j);
 
 	reset_view_sort(view);
 }
@@ -482,7 +489,6 @@ update_info_file(const char filename[])
 	char **ft = NULL, **fx = NULL, **fv = NULL, **cmds = NULL, **marks = NULL;
 	char **lh = NULL, **rh = NULL, **cmdh = NULL, **srch = NULL, **regs = NULL;
 	int *lhp = NULL, *rhp = NULL, *bt = NULL;
-	size_t nlhp = 0UL, nrhp = 0UL, nbt = 0UL;
 	char **prompt = NULL, **filter = NULL, **trash = NULL;
 	int nft = 0, nfx = 0, nfv = 0, ncmds = 0, nmarks = 0, nlh = 0, nrh = 0;
 	int ncmdh = 0, nsrch = 0, nregs = 0, nprompt = 0, nfilter = 0, ntrash = 0;
@@ -500,6 +506,7 @@ update_info_file(const char filename[])
 
 	if((fp = fopen(filename, "r")) != NULL)
 	{
+		size_t nlhp = 0UL, nrhp = 0UL, nbt = 0UL;
 		char *line = NULL, *line2 = NULL, *line3 = NULL, *line4 = NULL;
 		while((line = read_vifminfo_line(fp, line)) != NULL)
 		{
@@ -856,6 +863,7 @@ write_options(FILE *const fp)
 	fputs("\n# Options:\n", fp);
 	fprintf(fp, "=aproposprg=%s\n", escape_spaces(cfg.apropos_prg));
 	fprintf(fp, "=%sautochpos\n", cfg.auto_ch_pos ? "" : "no");
+	fprintf(fp, "=cdpath=%s\n", cfg.cd_path);
 	fprintf(fp, "=columns=%d\n", cfg.columns);
 	fprintf(fp, "=%sconfirm\n", cfg.confirm ? "" : "no");
 	fprintf(fp, "=cpoptions=%s%s%s\n",
@@ -863,6 +871,10 @@ write_options(FILE *const fp)
 			cfg.selection_is_primary ? "s" : "",
 			cfg.tab_switches_pane ? "t" : "");
 	fprintf(fp, "=%sfastrun\n", cfg.fast_run ? "" : "no");
+	if(strcmp(cfg.border_filler, " ") != 0)
+	{
+		fprintf(fp, "=fillchars+=vborder:%s\n", cfg.border_filler);
+	}
 	fprintf(fp, "=findprg=%s\n", escape_spaces(cfg.find_prg));
 	fprintf(fp, "=%sfollowlinks\n", cfg.follow_links ? "" : "no");
 	fprintf(fp, "=fusehome=%s\n", escape_spaces(cfg.fuse_home));
@@ -892,6 +904,9 @@ write_options(FILE *const fp)
 	fprintf(fp, "=timefmt=%s\n", escape_spaces(cfg.time_format + 1));
 	fprintf(fp, "=timeoutlen=%d\n", cfg.timeout_len);
 	fprintf(fp, "=%strash\n", cfg.use_trash ? "" : "no");
+	fprintf(fp, "=tuioptions=%s%s\n",
+			cfg.filelist_col_padding ? "p" : "",
+			cfg.side_borders_visible ? "s" : "");
 	fprintf(fp, "=undolevels=%d\n", cfg.undo_levels);
 	fprintf(fp, "=vicmd=%s%s\n", escape_spaces(cfg.vi_command),
 			cfg.vi_cmd_bg ? " &" : "");
@@ -1026,7 +1041,7 @@ write_bookmarks(FILE *const fp, const char non_conflicting_bmarks[],
 		const char mark = index2mark(index);
 		if(!is_spec_bookmark(index) && char_is_one_of(non_conflicting_bmarks, mark))
 		{
-			const bookmark_t *const bookmark = &bookmarks[index];
+			const bookmark_t *const bookmark = get_bookmark(index);
 
 			fprintf(fp, "'%c\n", mark);
 			fprintf(fp, "\t%s\n", bookmark->directory);
@@ -1070,7 +1085,7 @@ write_view_history(FILE *fp, FileView *view, const char str[], char mark,
 	{
 		fprintf(fp, "%c%s\n\t%s\n%d\n", mark, prev[i], prev[i + 1], pos[i/2]);
 	}
-	for(i = 0; i <= view->history_pos; i++)
+	for(i = 0; i <= view->history_pos && i < view->history_num; i++)
 	{
 		fprintf(fp, "%c%s\n\t%s\n%d\n", mark, view->history[i].dir,
 				view->history[i].file, view->history[i].rel_pos);
@@ -1238,11 +1253,10 @@ put_sort_info(FILE *fp, char leading_char, const FileView *view)
 {
 	int i = -1;
 	fputc(leading_char, fp);
-	while(++i < SORT_OPTION_COUNT && abs(view->sort[i]) <= LAST_SORT_OPTION)
+	while(++i < SK_COUNT && abs(view->sort[i]) <= SK_LAST)
 	{
-		int last_option = i >= SORT_OPTION_COUNT - 1;
-		last_option = last_option || abs(view->sort[i + 1]) > LAST_SORT_OPTION;
-		fprintf(fp, "%d%s", view->sort[i], last_option ? "" : ",");
+		int is_last_option = i >= SK_COUNT - 1 || abs(view->sort[i + 1]) > SK_LAST;
+		fprintf(fp, "%d%s", view->sort[i], is_last_option ? "" : ",");
 	}
 	fputc('\n', fp);
 }
@@ -1260,7 +1274,7 @@ read_optional_number(FILE *f)
 		ungetc(c, f);
 		if(isdigit(c) || c == '-' || c == '+')
 		{
-			const int nread = fscanf(f, "%d\n", &num);
+			const int nread = fscanf(f, "%30d\n", &num);
 			assert(nread == 1 && "Wrong number of read numbers.");
 			(void)nread;
 		}

@@ -19,18 +19,29 @@
 #include "var.h"
 
 #include <assert.h> /* assert() */
-#include <stddef.h> /* size_t */
-#include <stdio.h> /* sprintf() */
 #include <stdlib.h> /* calloc() free() */
 #include <string.h> /* strdup() */
 
 #include "../utils/str.h"
 
 var_t
+var_true(void)
+{
+	static const var_t true_var = { VTYPE_INT, { .integer = 1 } };
+	return true_var;
+}
+
+var_t
 var_false(void)
 {
 	static const var_t false_var = { VTYPE_INT, { .integer = 0 } };
 	return false_var;
+}
+
+var_t
+var_from_bool(int bool_val)
+{
+	return bool_val ? var_true() : var_false();
 }
 
 var_t

@@ -25,29 +25,31 @@
 #include <windows.h>
 #endif
 
-#include <sys/time.h> /* select() */
-#include <sys/types.h> /* select() */
-#include <signal.h>
 #include <unistd.h> /* select() */
 
-#include <assert.h>
+#include <assert.h> /* assert() */
+#include <signal.h> /* signal() */
+#include <stddef.h> /* size_t wchar_t wint_t */
 #include <string.h> /* memmove() strncpy() */
+#include <wchar.h> /* wcslen() wcscmp() */
 
 #include "cfg/config.h"
 #include "engine/keys.h"
+#include "engine/mode.h"
 #include "modes/modes.h"
-#include "modes/normal.h"
 #include "utils/log.h"
 #include "utils/macros.h"
 #include "utils/utils.h"
 #include "background.h"
-#include "color_scheme.h"
 #include "filelist.h"
 #include "ipc.h"
 #include "status.h"
 #include "ui.h"
 
-static void process_scheduled_redraw(void);
+static void process_scheduled_updates(void);
+static void process_scheduled_updates_of_view(FileView *view);
+static int should_check_views_for_changes(void);
+static void check_view_for_changes(FileView *view);
 
 static wchar_t buf[128];
 static int pos;
@@ -75,14 +77,12 @@ read_char(WINDOW *win, wint_t *c, int timeout)
 	{
 		int j;
 
-		process_scheduled_redraw();
+		process_scheduled_updates();
 
-		if(!is_status_bar_multiline() && !is_in_menu_like_mode() &&
-				get_mode() != CMDLINE_MODE)
+		if(should_check_views_for_changes())
 		{
-			check_if_filelists_have_changed(curr_view);
-			if(curr_stats.number_of_windows != 1 && !curr_stats.view)
-				check_if_filelists_have_changed(other_view);
+			check_view_for_changes(curr_view);
+			check_view_for_changes(other_view);
 		}
 
 		check_background_jobs();
@@ -93,12 +93,16 @@ read_char(WINDOW *win, wint_t *c, int timeout)
 			wtimeout(win, MIN(T, timeout)/IPC_F);
 
 			if((result = wget_wch(win, c)) != ERR)
+			{
 				break;
+			}
 
-			process_scheduled_redraw();
+			process_scheduled_updates();
 		}
 		if(result != ERR)
+		{
 			break;
+		}
 
 		timeout -= T;
 	}
@@ -234,22 +238,32 @@ main_loop(void)
 			if(last_result == KEYS_WAIT || last_result == KEYS_WAIT_SHORT)
 			{
 				if(ret != ERR)
+				{
 					modupd_input_bar(buf);
+				}
+
 				if(last_result == KEYS_WAIT_SHORT && wcscmp(buf, L"\033") == 0)
+				{
 					timeout = 1;
+				}
+
 				if(counter > 0)
+				{
 					clear_input_bar();
+				}
 
 				if(!curr_stats.save_msg && curr_view->selected_files &&
-						get_mode() != CMDLINE_MODE)
+						!vle_mode_is(CMDLINE_MODE))
+				{
 					print_selected_msg();
+				}
 				continue;
 			}
 		}
 
 		timeout = cfg.timeout_len;
 
-		process_scheduled_redraw();
+		process_scheduled_updates();
 
 		pos = 0;
 		buf[0] = L'\0';
@@ -270,13 +284,59 @@ main_loop(void)
 	}
 }
 
-/* Redraws TUI if it's scheduled. */
+/* Updates TUI or it's elements if something is scheduled. */
 static void
-process_scheduled_redraw(void)
+process_scheduled_updates(void)
 {
 	if(is_redraw_scheduled())
 	{
 		modes_redraw();
+	}
+
+	if(vle_mode_get_primary() != MENU_MODE)
+	{
+		process_scheduled_updates_of_view(curr_view);
+		process_scheduled_updates_of_view(other_view);
+	}
+}
+
+/* Performs postponed updates for the view, if any. */
+static void
+process_scheduled_updates_of_view(FileView *view)
+{
+	if(window_shows_dirlist(view))
+	{
+		/* Order of calls matters as reloading resets redraw request. */
+
+		if(ui_view_is_reload_scheduled(view))
+		{
+			load_saving_pos(view, !ui_view_is_full_reload_scheduled(view));
+		}
+
+		if(ui_view_is_redraw_scheduled(view))
+		{
+			redraw_view_imm(view);
+		}
+	}
+}
+
+/* Checks whether views should be checked against external changes.  Returns
+ * non-zero is so, otherwise zero is returned. */
+static int
+should_check_views_for_changes(void)
+{
+	return !is_status_bar_multiline()
+	    && !is_in_menu_like_mode()
+	    && !vle_mode_is(CMDLINE_MODE);
+}
+
+/* Updates view in case directory it displays was changed externally. */
+static void
+check_view_for_changes(FileView *view)
+{
+	if(window_shows_dirlist(view))
+	{
+		check_if_filelists_have_changed(view);
 	}
 }
 

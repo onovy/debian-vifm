@@ -19,20 +19,13 @@
 
 #include "sort.h"
 
-#include <curses.h>
-
-#include <sys/stat.h>
-#include <fcntl.h> /* access() */
-
 #include <assert.h> /* assert() */
 #include <ctype.h>
-#include <math.h> /* abs() */
-#include <stdlib.h> /* qsort() */
+#include <stdlib.h> /* abs() qsort() */
 #include <string.h> /* strrchr() */
 
 #include "cfg/config.h"
 #include "utils/fs_limits.h"
-#include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/test_helpers.h"
@@ -40,6 +33,7 @@
 #include "utils/utils.h"
 #include "filelist.h"
 #include "status.h"
+#include "types.h"
 #include "ui.h"
 
 static FileView* view;
@@ -48,7 +42,6 @@ static int sort_type;
 
 static void sort_by_key(char key);
 static int sort_dir_list(const void *one, const void *two);
-static int is_directory_entry(const dir_entry_t *entry);
 TSTATIC int strnumcmp(const char s[], const char t[]);
 #if !defined(HAVE_STRVERSCMP_FUNC) || !HAVE_STRVERSCMP_FUNC
 static int vercmp(const char s[], const char t[]);
@@ -64,12 +57,12 @@ sort_view(FileView *v)
 	int i;
 
 	view = v;
-	i = SORT_OPTION_COUNT;
+	i = SK_COUNT;
 	while(--i >= 0)
 	{
 		const char sorting_key = view->sort[i];
 
-		if(abs(sorting_key) > LAST_SORT_OPTION)
+		if(abs(sorting_key) > SK_LAST)
 		{
 			continue;
 		}
@@ -77,9 +70,9 @@ sort_view(FileView *v)
 		sort_by_key(sorting_key);
 	}
 
-	if(!ui_view_sort_list_contains(v->sort, SORT_BY_TYPE))
+	if(!ui_view_sort_list_contains(v->sort, SK_BY_TYPE))
 	{
-		sort_by_key(SORT_BY_TYPE);
+		sort_by_key(SK_BY_TYPE);
 	}
 }
 
@@ -189,25 +182,25 @@ sort_dir_list(const void *one, const void *two)
 	retval = 0;
 	switch(sort_type)
 	{
-		case SORT_BY_NAME:
-		case SORT_BY_INAME:
+		case SK_BY_NAME:
+		case SK_BY_INAME:
 			if(first->name[0] == '.' && second->name[0] != '.')
 				retval = -1;
 			else if(first->name[0] != '.' && second->name[0] == '.')
 				retval = 1;
 			else
 				retval = compare_file_names(dirs, first->name, second->name,
-						sort_type == SORT_BY_INAME);
+						sort_type == SK_BY_INAME);
 			break;
 
-		case SORT_BY_TYPE:
+		case SK_BY_TYPE:
 			if(first_is_dir != second_is_dir)
 			{
 				retval = first_is_dir ? -1 : 1;
 			}
 			break;
 
-		case SORT_BY_EXTENSION:
+		case SK_BY_EXTENSION:
 			pfirst  = strrchr(first->name,  '.');
 			psecond = strrchr(second->name, '.');
 
@@ -219,7 +212,7 @@ sort_dir_list(const void *one, const void *two)
 				retval = compare_file_names(dirs, first->name, second->name, 0);
 			break;
 
-		case SORT_BY_SIZE:
+		case SK_BY_SIZE:
 			{
 				if(first_is_dir)
 					tree_get_data(curr_stats.dirsize_cache, first->name, &first->size);
@@ -232,33 +225,33 @@ sort_dir_list(const void *one, const void *two)
 			}
 			break;
 
-		case SORT_BY_TIME_MODIFIED:
+		case SK_BY_TIME_MODIFIED:
 			retval = first->mtime - second->mtime;
 			break;
 
-		case SORT_BY_TIME_ACCESSED:
+		case SK_BY_TIME_ACCESSED:
 			retval = first->atime - second->atime;
 			break;
 
-		case SORT_BY_TIME_CHANGED:
+		case SK_BY_TIME_CHANGED:
 			retval = first->ctime - second->ctime;
 			break;
 #ifndef _WIN32
-		case SORT_BY_MODE:
+		case SK_BY_MODE:
 			retval = first->mode - second->mode;
 			break;
 
-		case SORT_BY_OWNER_NAME: /* FIXME */
-		case SORT_BY_OWNER_ID:
+		case SK_BY_OWNER_NAME: /* FIXME */
+		case SK_BY_OWNER_ID:
 			retval = first->uid - second->uid;
 			break;
 
-		case SORT_BY_GROUP_NAME: /* FIXME */
-		case SORT_BY_GROUP_ID:
+		case SK_BY_GROUP_NAME: /* FIXME */
+		case SK_BY_GROUP_ID:
 			retval = first->gid - second->gid;
 			break;
 
-		case SORT_BY_PERMISSIONS:
+		case SK_BY_PERMISSIONS:
 			{
 				char first_perm[11], second_perm[11];
 				get_perm_string(first_perm, sizeof(first_perm), first->mode);
@@ -283,15 +276,6 @@ sort_dir_list(const void *one, const void *two)
 	}
 
 	return retval;
-}
-
-/* Checks whether entry corresponds to a directory.  Returns non-zero if so,
- * otherwise zero is returned. */
-static int
-is_directory_entry(const dir_entry_t *entry)
-{
-	return (entry->type == DIRECTORY)
-	    || (entry->type == LINK && ends_with_slash(entry->name));
 }
 
 /* Compares two filenames.  Returns positive value if s greater than t, zero if
@@ -336,23 +320,23 @@ get_secondary_key(int primary_key)
 	switch(primary_key)
 	{
 #ifndef _WIN32
-		case SORT_BY_OWNER_NAME:
-		case SORT_BY_OWNER_ID:
-		case SORT_BY_GROUP_NAME:
-		case SORT_BY_GROUP_ID:
-		case SORT_BY_MODE:
-		case SORT_BY_PERMISSIONS:
+		case SK_BY_OWNER_NAME:
+		case SK_BY_OWNER_ID:
+		case SK_BY_GROUP_NAME:
+		case SK_BY_GROUP_ID:
+		case SK_BY_MODE:
+		case SK_BY_PERMISSIONS:
 #endif
-		case SORT_BY_TIME_MODIFIED:
-		case SORT_BY_TIME_ACCESSED:
-		case SORT_BY_TIME_CHANGED:
+		case SK_BY_TIME_MODIFIED:
+		case SK_BY_TIME_ACCESSED:
+		case SK_BY_TIME_CHANGED:
 			return primary_key;
-		case SORT_BY_NAME:
-		case SORT_BY_INAME:
-		case SORT_BY_EXTENSION:
-		case SORT_BY_SIZE:
+		case SK_BY_NAME:
+		case SK_BY_INAME:
+		case SK_BY_EXTENSION:
+		case SK_BY_SIZE:
 		default:
-			return SORT_BY_SIZE;
+			return SK_BY_SIZE;
 	}
 }
 

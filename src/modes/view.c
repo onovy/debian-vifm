@@ -18,17 +18,21 @@
 
 #include "view.h"
 
+#include <curses.h>
+
 #include <regex.h>
 
-#include <curses.h>
+#include <unistd.h> /* R_OK access() */
 
 #include <assert.h> /* assert() */
 #include <stddef.h> /* ptrdiff_t size_t */
 #include <string.h> /* strcpy() strdup() strlen() */
+#include <stdio.h>  /* fclose() fopen() snprintf() */
 #include <stdlib.h> /* malloc() free() */
 
 #include "../cfg/config.h"
 #include "../engine/keys.h"
+#include "../engine/mode.h"
 #include "../menus/menus.h"
 #include "../utils/fs.h"
 #include "../utils/fs_limits.h"
@@ -39,14 +43,14 @@
 #include "../utils/utf8.h"
 #include "../utils/utils.h"
 #include "../color_manager.h"
-#include "../commands.h"
+#include "../colors.h"
 #include "../escape.h"
 #include "../filelist.h"
-#include "../fileops.h"
 #include "../filetype.h"
 #include "../quickview.h"
 #include "../running.h"
 #include "../status.h"
+#include "../types.h"
 #include "../ui.h"
 #include "cmdline.h"
 #include "modes.h"
@@ -153,7 +157,6 @@ static int is_trying_the_same_file(void);
 static int get_file_to_explore(const FileView *view, char buf[],
 		size_t buf_len);
 
-static int *mode;
 view_info_t view_info[VI_COUNT];
 view_info_t* vi = &view_info[VI_QV];
 
@@ -260,16 +263,14 @@ static keys_add_info_t builtin_cmds[] = {
 };
 
 void
-init_view_mode(int *key_mode)
+init_view_mode(void)
 {
 	int ret_code;
 
-	assert(key_mode != NULL);
-
-	mode = key_mode;
-
 	ret_code = add_cmds(builtin_cmds, ARRAY_LEN(builtin_cmds), VIEW_MODE);
 	assert(ret_code == 0);
+
+	(void)ret_code;
 
 	init_view_info(&view_info[VI_QV]);
 	init_view_info(&view_info[VI_LWIN]);
@@ -303,7 +304,7 @@ enter_view_mode(int explore)
 
 	vi->filename = strdup(full_path);
 
-	*mode = VIEW_MODE;
+	vle_mode_set(VIEW_MODE, VMT_SECONDARY);
 
 	if(explore)
 	{
@@ -342,7 +343,7 @@ try_ressurect_abandoned(const char full_path[], int explore)
 	}
 	else
 	{
-		*mode = VIEW_MODE;
+		vle_mode_set(VIEW_MODE, VMT_SECONDARY);
 		return 0;
 	}
 }
@@ -352,7 +353,7 @@ try_activate_view_mode(void)
 {
 	if(curr_view->explore_mode)
 	{
-		*mode = VIEW_MODE;
+		vle_mode_set(VIEW_MODE, VMT_SECONDARY);
 		pick_vi(curr_view->explore_mode);
 	}
 }
@@ -416,7 +417,7 @@ try_redraw_explore_view(const FileView *const view, int vi_index)
 void
 leave_view_mode(void)
 {
-	*mode = NORMAL_MODE;
+	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 
 	if(curr_view->explore_mode)
 	{
@@ -441,7 +442,7 @@ leave_view_mode(void)
 void
 view_explore_mode_quit(FileView *view)
 {
-	assert(*mode != VIEW_MODE && "Unexpected mode.");
+	assert(!vle_mode_is(VIEW_MODE) && "Unexpected mode.");
 	if(!view->explore_mode)
 	{
 		return;
@@ -799,7 +800,7 @@ static void
 cmd_ctrl_ww(key_info_t key_info, keys_info_t *keys_info)
 {
 	vi->abandoned = 1;
-	*mode = NORMAL_MODE;
+	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 	if(curr_view->explore_mode)
 	{
 		go_to_other_pane();
@@ -813,7 +814,7 @@ static void
 cmd_ctrl_wx(key_info_t key_info, keys_info_t *keys_info)
 {
 	vi->abandoned = 1;
-	*mode = NORMAL_MODE;
+	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 	switch_panes();
 	if(curr_stats.view)
 	{
@@ -864,7 +865,7 @@ cmd_tab(key_info_t key_info, keys_info_t *keys_info)
 	change_window();
 	if(!curr_view->explore_mode)
 	{
-		*mode = NORMAL_MODE;
+		vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 	}
 	pick_vi(curr_view->explore_mode);
 

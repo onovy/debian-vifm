@@ -19,7 +19,7 @@
 #ifndef VIFM__ENGINE__KEYS_H__
 #define VIFM__ENGINE__KEYS_H__
 
-#include <wchar.h>
+#include <stddef.h> /* size_t wchar_t */
 
 #include "../utils/test_helpers.h"
 
@@ -118,7 +118,7 @@ typedef int (*default_handler)(wchar_t key);
 /*
  * Assumed that key_mode_flags is an array of at least modes_count items
  */
-void init_keys(int modes_count, int *key_mode, int *key_mode_flags);
+void init_keys(int modes_count, int *key_mode_flags);
 
 /*
  * Frees all allocated memory

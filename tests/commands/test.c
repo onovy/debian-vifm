@@ -11,7 +11,7 @@
 cmd_info_t user_cmd_info;
 
 static int complete_args(int id, const char *args, int argc, char **argv,
-		int arg_pos);
+		int arg_pos, void *extra_arg);
 static int swap_range(void);
 static int resolve_mark(char mark);
 static char * expand_macros(const char *str, int for_shell, int *usr1,
@@ -57,15 +57,16 @@ all_tests(void)
 }
 
 static int
-complete_args(int id, const char *args, int argc, char **argv, int arg_pos)
+complete_args(int id, const char *args, int argc, char **argv, int arg_pos,
+		void *extra_arg)
 {
 	const char *arg;
 
-	reset_completion();
-	add_completion("followlinks");
-	add_completion("fastrun");
-	completion_group_end();
-	add_completion("f");
+	vle_compl_reset();
+	vle_compl_add_match("followlinks");
+	vle_compl_add_match("fastrun");
+	vle_compl_finish_group();
+	vle_compl_add_last_match("f");
 
 	arg = strrchr(args, ' ');
 	if(arg == NULL)

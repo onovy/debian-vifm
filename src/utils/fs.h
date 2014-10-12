@@ -20,14 +20,25 @@
 #ifndef VIFM__UTILS__FS_H__
 #define VIFM__UTILS__FS_H__
 
-#include <sys/types.h> /* size_t mode_t */
+#include <sys/types.h> /* mode_t */
 
-#include <stdint.h> /* uint64_t */
+#include <stddef.h> /* size_t */
+#include <stdint.h> /* uint32_t uint64_t */
 
 /* Functions to deal with file system objects */
 
-/* Checks if path is an existing directory. */
-int is_dir(const char *path);
+/* Link types for get_symlink_type() function. */
+typedef enum
+{
+	SLT_UNKNOWN, /* It's either a file or the link is broken. */
+	SLT_DIR,     /* It's a valid link to a directory. */
+	SLT_SLOW,    /* Target of the link is at slow file system, won't access it. */
+}
+SymLinkType;
+
+/* Checks if path is an existing directory.  Automatically deferences symbolic
+ * links. */
+int is_dir(const char path[]);
 
 /* Checks whether directory is empty.  Returns non-zero if it isn't, in case of
  * error or when directory is empty zero is returned. */
@@ -44,7 +55,13 @@ int path_exists(const char path[]);
 /* Checks whether path/file exists. */
 int path_exists_at(const char *path, const char *filename);
 
-int check_link_is_dir(const char *filename);
+/* Checks whether given path points to a symbolic link.  Returns non-zero if
+ * it's so, otherwise zero is returned. */
+int is_symlink(const char path[]);
+
+/* Gets approximate symbolic link type: directory, won't check, anything else.
+ * Returns one of SymLinkType values. */
+SymLinkType get_symlink_type(const char path[]);
 
 /* Fills the buf of size buf_len with the absolute path to a file pointed to by
  * the link symbolic link.  Uses the cwd parameter to make absolute path from
@@ -66,7 +83,8 @@ int directory_accessible(const char *path);
  * absolute (in order for this function to work correctly). */
 int is_dir_writable(const char path[]);
 
-/* Gets correct file size independently of platform. */
+/* Gets correct file size independently of platform.  Returns zero for both
+ * empty files and on error. */
 uint64_t get_file_size(const char *path);
 
 /* Lists all regular files inside the path directory.  Allocates an array of
@@ -83,6 +101,33 @@ int is_regular_file(const char path[]);
  * error, otherwise zero is returned. */
 int rename_file(const char src[], const char dst[]);
 
+/* Removes directory content. */
+void remove_dir_content(const char path[]);
+
+struct dirent;
+
+/* Uses dentry or full path to check whether target is symbolic link.  Returns
+ * non-zero if so, otherwise zero is returned. */
+int entry_is_link(const char path[], const struct dirent* dentry);
+
+/* Uses dentry or full path to check file type.  Returns non-zero for
+ * directories, otherwise zero is returned.  Symbolic links are _not_
+ * dereferenced. */
+int entry_is_dir(const char full_path[], const struct dirent* dentry);
+
+/* Uses dentry or path to check file type.  Assumes that file is located in
+ * current working directory.  Returns non-zero for directories, otherwise zero
+ * is returned.  Symbolic links are dereferenced. */
+int is_dirent_targets_dir(const struct dirent *d);
+
+/* Checks that entity pointed to by the path is located under the root
+ * directory.  Returns non-zero if so, otherwise zero is returned. */
+int is_in_subtree(const char path[], const char root[]);
+
+/* Checks whether to paths belong to the same file system.  Returns non-zero if
+ * so, otherwise zero is returned. */
+int are_on_the_same_fs(const char s[], const char t[]);
+
 #ifdef _WIN32
 
 char * realpath(const char *path, char *buf);
@@ -94,6 +139,8 @@ int readlink(const char *path, char *buf, size_t len);
 int is_on_fat_volume(const char *path);
 
 int drive_exists(char letter);
+
+int is_win_symlink(uint32_t attr, uint32_t tag);
 
 #endif
 

@@ -28,6 +28,7 @@
 
 #include <sys/stat.h> /* stat */
 #include <dirent.h> /* DIR dirent */
+#include <unistd.h> /* X_OK access() */
 
 #ifndef _WIN32
 #include <grp.h> /* getgrent setgrent */
@@ -41,6 +42,7 @@
 
 #include "cfg/config.h"
 #include "engine/completion.h"
+#include "engine/functions.h"
 #include "engine/options.h"
 #include "engine/variables.h"
 #ifdef _WIN32
@@ -53,6 +55,7 @@
 #include "utils/str.h"
 #include "utils/utils.h"
 #include "color_scheme.h"
+#include "colors.h"
 #include "commands.h"
 #include "file_magic.h"
 #include "filelist.h"
@@ -79,18 +82,14 @@ static void filename_completion_in_dir(const char *path, const char *str,
 		CompletionType type);
 static void filename_completion_internal(DIR * dir, const char * dirname,
 		const char * filename, CompletionType type);
-static void add_filename_completion(const char filename[], CompletionType type);
-static int is_entry_dir(const struct dirent *d);
-static int is_entry_exec(const struct dirent *d);
+static int is_dirent_targets_exec(const struct dirent *d);
 #ifdef _WIN32
-static const char * escape_for_cd(const char *str);
 static void complete_with_shared(const char *server, const char *file);
 #endif
-static int complete_cmd_in_path(const char cmd[], size_t path_len, char path[]);
-static int executable_exists(const char path[]);
 
 int
-complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
+complete_args(int id, const char args[], int argc, char *argv[], int arg_pos,
+		void *extra_arg)
 {
 	/* TODO: Refactor this function complete_args() */
 
@@ -114,6 +113,10 @@ complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
 		{
 			start = ampersand + 1;
 			complete_real_option_names(ampersand + 1);
+		}
+		else if(dollar == NULL)
+		{
+			function_complete_name(arg, &start);
 		}
 		else
 		{
@@ -160,6 +163,7 @@ complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
 	}
 	else
 	{
+		char *free_me = NULL;
 		size_t arg_num = argc;
 		start = slash;
 		if(start == NULL)
@@ -169,9 +173,40 @@ complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
 
 		if(argc > 0 && !cmd_ends_with_space(args))
 		{
+			if(ends_with(args, "\""))
+			{
+				return start - args;
+			}
+			if(ends_with(args, "'"))
+			{
+				return start - args;
+			}
 			arg_num = argc - 1;
 			arg = argv[arg_num];
 		}
+
+		switch((CompletionPreProcessing)extra_arg)
+		{
+			case CPP_NONE:
+				/* Do nothing. */
+				break;
+			case CPP_SQUOTES_UNESCAPE:
+				arg = args + arg_pos + 1;
+				start = (slash == NULL) ? arg : (slash + 1);
+
+				free_me = strdup(arg);
+				expand_squotes_escaping(free_me);
+				arg = free_me;
+				break;
+			case CPP_DQUOTES_UNESCAPE:
+				arg = args + arg_pos + 1;
+				start = (slash == NULL) ? arg : (slash + 1);
+
+				free_me = strdup(arg);
+				expand_dquotes_escaping(free_me);
+				arg = free_me;
+				break;
+		};
 
 		if(id == COM_COLORSCHEME)
 		{
@@ -216,6 +251,8 @@ complete_args(int id, const char args[], int argc, char *argv[], int arg_pos)
 		{
 			filename_completion(arg, CT_ALL);
 		}
+
+		free(free_me);
 	}
 
 	return start - args;
@@ -252,15 +289,19 @@ complete_help(const char *str)
 	int i;
 
 	if(!cfg.use_vim_help)
+	{
 		return;
+	}
 
 	for(i = 0; tags[i] != NULL; i++)
 	{
 		if(strstr(tags[i], str) != NULL)
-			add_completion(tags[i]);
+		{
+			vle_compl_add_match(tags[i]);
+		}
 	}
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 static void
@@ -307,11 +348,11 @@ complete_from_string_list(const char str[], const char *list[], size_t list_len)
 	{
 		if(strncmp(str, list[i], len) == 0)
 		{
-			add_completion(list[i]);
+			vle_compl_add_match(list[i]);
 		}
 	}
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 static int
@@ -330,7 +371,7 @@ complete_chown(const char *str)
 		return colon - str + 1;
 	}
 #else
-	add_completion(str);
+	vle_compl_add_last_match(str);
 	return 0;
 #endif
 }
@@ -346,8 +387,8 @@ complete_filetype(const char *str)
 
 	complete_progs(str, get_magic_handlers(filename));
 
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 static void
@@ -365,8 +406,8 @@ complete_progs(const char *str, assoc_records_t records)
 
 		if(strnoscmp(command, str, len) == 0)
 		{
-			char *escaped = escape_chars(command, "|");
-			add_completion(escaped);
+			char *const escaped = escape_chars(command, "|");
+			vle_compl_add_match(escaped);
 			free(escaped);
 		}
 	}
@@ -376,21 +417,22 @@ static void
 complete_highlight_groups(const char *str)
 {
 	int i;
-	size_t len = strlen(str);
+	const size_t len = strlen(str);
 	for(i = 0; i < MAXNUM_COLOR - 2; i++)
 	{
 		if(strncasecmp(str, HI_GROUPS[i], len) == 0)
-			add_completion(HI_GROUPS[i]);
+		{
+			vle_compl_add_match(HI_GROUPS[i]);
+		}
 	}
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 static int
 complete_highlight_arg(const char *str)
 {
 	/* TODO: Refactor this function complete_highlight_arg() */
-	int i;
 	char *equal = strchr(str, '=');
 	int result = (equal == NULL) ? 0 : (equal - str + 1);
 	size_t len = strlen((equal == NULL) ? str : ++equal);
@@ -401,10 +443,15 @@ complete_highlight_arg(const char *str)
 			"ctermfg",
 			"ctermbg",
 		};
+
+		int i;
+
 		for(i = 0; i < ARRAY_LEN(args); i++)
 		{
 			if(strncmp(str, args[i], len) == 0)
-				add_completion(args[i]);
+			{
+				vle_compl_add_match(args[i]);
+			}
 		}
 	}
 	else
@@ -419,6 +466,9 @@ complete_highlight_arg(const char *str)
 				"standout",
 				"none",
 			};
+
+			int i;
+
 			char *comma = strrchr(equal, ',');
 			if(comma != NULL)
 			{
@@ -430,29 +480,42 @@ complete_highlight_arg(const char *str)
 			for(i = 0; i < ARRAY_LEN(STYLES); i++)
 			{
 				if(strncasecmp(equal, STYLES[i], len) == 0)
-					add_completion(STYLES[i]);
+				{
+					vle_compl_add_match(STYLES[i]);
+				}
 			}
 		}
 		else
 		{
+			int i;
+
 			if(strncasecmp(equal, "default", len) == 0)
-				add_completion("default");
-			if(strncasecmp(equal, "none", len) == 0)
-				add_completion("none");
-			for(i = 0; i < ARRAY_LEN(COLOR_NAMES); i++)
 			{
-				if(strncasecmp(equal, COLOR_NAMES[i], len) == 0)
-					add_completion(COLOR_NAMES[i]);
+				vle_compl_add_match("default");
+			}
+			if(strncasecmp(equal, "none", len) == 0)
+			{
+				vle_compl_add_match("none");
+			}
+
+			for(i = 0; i < ARRAY_LEN(XTERM256_COLOR_NAMES); i++)
+			{
+				if(strncasecmp(equal, XTERM256_COLOR_NAMES[i], len) == 0)
+				{
+					vle_compl_add_match(XTERM256_COLOR_NAMES[i]);
+				}
 			}
 			for(i = 0; i < ARRAY_LEN(LIGHT_COLOR_NAMES); i++)
 			{
 				if(strncasecmp(equal, LIGHT_COLOR_NAMES[i], len) == 0)
-					add_completion(LIGHT_COLOR_NAMES[i]);
+				{
+					vle_compl_add_match(LIGHT_COLOR_NAMES[i]);
+				}
 			}
 		}
 	}
-	completion_group_end();
-	add_completion((equal == NULL) ? str : equal);
+	vle_compl_finish_group();
+	vle_compl_add_last_match((equal == NULL) ? str : equal);
 	return result;
 }
 
@@ -474,31 +537,33 @@ complete_envvar(const char str[])
 			if(equal != NULL)
 			{
 				*equal = '\0';
-				add_completion(*p);
+				vle_compl_add_match(*p);
 				*equal = '=';
 			}
 		}
 		p++;
 	}
 
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 static void
 complete_winrun(const char *str)
 {
 	static const char *VARIANTS[] = { "^", "$", "%", ".", "," };
-	size_t len = strlen(str);
+	const size_t len = strlen(str);
 	int i;
 
 	for(i = 0; i < ARRAY_LEN(VARIANTS); i++)
 	{
 		if(strncmp(str, VARIANTS[i], len) == 0)
-			add_completion(VARIANTS[i]);
+		{
+			vle_compl_add_match(VARIANTS[i]);
+		}
 	}
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 char *
@@ -516,14 +581,14 @@ fast_run_complete(const char cmd[])
 		return strdup(cmd);
 	}
 
-	reset_completion();
+	vle_compl_reset();
 	complete_command_name(command);
-	completion_groups_unite();
-	completed = next_completion();
+	vle_compl_unite_groups();
+	completed = vle_compl_next();
 
-	if(get_completion_count() > 2)
+	if(vle_compl_get_count() > 2)
 	{
-		int c = get_completion_count() - 1;
+		int c = vle_compl_get_count() - 1;
 		while(c-- > 0)
 		{
 			if(stroscmp(command, completed) == 0)
@@ -534,7 +599,7 @@ fast_run_complete(const char cmd[])
 			else
 			{
 				free(completed);
-				completed = next_completion();
+				completed = vle_compl_next();
 			}
 		}
 
@@ -546,7 +611,7 @@ fast_run_complete(const char cmd[])
 	else
 	{
 		free(completed);
-		completed = next_completion();
+		completed = vle_compl_next();
 		result = format_str("%s %s", completed, args);
 	}
 	free(completed);
@@ -570,7 +635,7 @@ complete_command_name(const char beginning[])
 			filename_completion(beginning, CT_EXECONLY);
 		}
 	}
-	add_completion(beginning);
+	vle_compl_add_last_path_match(beginning);
 }
 
 static void
@@ -603,13 +668,13 @@ filename_completion(const char *str, CompletionType type)
 
 	if(str[0] == '~' && strchr(str, '/') == NULL)
 	{
-		char *s = expand_tilde(strdup(str));
-		add_completion(s);
-		free(s);
+		char *const tilde_expanded = expand_tilde(str);
+		vle_compl_add_path_match(tilde_expanded);
+		free(tilde_expanded);
 		return;
 	}
 
-	dirname = expand_tilde(strdup(str));
+	dirname = expand_tilde(str);
 	filename = strdup(dirname);
 
 	temp = cmds_expand_envvars(dirname);
@@ -665,7 +730,7 @@ filename_completion(const char *str, CompletionType type)
 
 	if(dir == NULL || vifm_chdir(dirname) != 0)
 	{
-		add_completion(filename);
+		vle_compl_add_path_match(filename);
 	}
 	else
 	{
@@ -696,108 +761,44 @@ filename_completion_internal(DIR * dir, const char * dirname,
 		if(strnoscmp(d->d_name, filename, filename_len) != 0)
 			continue;
 
-		if(type == CT_DIRONLY && !is_entry_dir(d))
+		if(type == CT_DIRONLY && !is_dirent_targets_dir(d))
 			continue;
-		else if(type == CT_EXECONLY && !is_entry_exec(d))
+		else if(type == CT_EXECONLY && !is_dirent_targets_exec(d))
 			continue;
-		else if(type == CT_DIREXEC && !is_entry_dir(d) && !is_entry_exec(d))
+		else if(type == CT_DIREXEC && !is_dirent_targets_dir(d) &&
+				!is_dirent_targets_exec(d))
 			continue;
 
-		if(is_entry_dir(d) && type != CT_ALL_WOS)
+		if(is_dirent_targets_dir(d) && type != CT_ALL_WOS)
 		{
-			char buf[NAME_MAX + 1];
-			snprintf(buf, sizeof(buf), "%s/", d->d_name);
-			add_filename_completion(buf, type);
+			char with_slash[strlen(d->d_name) + 1 + 1];
+			snprintf(with_slash, sizeof(with_slash), "%s/", d->d_name);
+			vle_compl_add_path_match(with_slash);
 		}
 		else
 		{
-			add_filename_completion(d->d_name, type);
+			vle_compl_add_path_match(d->d_name);
 		}
 	}
 
-	completion_group_end();
+	vle_compl_finish_group();
 	if(type != CT_EXECONLY)
 	{
-		if(get_completion_count() == 0)
-		{
-			add_completion(filename);
-		}
-		else
-		{
-			add_filename_completion(filename, type);
-		}
+		vle_compl_add_last_path_match(filename);
 	}
 }
 
-/* Adds completion of a filename to the list of matches taking care of escaping
- * (depends on the type parameter). */
-static void
-add_filename_completion(const char filename[], CompletionType type)
-{
-#ifndef _WIN32
-	char *escaped = NULL;
-#endif
-
-	const int woe = (type == CT_ALL_WOE || type == CT_FILE_WOE);
-	const char *completion;
-
-	if(woe)
-	{
-		completion = filename;
-	}
-	else
-	{
-#ifndef _WIN32
-		escaped = escape_filename(filename, 1);
-		completion = escaped;
-#else
-		completion = escape_for_cd(filename);
-#endif
-	}
-
-	add_completion(completion);
-
-#ifndef _WIN32
-	free(escaped);
-#endif
-}
-
+/* Uses dentry to check file type.  Returns non-zero for directories,
+ * otherwise zero is returned.  Symbolic links are dereferenced. */
 static int
-is_entry_dir(const struct dirent *d)
-{
-#ifdef _WIN32
-	struct stat st;
-	if(stat(d->d_name, &st) != 0)
-		return 0;
-	return S_ISDIR(st.st_mode);
-#else
-	if(d->d_type == DT_UNKNOWN)
-	{
-		struct stat st;
-		if(stat(d->d_name, &st) != 0)
-			return 0;
-		return S_ISDIR(st.st_mode);
-	}
-
-	if(d->d_type != DT_DIR && d->d_type != DT_LNK)
-		return 0;
-	if(d->d_type == DT_LNK && !check_link_is_dir(d->d_name))
-		return 0;
-	return 1;
-#endif
-}
-
-static int
-is_entry_exec(const struct dirent *d)
+is_dirent_targets_exec(const struct dirent *d)
 {
 #ifndef _WIN32
 	if(d->d_type == DT_DIR)
 		return 0;
-	if(d->d_type == DT_LNK && check_link_is_dir(d->d_name))
+	if(d->d_type == DT_LNK && get_symlink_type(d->d_name) != SLT_UNKNOWN)
 		return 0;
-	if(access(d->d_name, X_OK) != 0)
-		return 0;
-	return 1;
+	return access(d->d_name, X_OK) == 0;
 #else
 	return is_win_executable(d->d_name);
 #endif
@@ -816,10 +817,12 @@ complete_user_name(const char *str)
 	while((pw = getpwent()) != NULL)
 	{
 		if(strncmp(pw->pw_name, str, len) == 0)
-			add_completion(pw->pw_name);
+		{
+			vle_compl_add_match(pw->pw_name);
+		}
 	}
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 void
@@ -832,35 +835,15 @@ complete_group_name(const char *str)
 	while((gr = getgrent()) != NULL)
 	{
 		if(strncmp(gr->gr_name, str, len) == 0)
-			add_completion(gr->gr_name);
+		{
+			vle_compl_add_match(gr->gr_name);
+		}
 	}
-	completion_group_end();
-	add_completion(str);
+	vle_compl_finish_group();
+	vle_compl_add_last_match(str);
 }
 
 #else
-
-/* Returns pointer to a statically allocated buffer */
-static const char *
-escape_for_cd(const char *str)
-{
-	static char buf[PATH_MAX*2];
-	char *p;
-
-	p = buf;
-	while(*str != '\0')
-	{
-		if(char_is_one_of("\\ $", *str))
-			*p++ = '\\';
-		else if(*str == '%')
-			*p++ = '%';
-		*p++ = *str;
-
-		str++;
-	}
-	*p = '\0';
-	return buf;
-}
 
 static void
 complete_with_shared(const char *server, const char *file)
@@ -896,8 +879,8 @@ complete_with_shared(const char *server, const char *file)
 				strcat(buf, "/");
 				if(strnoscmp(buf, file, len) == 0)
 				{
-					char *escaped = escape_filename(buf, 1);
-					add_completion(escaped);
+					char *const escaped = escape_filename(buf, 1);
+					vle_compl_add_match(escaped);
 					free(escaped);
 				}
 				p++;
@@ -937,47 +920,8 @@ get_cmd_path(const char cmd[], size_t path_len, char path[])
 	}
 	else
 	{
-		return complete_cmd_in_path(cmd, path_len, path);
+		return find_cmd_in_path(cmd, path_len, path);
 	}
-}
-
-/* Completes path to executable using all directories from PATH environment
- * variable.  Returns zero on success, otherwise non-zero is returned. */
-static int
-complete_cmd_in_path(const char cmd[], size_t path_len, char path[])
-{
-	size_t i;
-	size_t paths_count;
-	char **paths;
-
-	paths = get_paths(&paths_count);
-	for(i = 0; i < paths_count; i++)
-	{
-		char tmp_path[PATH_MAX];
-		snprintf(tmp_path, sizeof(tmp_path), "%s/%s", paths[i], cmd);
-
-		/* Need to check for executable, not just a file, as this additionally
-		 * checks for path with different executable extensions on Windows. */
-		if(executable_exists(tmp_path))
-		{
-			copy_str(path, path_len, tmp_path);
-			return 0;
-		}
-	}
-	return 1;
-}
-
-/* Checks for executable by its path.  Mutates path by appending executable
- * prefixes on Windows.  Returns non-zero if path points to an executable,
- * otherwise zero is returned. */
-static int
-executable_exists(const char path[])
-{
-#ifndef _WIN32
-	return access(path, X_OK) == 0;
-#else
-	return win_executable_exists(path);
-#endif
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

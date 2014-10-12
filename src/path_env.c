@@ -20,6 +20,7 @@
 
 #include <dirent.h> /* DIR opendir() readdir() closedir() DT_DIR */
 
+#include <stdio.h> /* snprintf() sprintf() */
 #include <stdlib.h> /* malloc() free() */
 #include <string.h> /* strchr() strlen() */
 
@@ -207,7 +208,7 @@ split_path_list(void)
 
 		p = q;
 
-		s = expand_tilde(s);
+		s = replace_tilde(s);
 
 		/* No need to check "." path for existence. */
 		if(strcmp(s, ".") != 0)

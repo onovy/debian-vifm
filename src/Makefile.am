@@ -4,6 +4,34 @@
 
 AUTOMAKE_OPTIONS = subdir-objects
 
+vim_dir = $(pkgdatadir)/vim
+vimdoc_dir = $(pkgdatadir)/vim-doc
+
+vim_autoload_vifm_dir = $(vim_dir)/autoload/vifm
+vim_doc_dir = $(vim_dir)/doc
+vim_ftdetect_dir = $(vim_dir)/ftdetect
+vim_ftplugin_dir = $(vim_dir)/ftplugin
+vim_plugin_dir = $(vim_dir)/plugin
+vim_syntax_dir = $(vim_dir)/syntax
+
+vimdoc_doc_dir = $(vimdoc_dir)/doc
+
+vim_autoload_vifm__DATA = ../data/vim/autoload/vifm/edit.vim
+vim_doc__DATA = ../data/vim/doc/plugin/vifm-plugin.txt \
+								../data/vim/doc/plugin/tags
+vim_ftdetect__DATA = ../data/vim/ftdetect/vifm.vim \
+										 ../data/vim/ftdetect/vifm-rename.vim
+vim_ftplugin__DATA = ../data/vim/ftplugin/vifm.vim \
+										 ../data/vim/ftplugin/vifm-cmdedit.vim \
+										 ../data/vim/ftplugin/vifm-edit.vim \
+										 ../data/vim/ftplugin/vifm-rename.vim \
+										 ../data/vim/ftplugin/mail_vifm.vim
+vim_plugin__DATA = ../data/vim/plugin/vifm.vim
+vim_syntax__DATA = ../data/vim/syntax/vifm.vim
+
+vimdoc_doc__DATA = ../data/vim/doc/app/vifm-app.txt \
+									 ../data/vim/doc/app/tags
+
 pkgdata_DATA = ../data/vifmrc \
 							 ../data/vifm-help.txt
 
@@ -36,11 +64,21 @@ vifm_SOURCES = \
 	engine/completion.c engine/completion.h \
 	engine/functions.c engine/functions.h \
 	engine/keys.c engine/keys.h \
+	engine/mode.c engine/mode.h \
 	engine/options.c engine/options.h engine/private/options.h \
 	engine/parsing.c engine/parsing.h \
 	engine/text_buffer.c engine/text_buffer.h \
 	engine/var.c engine/var.h \
 	engine/variables.c engine/variables.h \
+	\
+	io/ioc.h \
+	io/ioe.h \
+	io/ioeta.c io/ioeta.h \
+	io/iop.c io/iop.h \
+	io/ior.c io/ior.h \
+	io/private/ioeta.c io/private/ioeta.h \
+	io/private/ionotif.c io/private/ionotif.h \
+	io/private/traverser.c io/private/traverser.h \
 	\
 	menus/all.h \
 	menus/apropos_menu.c menus/apropos_menu.h \
@@ -160,7 +198,7 @@ update_compile_info:
 	@before="$$(cat "compile_info.c" 2> /dev/null)"; \
 	if [ "x$$(which git 2> /dev/null)" != "x" ]; then \
 		unset GIT_DIR; \
-		new="const char GIT_HASH[] = \"$$(git rev-parse HEAD)\";"; \
+		new="const char GIT_HASH[] = \"$$(git rev-parse HEAD 2> /dev/null)\";"; \
 	else \
 		new='const char GIT_HASH[] = "";'; \
 	fi; \
@@ -170,11 +208,23 @@ update_compile_info:
 
 ../data/vifm-help.txt: ../data/vifm.1
 	@if [ "x$$(whereis groff)" != "x" -a "x$$(whereis sed)" != "x" ]; then \
-		groff -Tutf8 -man ../data/vifm.1 | sed -e 's/.\x08//g' -e 's/\x1b\[[0-9]*m//g' -e 's/\r//g' >| '$@'; \
+		if [ "x$$(whereis col)" != "x" ]; then \
+			groff -Tutf8 -man ../data/vifm.1 | col -b | sed -e 's/\x1b\[[0-9]*m//g' -e 's/\r//g' >| '$@'; \
+		else \
+			groff -Tutf8 -man ../data/vifm.1 | sed -e 's/.\x08//g' -e 's/\x1b\[[0-9]*m//g' -e 's/\r//g' >| '$@'; \
+		fi \
 	fi
 
-tags.c: ../data/vim/doc/vifm.txt
-	@if [ "x$$(whereis vim)" != "x" -a "x$$(whereis cat)" != "x" -a "x$$(whereis awk)" != "x" ]; then \
+../data/vim/doc/app/tags: ../data/vim/doc/app/vifm-app.txt
+	-vim -c 'helptags $(dir $@)|q' > /dev/null 2>&1 < /dev/tty
+	touch $@
+
+../data/vim/doc/plugin/tags: ../data/vim/doc/plugin/vifm-plugin.txt
+	-vim -c 'helptags $(dir $@)|q' > /dev/null 2>&1 < /dev/tty
+	touch $@
+
+tags.c: ../data/vim/doc/app/tags
+	@if [ -s "$<" -a "x$$(whereis cat)" != "x" -a "x$$(whereis awk)" != "x" ]; then \
 		vim -c 'helptags $(dir $<)|q' < /dev/tty; \
 		cat $(dir $<)/tags | awk ' \
 			BEGIN { \

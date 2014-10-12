@@ -25,6 +25,7 @@
 #include <string.h> /* strncat() strlen() */
 
 #include "../../engine/keys.h"
+#include "../../engine/mode.h"
 #include "../../utils/fs.h"
 #include "../../utils/fs_limits.h"
 #include "../../utils/log.h"
@@ -78,7 +79,6 @@ static void draw_curr(void);
 /* properties dialog width */
 static const int WIDTH = 29;
 
-static int *mode;
 static FileView *view;
 static int top, bottom;
 static int curr;
@@ -138,16 +138,14 @@ static keys_add_info_t builtin_cmds[] = {
 
 /* initializes properties change mode */
 void
-init_attr_dialog_mode(int *key_mode)
+init_attr_dialog_mode(void)
 {
 	int ret_code;
 
-	assert(key_mode != NULL);
-
-	mode = key_mode;
-
 	ret_code = add_cmds(builtin_cmds, ARRAY_LEN(builtin_cmds), ATTR_MODE);
 	assert(ret_code == 0);
+
+	(void)ret_code;
 }
 
 /* enters properties change mode */
@@ -158,7 +156,7 @@ enter_attr_mode(FileView *active_view)
 		return;
 
 	view = active_view;
-	*mode = ATTR_MODE;
+	vle_mode_set(ATTR_MODE, VMT_SECONDARY);
 	clear_input_bar();
 	curr_stats.use_input_bar = 0;
 
@@ -191,7 +189,6 @@ get_attrs(void)
 
 	memset(attrs, 0, sizeof(attrs));
 
-	attributes = 0;
 	diff = 0;
 	i = 0;
 	while(i < view->list_rows && !view->dir_entry[i].selected)
@@ -345,7 +342,7 @@ redraw_attr_dialog(void)
 static void
 leave_attr_mode(void)
 {
-	*mode = NORMAL_MODE;
+	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 	curr_stats.use_input_bar = 1;
 
 	clean_selected_files(view);
@@ -489,7 +486,7 @@ file_attrib(char *path, DWORD add, DWORD sub, int recurse_dirs)
 	if(add != 0)
 	{
 		const size_t wadd = add;
-		if(perform_operation(OP_ADDATTR, (void *)wadd, path, NULL) == 0)
+		if(perform_operation(OP_ADDATTR, NULL, (void *)wadd, path, NULL) == 0)
 		{
 			add_operation(OP_ADDATTR, (void *)wadd, (void *)(~attrs & wadd), path,
 					"");
@@ -498,7 +495,7 @@ file_attrib(char *path, DWORD add, DWORD sub, int recurse_dirs)
 	if(sub != 0)
 	{
 		const size_t wsub = sub;
-		if(perform_operation(OP_SUBATTR, (void *)wsub, path, NULL) == 0)
+		if(perform_operation(OP_SUBATTR, NULL, (void *)wsub, path, NULL) == 0)
 		{
 			add_operation(OP_SUBATTR, (void *)wsub, (void *)(~attrs & wsub), path,
 					"");

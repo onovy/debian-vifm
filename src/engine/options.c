@@ -48,7 +48,8 @@ typedef enum
 	SO_SET, /* Set value of the option. */
 	SO_ADD, /* Add item(s) to a set. */
 	SO_REMOVE, /* Remove item(s) from a set. */
-}SetOp;
+}
+SetOp;
 
 /* Type of function accepted by the for_each_char_of() function. */
 typedef void (*mod_t)(char buffer[], char value);
@@ -82,6 +83,7 @@ static int set_print(const opt_t *opt);
 static const char * extract_option(const char args[], char buf[], int replace);
 static char * skip_alphas(const char str[]);
 static void complete_option_name(const char buf[], int bool_only, int pseudo);
+static const char * get_opt_full_name(opt_t *const opt);
 static int complete_option_value(const opt_t *opt, const char beginning[]);
 static int complete_list_value(const opt_t *opt, const char beginning[]);
 static int complete_char_value(const opt_t *opt, const char beginning[]);
@@ -214,8 +216,7 @@ void
 set_option(const char name[], optval_t val)
 {
 	opt_t *opt = find_option(name);
-	if(opt == NULL)
-		return;
+	assert(opt != NULL && "Wrong option name.");
 
 	if(opt->type == OPT_STR || opt->type == OPT_STRLIST)
 	{
@@ -933,7 +934,7 @@ complete_options(const char args[], const char **start)
 		args = extract_option(args, buf, 0);
 		if(args == NULL)
 		{
-			add_completion(buf);
+			vle_compl_add_match(buf);
 			return;
 		}
 	}
@@ -990,20 +991,20 @@ complete_options(const char args[], const char **start)
 		}
 		else if(*p == '\0' && opt->type != OPT_BOOL)
 		{
-			char *escaped = escape_chars(get_value(opt), " |");
-			add_completion(escaped);
+			char *const escaped = escape_chars(get_value(opt), " |");
+			vle_compl_add_match(escaped);
 			free(escaped);
 		}
 	}
 
-	completion_group_end();
+	vle_compl_finish_group();
 	if(opt != NULL && opt->type == OPT_CHARSET)
 	{
-		add_completion("");
+		vle_compl_add_last_match("");
 	}
 	else
 	{
-		add_completion(is_value_completion ? p : buf);
+		vle_compl_add_last_match(is_value_completion ? p : buf);
 	}
 }
 
@@ -1107,28 +1108,30 @@ complete_option_name(const char buf[], int bool_only, int pseudo)
 
 	if(pseudo && strncmp(buf, "all", len) == 0)
 	{
-		add_completion("all");
+		vle_compl_add_match("all");
 	}
 
 	for(i = 0; i < options_count; i++)
 	{
-		if(bool_only && options[i].type != OPT_BOOL)
+		opt_t *const opt = &options[i];
+
+		if(bool_only && opt->type != OPT_BOOL)
 		{
 			continue;
 		}
 
-		if(strncmp(buf, options[i].name, len) == 0)
+		if(strncmp(buf, opt->name, len) == 0)
 		{
-			if(options[i].full != NULL)
-			{
-				add_completion(options[i].full);
-			}
-			else
-			{
-				add_completion(options[i].name);
-			}
+			vle_compl_add_match(get_opt_full_name(opt));
 		}
 	}
+}
+
+/* Gets full name of the option.  Returns pointer to the name. */
+static const char *
+get_opt_full_name(opt_t *const opt)
+{
+	return (opt->full == NULL) ? opt->name : opt->full;
 }
 
 /* Completes value of the given option.  Returns offset for the beginning. */
@@ -1158,7 +1161,7 @@ complete_list_value(const opt_t *opt, const char beginning[])
 	for(i = 0; i < opt->val_count; i++)
 	{
 		if(strncmp(beginning, opt->vals[i], len) == 0)
-			add_completion(opt->vals[i]);
+			vle_compl_add_match(opt->vals[i]);
 	}
 
 	return 0;
@@ -1177,7 +1180,7 @@ complete_char_value(const opt_t *opt, const char beginning[])
 		if(strchr(beginning, vals[i]) == NULL)
 		{
 			const char char_str[] = { vals[i], '\0' };
-			add_completion(char_str);
+			vle_compl_add_match(char_str);
 		}
 	}
 

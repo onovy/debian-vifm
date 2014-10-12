@@ -20,10 +20,21 @@
 #ifndef VIFM__FILELIST_H__
 #define VIFM__FILELIST_H__
 
-#include <stddef.h> /* size_t ssize_t */
+#include <sys/types.h> /* for ssize_t */
+
+#include <stddef.h> /* size_t */
+#include <stdint.h> /* uint64_t */
+#include <stdio.h> /* FILE */
 
 #include "utils/test_helpers.h"
 #include "ui.h"
+
+/* Default value of case sensitivity for filters. */
+#ifdef _WIN32
+#define FILTER_DEF_CASE_SENSITIVITY 0
+#else
+#define FILTER_DEF_CASE_SENSITIVITY 1
+#endif
 
 /* Initialization/termination functions. */
 
@@ -111,6 +122,8 @@ void erase_current_line_bar(FileView *view);
 /* Updates view (maybe postponed) on the screen (redraws file list and
  * cursor) */
 void redraw_view(FileView *view);
+/* Updates view immediately on the screen (redraws file list and cursor). */
+void redraw_view_imm(FileView *view);
 /* Updates current view (maybe postponed) on the screen (redraws file list and
  * cursor) */
 void redraw_current_view(void);
@@ -145,10 +158,19 @@ void clean_selected_files(FileView *view);
 void erase_selection(FileView *view);
 /* Inverts selection of files in the view. */
 void invert_selection(FileView *view);
-void get_all_selected_files(FileView *view);
-void get_selected_files(FileView *view, int count, const int *indexes);
-void count_selected(FileView *view);
-void free_selected_file_array(FileView *view);
+/* Collects currently selected files (or current file only if no selection
+ * present) in view->selected_filelist array.  Use free_file_capture() to clean
+ * up memory allocated by this function. */
+void capture_target_files(FileView *view);
+/* Collects count items located at specified indices in view->selected_filelist
+ * array.  Use free_file_capture() to clean up memory allocated by this
+ * function. */
+void capture_files_at(FileView *view, int count, const int indexes[]);
+/* Counts number of selected files and writes saves the number in
+ * view->selected_files. */
+void recount_selected_files(FileView *view);
+/* Frees memory from list of captured files. */
+void free_file_capture(FileView *view);
 int ensure_file_is_selected(FileView *view, const char name[]);
 
 /* Filters related functions. */
@@ -165,7 +187,7 @@ void toggle_filter_inversion(FileView *view);
 
 /* Sets regular expression of the local filter for the view.  First call of this
  * function initiates filter set process, which should be ended by call to
- * local_filter_apply() or local_filter_cancel(). */
+ * local_filter_accept() or local_filter_cancel(). */
 void local_filter_set(FileView *view, const char filter[]);
 /* Updates cursor position and top line of the view according to interactive
  * local filter in progress. */
@@ -184,7 +206,12 @@ void local_filter_restore(FileView *view);
 
 /* Directory history related functions. */
 
-void goto_history_pos(FileView *view, int pos);
+/* Changes current directory of the view to next location backward in
+ * history, if available. */
+void navigate_backward_in_history(FileView *view);
+/* Changes current directory of the view to next location forward in history, if
+ * available. */
+void navigate_forward_in_history(FileView *view);
 void save_view_history(FileView *view, const char *path, const char *file,
 		int pos);
 int is_in_view_history(FileView *view, const char *path);
@@ -196,7 +223,7 @@ FILE * use_info_prog(const char *viewer);
 /* Loads filelist for the view, but doesn't redraw the view.  The reload
  * parameter should be set in case of view refresh operation. */
 void populate_dir_list(FileView *view, int reload);
-/* Loads filelist for the view and redraws the view.  The reload parameter
+/* Loads file list for the view and redraws the view.  The reload parameter
  * should be set in case of view refresh operation. */
 void load_dir_list(FileView *view, int reload);
 /* Resorts view without reloading it and preserving currently file under cursor
@@ -218,6 +245,9 @@ int view_needs_cd(const FileView *view, const char path[]);
 void set_view_path(FileView *view, const char path[]);
 /* Returns possible cached or calculated value of file size. */
 uint64_t get_file_size_by_entry(const FileView *view, size_t pos);
+/* Checks whether entry corresponds to a directory.  Returns non-zero if so,
+ * otherwise zero is returned. */
+int is_directory_entry(const dir_entry_t *entry);
 
 TSTATIC_DEFS(
 	int file_is_visible(FileView *view, const char filename[], int is_dir);

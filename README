@@ -1,8 +1,8 @@
 Vifm - vi[m] like file manager
 2001 - 2014
 
-Updated: 16 May, 2014
-Version: 0.7.7
+Updated: 11 October, 2014
+Version: 0.7.8-beta
 
 Brief Description
 
@@ -19,7 +19,8 @@ Brief Description
 
 Contacts
 
-    Website: http://vifm.sourceforge.net/
+    Website: http://vifm.info/
+    Wiki: http://wiki.vifm.info/
     Read-only news mailing list: vifm-announce@lists.sourceforge.net
     Email for bugs, suggestions and comments on vifm: xaizek@openmailbox.org
 
@@ -28,8 +29,10 @@ Contacts
 
     Repositories:
     SorceForge: http://sourceforge.net/projects/vifm/
-    GitHub: https://github.com/ksteen/vifm (preferred)
-    GitHub: https://github.com/xaizek/vifm (might be removed in the future)
+    GitHub: https://github.com/vifm/vifm
+
+    Vim plugin repositories:
+    GitHub: https://github.com/vifm/vifm.vim
 
 Package content
 
@@ -60,10 +63,21 @@ Package content
     |  |  |-- completion.c - provides means to fill and get completion list
     |  |  |-- functions.c - provides support for builtin functions
     |  |  |-- keys.c - analyzes users input
+    |  |  |-- mode.c - generic mode related routines
     |  |  |-- options.c - :set command
     |  |  |-- parsing.c - parses expressions
     |  |  |-- var.c - all needed to work with variables
     |  |  `-- variables.c - handles :let and :unlet commands
+    |  |
+    |  |-- io/ - file system operations implementation
+    |  |  |
+    |  |  |-- private/ - private part of i/o
+    |  |  |-- private/ioeta.c - private part of i/o estimations
+    |  |  |-- private/ionotif.c - private part of i/o notifications
+    |  |  |-- private/traverser.c - file system traversing routine
+    |  |  |-- ioeta.c - i/o estimations management
+    |  |  |-- iop.c - implementation of i/o primitive
+    |  |  `-- ior.c - implementation of recursive i/o operations
     |  |
     |  |-- menus/ - implementation of all menus
     |  |  |
@@ -147,7 +161,7 @@ Package content
     |  |-- fuse.c - provides support of FUSE filesystems
     |  |-- globals.c - provides support of globals
     |  |-- ipc.c - handles communication across instances of vifm
-    |  |-- macros - code of macros expanding
+    |  |-- macros.c - code of macros expansion
     |  |-- main_loop.c - the main loop
     |  |-- ops.c - most of operations performed on file system
     |  |-- opt_handlers.c - initialization of options and option change handlers
@@ -167,7 +181,7 @@ Package content
     |  |-- undo.c - stores and handles the undo list
     |  |-- version.c - git hash and other version information
     |  |-- viewcolumns_parser.c - contains code for parsing 'viewcolumns' option
-    |  |-- vifm.c - contains main() which does basic initialization
+    |  |-- vifm.c - contains main initialization/termination code
     |  |-- vifmrc-converter.c - converter for vifmrc, vifminfo and colorscheme
     |  |                        files
     |  `-- win_helper.c - needed for temporary rights evaluation on Windows
