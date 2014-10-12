@@ -20,7 +20,7 @@
 #ifndef VIFM__MODES__CMDLINE_H__
 #define VIFM__MODES__CMDLINE_H__
 
-#include <wchar.h>
+#include <stddef.h> /* wchar_t */
 
 #ifdef TEST
 #include "../utils/fs_limits.h"
@@ -44,10 +44,14 @@ typedef enum
 }
 CMD_LINE_SUBMODES;
 
-typedef void (*prompt_cb)(const char *renponse);
-typedef int (*complete_cmd_func)(const char *cmd);
+typedef void (*prompt_cb)(const char renponse[]);
 
-void init_cmdline_mode(int *key_mode);
+/* Custom prompt line completion function.  arg is user supplied value, which is
+ * passed through. */
+typedef int (*complete_cmd_func)(const char cmd[], void *arg);
+
+/* Initializes command-line mode. */
+void init_cmdline_mode(void);
 
 void enter_cmdline_mode(CMD_LINE_SUBMODES cl_sub_mode, const wchar_t *cmd,
 		void *ptr);

@@ -24,10 +24,17 @@
 
 #include <sys/types.h> /* gid_t mode_t uid_t */
 
-#include <stddef.h> /* size_t */
+#include <stddef.h> /* size_t wchar_t */
 #include <stdint.h> /* uint64_t */
 #include <stdio.h> /* FILE */
-#include <wchar.h> /* wchar_t */
+
+/* Type of operating environment in which the application is running. */
+typedef enum
+{
+	ET_UNIX, /* *nix-like environment (including cygwin). */
+	ET_WIN,  /* Runs on Windows. */
+}
+EnvType;
 
 /* Regular expressions. */
 
@@ -62,7 +69,13 @@ struct mntent;
  * stop traversal. */
 typedef int (*mptraverser)(struct mntent *entry, void *arg);
 
+/* Checks whether the full_paths points to a location that is slow to access.
+ * Returns non-zero if so, otherwise zero is returned. */
 int is_on_slow_fs(const char full_path[]);
+
+/* Checks whether accessing the to loation from the from location might cause
+ * slowdown.  Returns non-zero if so, otherwise zero is returned. */
+int refers_to_slower_fs(const char from[], const char to[]);
 
 /* Fills supplied buffer with user friendly representation of file size.
  * Returns non-zero in case resulting string is a shortened variant of size. */
@@ -100,6 +113,20 @@ char * extract_cmd_name(const char line[], int raw, size_t buf_len, char buf[]);
  * on error default value of 1 is returned. */
 int vifm_wcwidth(wchar_t c);
 
+/* Escapes string from offset position until its end for insertion into single
+ * quoted string, prefix is not escaped.  Returns newly allocated string. */
+char * escape_for_squotes(const char string[], size_t offset);
+
+/* Escapes string from offset position until its end for insertion into double
+ * quoted string, prefix is not escaped.  Returns newly allocated string. */
+char * escape_for_dquotes(const char string[], size_t offset);
+
+/* Expands double ' sequences from single quoted string in place. */
+void expand_squotes_escaping(char s[]);
+
+/* Expands escape sequences from double quoted string (e.g. "\n") in place. */
+void expand_dquotes_escaping(char s[]);
+
 /* Fills buf of the length buf_len with path to mount point of the path.
  * Returns non-zero on error, otherwise zero is returned. */
 int get_mount_point(const char path[], size_t buf_len, char buf[]);
@@ -116,6 +143,20 @@ void wait_for_data_from(pid_t pid, FILE *f, int fd);
 /* Blocks/unblocks SIGCHLD signal.  Returns zero on success, otherwise non-zero
  * is returned. */
 int set_sigchld(int block);
+
+/* Checks for executable by its path.  Mutates path by appending executable
+ * prefixes on Windows.  Returns non-zero if path points to an executable,
+ * otherwise zero is returned. */
+int executable_exists(const char path[]);
+
+/* Fills dir_buf of length dir_buf_len with full path to the directory where
+ * executable of the application is located.  Returns zero on success, otherwise
+ * non-zero is returned. */
+int get_exe_dir(char dir_buf[], size_t dir_buf_len);
+
+/* Gets type of operating environment the application is running in.  Returns
+ * the type. */
+EnvType get_env_type(void);
 
 #ifdef _WIN32
 #include "utils_win.h"

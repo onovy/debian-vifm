@@ -23,24 +23,28 @@
 
 #include <pthread.h>
 
+#include <sys/types.h> /* ssize_t */
+
 #include <assert.h> /* assert() */
+#include <stddef.h> /* size_t wchar_t */
+#include <stdio.h>  /* snprintf() */
 #include <stdlib.h> /* free() */
 #include <string.h>
 #include <wctype.h> /* wtoupper() */
+#include <wchar.h> /* wcscpy() */
 
 #include "../cfg/config.h"
+#include "../cfg/hist.h"
 #include "../engine/keys.h"
+#include "../engine/mode.h"
 #include "../menus/menus.h"
 #include "../utils/fs_limits.h"
 #include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
-#include "../utils/tree.h"
 #include "../utils/utf8.h"
 #include "../utils/utils.h"
-#include "../background.h"
 #include "../bookmarks.h"
-#include "../color_scheme.h"
 #include "../commands.h"
 #include "../filelist.h"
 #include "../fileops.h"
@@ -49,8 +53,10 @@
 #include "../running.h"
 #include "../search.h"
 #include "../status.h"
+#include "../types.h"
 #include "../ui.h"
 #include "../undo.h"
+#include "../vifm.h"
 #include "dialogs/attr_dialog.h"
 #include "file_info.h"
 #include "cmdline.h"
@@ -130,6 +136,7 @@ static void cmd_V(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ZQ(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ZZ(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_al(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_av(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_cW(key_info_t key_info, keys_info_t *keys_info);
 #ifndef _WIN32
 static void cmd_cg(key_info_t key_info, keys_info_t *keys_info);
@@ -207,9 +214,10 @@ static void selector_S(key_info_t key_info, keys_info_t *keys_info);
 static void selector_a(key_info_t key_info, keys_info_t *keys_info);
 static void selector_s(key_info_t key_info, keys_info_t *keys_info);
 
-static int *mode;
 static int last_fast_search_char;
 static int last_fast_search_backward = -1;
+
+/* Number of search repeats (e.g. counter passed to n or N key. */
 static int search_repeat;
 
 static keys_add_info_t builtin_cmds[] = {
@@ -302,6 +310,7 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"ZQ", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ZQ}}},
 	{L"ZZ", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ZZ}}},
 	{L"al", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_al}}},
+	{L"av", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_av}}},
 	{L"cW", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_cW}}},
 #ifndef _WIN32
 	{L"cg", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_cg}}},
@@ -416,18 +425,17 @@ static keys_add_info_t selectors[] = {
 };
 
 void
-init_normal_mode(int *key_mode)
+init_normal_mode(void)
 {
 	int ret_code;
 
-	assert(key_mode != NULL);
-
-	mode = key_mode;
-
 	ret_code = add_cmds(builtin_cmds, ARRAY_LEN(builtin_cmds), NORMAL_MODE);
 	assert(ret_code == 0);
+
 	ret_code = add_selectors(selectors, ARRAY_LEN(selectors), NORMAL_MODE);
 	assert(ret_code == 0);
+
+	(void)ret_code;
 }
 
 static void
@@ -517,7 +525,7 @@ cmd_emarkemark(key_info_t key_info, keys_info_t *keys_info)
 	wchar_t buf[16] = L".!";
 	if(key_info.count != NO_COUNT_GIVEN && key_info.count != 1)
 	{
-		if(curr_view->list_pos + key_info.count - 1 >= curr_view->list_rows - 1)
+		if(curr_view->list_pos + key_info.count >= curr_view->list_rows)
 		{
 			wcscpy(buf, L".,$!");
 		}
@@ -566,10 +574,7 @@ cmd_ctrl_i(key_info_t key_info, keys_info_t *keys_info)
 	}
 	else
 	{
-		if(curr_view->history_pos < curr_view->history_num - 1)
-		{
-			goto_history_pos(curr_view, curr_view->history_pos + 1);
-		}
+		navigate_forward_in_history(curr_view);
 	}
 }
 
@@ -593,10 +598,7 @@ cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_ctrl_o(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(curr_view->history_pos != 0)
-	{
-		goto_history_pos(curr_view, curr_view->history_pos - 1);
-	}
+	navigate_backward_in_history(curr_view);
 }
 
 static void
@@ -810,10 +812,14 @@ normal_cmd_ctrl_wpipe(key_info_t key_info, keys_info_t *keys_info)
 static FileView *
 get_view(void)
 {
-	if(get_mode() == VIEW_MODE)
+	if(vle_mode_is(VIEW_MODE))
+	{
 		return curr_view->explore_mode ? curr_view : other_view;
+	}
 	else
+	{
 		return curr_view;
+	}
 }
 
 static void
@@ -1072,9 +1078,13 @@ dir_size_stub(void *arg)
 
 	remove_last_path_component(dir_size->path);
 	if(path_starts_with(lwin.curr_dir, dir_size->path))
-		request_view_update(&lwin);
+	{
+		ui_view_schedule_redraw(&lwin);
+	}
 	if(path_starts_with(rwin.curr_dir, dir_size->path))
-		request_view_update(&rwin);
+	{
+		ui_view_schedule_redraw(&rwin);
+	}
 
 	free(dir_size->path);
 	free(dir_size);
@@ -1193,7 +1203,7 @@ do_gu(key_info_t key_info, keys_info_t *keys_info, int upper)
 static void
 cmd_gv(key_info_t key_info, keys_info_t *keys_info)
 {
-	enter_visual_mode(1);
+	enter_visual_mode(VS_RESTORE);
 }
 
 /* Go to the first file in window. */
@@ -1252,19 +1262,19 @@ cmd_P(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_V(key_info_t key_info, keys_info_t *keys_info)
 {
-	enter_visual_mode(0);
+	enter_visual_mode(VS_NORMAL);
 }
 
 static void
 cmd_ZQ(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_quit(0, 0);
+	vifm_try_leave(0, 0);
 }
 
 static void
 cmd_ZZ(key_info_t key_info, keys_info_t *keys_info)
 {
-	comm_quit(1, 0);
+	vifm_try_leave(1, 0);
 }
 
 /* Goto mark. */
@@ -1399,6 +1409,13 @@ cmd_al(key_info_t key_info, keys_info_t *keys_info)
 	ui_views_reload_filelists();
 }
 
+/* Enters selection amending submode of visual mode. */
+static void
+cmd_av(key_info_t key_info, keys_info_t *keys_info)
+{
+	enter_visual_mode(VS_AMEND);
+}
+
 /* Change word (rename file without extension). */
 static void
 cmd_cW(key_info_t key_info, keys_info_t *keys_info)
@@ -1491,7 +1508,7 @@ delete(key_info_t key_info, int use_trash)
 	{
 		pick_files(curr_view, curr_view->list_pos, &keys_info);
 	}
-	curr_stats.save_msg = delete_file(curr_view, key_info.reg, keys_info.count,
+	curr_stats.save_msg = delete_files(curr_view, key_info.reg, keys_info.count,
 			keys_info.indexes, use_trash);
 
 	free_list_of_file_indexes(&keys_info);
@@ -1531,7 +1548,7 @@ delete_with_selector(key_info_t key_info, keys_info_t *keys_info, int use_trash)
 		return;
 	if(key_info.reg == NO_REG_GIVEN)
 		key_info.reg = DEFAULT_REG_NAME;
-	curr_stats.save_msg = delete_file(curr_view, key_info.reg, keys_info->count,
+	curr_stats.save_msg = delete_files(curr_view, key_info.reg, keys_info->count,
 			keys_info->indexes, use_trash);
 
 	free_list_of_file_indexes(keys_info);
@@ -1669,11 +1686,8 @@ search(key_info_t key_info, int backward)
 	{
 		const char *pattern = (curr_view->regexp[0] == '\0') ?
 				cfg.search_hist.items[0] : curr_view->regexp;
-		curr_stats.save_msg = find_pattern(curr_view, pattern, backward, 1, &found);
-		if(!found)
-		{
-			return;
-		}
+		curr_stats.save_msg = find_pattern(curr_view, pattern, backward, 1, &found,
+				0);
 		key_info.count--;
 	}
 
@@ -1994,64 +2008,79 @@ cmd_paren(int lb, int ub, int inc)
 	const char *ext = get_last_ext(pentry->name);
 	size_t char_width = get_char_width(pentry->name);
 	wchar_t ch = towupper(get_first_wchar(pentry->name));
+	const SortingKey sorting_key = abs(curr_view->sort[0]);
+	const int is_dir = is_directory_entry(pentry);
 #ifndef _WIN32
 	const char *mode_str = get_mode_str(pentry->mode);
+	char perms[16];
+	get_perm_string(perms, sizeof(perms), pentry->mode);
 #endif
-	int sort_key = abs(curr_view->sort[0]);
 	while(pos > lb && pos < ub)
 	{
 		dir_entry_t *nentry;
 		pos += inc;
 		nentry = &curr_view->dir_entry[pos];
-		switch(sort_key)
+		switch(sorting_key)
 		{
-			case SORT_BY_EXTENSION:
+			case SK_BY_EXTENSION:
 				if(strcmp(get_last_ext(nentry->name), ext) != 0)
 					return pos;
 				break;
-			case SORT_BY_NAME:
+			case SK_BY_NAME:
 				if(strncmp(pentry->name, nentry->name, char_width) != 0)
 					return pos;
 				break;
-			case SORT_BY_INAME:
+			case SK_BY_INAME:
 				if(towupper(get_first_wchar(nentry->name)) != ch)
 					return pos;
 				break;
 #ifndef _WIN32
-		case SORT_BY_GROUP_NAME:
-		case SORT_BY_GROUP_ID:
+		case SK_BY_GROUP_NAME:
+		case SK_BY_GROUP_ID:
 				if(nentry->gid != pentry->gid)
 					return pos;
 				break;
-		case SORT_BY_OWNER_NAME:
-		case SORT_BY_OWNER_ID:
+		case SK_BY_OWNER_NAME:
+		case SK_BY_OWNER_ID:
 				if(nentry->uid != pentry->uid)
 					return pos;
 				break;
-		case SORT_BY_MODE:
+		case SK_BY_MODE:
 				if(get_mode_str(nentry->mode) != mode_str)
 					return pos;
 				break;
+		case SK_BY_PERMISSIONS:
+				{
+					char nperms[16];
+					get_perm_string(nperms, sizeof(nperms), nentry->mode);
+					if(strcmp(nperms, perms) != 0)
+					{
+						return pos;
+					}
+					break;
+				}
 #endif
-		case SORT_BY_SIZE:
+		case SK_BY_SIZE:
 				if(nentry->size != pentry->size)
 					return pos;
 				break;
-		case SORT_BY_TIME_ACCESSED:
+		case SK_BY_TIME_ACCESSED:
 				if(nentry->atime != pentry->atime)
 					return pos;
 				break;
-		case SORT_BY_TIME_CHANGED:
+		case SK_BY_TIME_CHANGED:
 				if(nentry->ctime != pentry->ctime)
 					return pos;
 				break;
-		case SORT_BY_TIME_MODIFIED:
+		case SK_BY_TIME_MODIFIED:
 				if(nentry->mtime != pentry->mtime)
 					return pos;
 				break;
-
-		default:
-				assert(0);
+		case SK_BY_TYPE:
+				if(is_dir != is_directory_entry(nentry))
+				{
+					return pos;
+				}
 				break;
 		}
 	}
@@ -2120,7 +2149,7 @@ pick_files(FileView *view, int end, keys_info_t *keys_info)
 
 	if(end < view->list_pos)
 	{
-		request_view_update(view);
+		ui_view_schedule_reload(view);
 		view->list_pos = end;
 	}
 }
@@ -2202,15 +2231,27 @@ selector_s(key_info_t key_info, keys_info_t *keys_info)
 }
 
 int
-find_npattern(FileView *view, const char *pattern, int backward)
+find_npattern(FileView *view, const char pattern[], int backward,
+		int interactive)
 {
 	int i;
 	int found;
-	(void)find_pattern(view, pattern, backward, 1, &found);
+	int msg;
+
+	msg = find_pattern(view, pattern, backward, 1, &found, interactive);
+	/* Take wrong regular expression message into account, otherwise we can't
+	 * distinguish "no files matched" situation from "wrong regexp". */
+	found += msg;
+
 	for(i = 0; i < search_repeat - 1; i++)
 	{
 		found += goto_search_match(view, backward) != 0;
 	}
+
+	/* Reset number of repeats so that future calls are not affected by the
+	 * previous ones. */
+	search_repeat = 1;
+
 	return found;
 }
 

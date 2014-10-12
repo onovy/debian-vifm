@@ -30,15 +30,15 @@
 
 #include <assert.h>
 #include <errno.h>
-#include <signal.h>
-#include <stddef.h> /* NULL size_t ssize_t */
+#include <stddef.h> /* NULL */
 #include <stdlib.h> /* free() malloc() */
 #include <string.h>
-#include <time.h>
-#include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/types.h> /* pid_t ssize_t */
 #ifndef _WIN32
-#include <sys/wait.h> /* WEXITSTATUS() */
+#include <sys/select.h> /* FD_* select */
+#include <sys/time.h> /* timeval */
+#include <sys/wait.h> /* WEXITSTATUS() waitpid() */
 #endif
 
 #include "cfg/config.h"
@@ -46,24 +46,38 @@
 #include "utils/str.h"
 #include "utils/utils.h"
 #include "commands_completion.h"
-#include "status.h"
+#include "ui.h"
 
 /* Size of error message reading buffer. */
 #define ERR_MSG_LEN 1025
 
+/* Structure with passed to background_task_bootstrap() so it can perform
+ * correct initialization/cleanup. */
+typedef struct
+{
+	bg_task_func func; /* Function to execute in a background thread. */
+	void *args;        /* Argument to pass. */
+	job_t *job;        /* Job identifier that corresponds to the task. */
+}
+background_task_args;
+
 static void job_check(job_t *const job);
 static void job_free(job_t *const job);
+static void * background_task_bootstrap(void *arg);
+static void set_current_job(job_t *job);
+static void make_current_job_key(void);
+static void finish_current_job(void);
 
 job_t *jobs;
 
-static pthread_key_t key;
-static pthread_once_t key_once = PTHREAD_ONCE_INIT;
+static pthread_key_t current_job;
+static pthread_once_t current_job_once = PTHREAD_ONCE_INIT;
 
 void
 init_background(void)
 {
 	/* Initialize state for the main thread. */
-	add_inner_bg_job(NULL);
+	set_current_job(NULL);
 }
 
 void
@@ -94,8 +108,7 @@ check_background_jobs(void)
 		return;
 	}
 
-	/* SIGCHLD needs to be blocked. */
-	if(set_sigchld(1) != 0)
+	if(bg_jobs_freeze() != 0)
 	{
 		return;
 	}
@@ -123,10 +136,7 @@ check_background_jobs(void)
 		}
 	}
 
-	/* Unblock SIGCHLD signal. */
-	/* FIXME: maybe store previous state of SIGCHLD and don't unblock if it was
-	 *        blocked. */
-	(void)set_sigchld(0);
+	bg_jobs_unfreeze();
 }
 
 /* Checks status of the job.  Processes error stream or checks whether process
@@ -196,12 +206,12 @@ job_free(job_t *const job)
 	}
 
 #ifndef _WIN32
-	if(job->fd != -1)
+	if(job->fd != NO_JOB_ID)
 	{
 		close(job->fd);
 	}
 #else
-	if(job->hprocess != INVALID_HANDLE_VALUE)
+	if(job->hprocess != NO_JOB_ID)
 	{
 		CloseHandle(job->hprocess);
 	}
@@ -210,23 +220,34 @@ job_free(job_t *const job)
 	free(job);
 }
 
-/* Used for FUSE mounting and unmounting only */
+/* Used for FUSE mounting and unmounting only. */
 int
-background_and_wait_for_status(char *cmd)
+background_and_wait_for_status(char cmd[], int cancellable, int *cancelled)
 {
 #ifndef _WIN32
-	int pid;
+	pid_t pid;
 	int status;
-	extern char **environ;
 
-	if(cmd == 0)
+	if(cancellable)
+	{
+		*cancelled = 0;
+	}
+
+	if(cmd == NULL)
+	{
 		return 1;
+	}
 
 	pid = fork();
-	if(pid == -1)
-		return -1;
-	if(pid == 0)
+	if(pid == (pid_t)-1)
 	{
+		return -1;
+	}
+
+	if(pid == (pid_t)0)
+	{
+		extern char **environ;
+
 		char *args[4];
 
 		args[0] = cfg.shell;
@@ -236,16 +257,33 @@ background_and_wait_for_status(char *cmd)
 		(void)execve(cfg.shell, args, environ);
 		exit(127);
 	}
-	do
+
+	if(cancellable)
 	{
-		if(waitpid(pid, &status, 0) == -1)
+		ui_cancellation_enable();
+	}
+
+	while(waitpid(pid, &status, 0) == -1)
+	{
+		if(errno != EINTR)
 		{
-			if(errno != EINTR)
-				return -1;
+			status = -1;
+			break;
 		}
-		else
-			return status;
-	}while(1);
+		process_cancel_request(pid);
+	}
+
+	if(cancellable)
+	{
+		if(ui_cancellation_requested())
+		{
+			*cancelled = 1;
+		}
+		ui_cancellation_disable();
+	}
+
+	return status;
+
 #else
 	return -1;
 #endif
@@ -255,7 +293,7 @@ background_and_wait_for_status(char *cmd)
 static void
 error_msg(const char *title, const char *text)
 {
-	job_t *job = pthread_getspecific(key);
+	job_t *job = pthread_getspecific(current_job);
 	if(job == NULL)
 	{
 		show_error_msg(title, text);
@@ -620,43 +658,146 @@ add_background_job(pid_t pid, const char *cmd, HANDLE hprocess)
 	new->skip_errors = 0;
 	new->running = 1;
 	new->error = NULL;
+
+	new->total = 0;
+	new->done = 0;
+
 	jobs = new;
 	return new;
-}
-
-static void
-make_key(void)
-{
-	(void)pthread_key_create(&key, NULL);
-}
-
-void
-add_inner_bg_job(job_t *job)
-{
-	pthread_once(&key_once, &make_key);
-	(void)pthread_setspecific(key, job);
 }
 
 void
 inner_bg_next(void)
 {
-	job_t *job = pthread_getspecific(key);
-	if(job == NULL)
-		return;
+	job_t *job = pthread_getspecific(current_job);
+	if(job != NULL)
+	{
+		++job->done;
+		assert(job->done <= job->total);
+	}
+}
 
-	job->done++;
-	assert(job->done <= job->total);
+int
+bg_execute(const char desc[], int total, bg_task_func task_func, void *args)
+{
+	pthread_t id;
+
+	background_task_args *const task_args = malloc(sizeof(*task_args));
+	if(task_args == NULL)
+	{
+		return 1;
+	}
+
+	task_args->func = task_func;
+	task_args->args = args;
+	task_args->job = add_background_job(BG_INTERNAL_TASK_PID, desc, NO_JOB_ID);
+
+	if(task_args->job == NULL)
+	{
+		free(task_args);
+		return 2;
+	}
+
+	task_args->job->total = total;
+
+	if(pthread_create(&id, NULL, background_task_bootstrap, task_args) != 0)
+	{
+		free(task_args);
+		return 3;
+	}
+
+	return 0;
+}
+
+/* Pthreads entry point for a new background task.  Performs correct
+ * startup/exit with related updates of internal data structures.  Returns
+ * result for this thread. */
+static void *
+background_task_bootstrap(void *arg)
+{
+	background_task_args *const task_args = arg;
+
+	set_current_job(task_args->job);
+
+	task_args->func(task_args->args);
+
+	finish_current_job();
+
+	free(task_args);
+
+	return NULL;
+}
+
+/* Stores pointer to the job in a thread-local storage. */
+static void
+set_current_job(job_t *job)
+{
+	pthread_once(&current_job_once, &make_current_job_key);
+	(void)pthread_setspecific(current_job, job);
+}
+
+/* current_job initializer for pthread_once(). */
+static void
+make_current_job_key(void)
+{
+	(void)pthread_key_create(&current_job, NULL);
+}
+
+/* Marks current job stored in a thread-local storage as finished
+ * successfully. */
+static void
+finish_current_job(void)
+{
+	job_t *const job = pthread_getspecific(current_job);
+	if(job != NULL)
+	{
+		job->running = 0;
+		job->exit_code = 0;
+	}
+}
+
+int
+bg_has_active_jobs(void)
+{
+	const job_t *job;
+	int bg_count;
+
+	if(bg_jobs_freeze() != 0)
+	{
+		/* Failed to lock jobs list and using safe choice: pretend there are active
+		 * tasks. */
+		return 1;
+	}
+
+	bg_count = 0;
+	for(job = jobs; job != NULL; job = job->next)
+	{
+		if(job->running && job->pid == BG_INTERNAL_TASK_PID)
+		{
+			++bg_count;
+		}
+	}
+
+	bg_jobs_unfreeze();
+
+	return bg_count > 0;
+}
+
+int
+bg_jobs_freeze(void)
+{
+	/* SIGCHLD needs to be blocked anytime the jobs list is accessed from anywhere
+	 * except the received_sigchld(). */
+	return set_sigchld(1);
 }
 
 void
-remove_inner_bg_job(void)
+bg_jobs_unfreeze(void)
 {
-	job_t *job = pthread_getspecific(key);
-	if(job == NULL)
-		return;
-
-	job->running = 0;
-	job->exit_code = 0;
+	/* Unblock SIGCHLD signal. */
+	/* FIXME: maybe store previous state of SIGCHLD and don't unblock if it was
+	 *        blocked. */
+	(void)set_sigchld(0);
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

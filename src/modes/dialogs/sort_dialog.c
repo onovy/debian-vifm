@@ -22,23 +22,18 @@
 #include <curses.h>
 
 #include <assert.h> /* assert() */
-#include <ctype.h>
+#include <stdlib.h> /* abs() */
 #include <string.h>
 
-#include "../../cfg/config.h"
 #include "../../engine/keys.h"
-#include "../../menus/menus.h"
-#include "../../bookmarks.h"
-#include "../../color_scheme.h"
-#include "../../commands.h"
+#include "../../engine/mode.h"
+#include "../../utils/macros.h"
+#include "../../colors.h"
 #include "../../filelist.h"
-#include "../../fileops.h"
 #include "../../status.h"
 #include "../../ui.h"
-#include "../cmdline.h"
 #include "../modes.h"
 
-static int *mode;
 static FileView *view;
 static int top, bottom, curr, col;
 static int descending;
@@ -53,26 +48,26 @@ static const char * caps[] = { "a-z", "z-a" };
 
 static int indexes[] = {
 	-1,
-	0,               /* SORT_BY_EXTENSION */
-	1,               /* SORT_BY_NAME */
+	0,               /* SK_BY_EXTENSION */
+	1,               /* SK_BY_NAME */
 #ifndef _WIN32
-	4,               /* SORT_BY_GROUP_ID */
-	5,               /* SORT_BY_GROUP_NAME */
-	6,               /* SORT_BY_MODE */
-	8,               /* SORT_BY_OWNER_ID */
-	9,               /* SORT_BY_OWNER_NAME */
+	4,               /* SK_BY_GROUP_ID */
+	5,               /* SK_BY_GROUP_NAME */
+	6,               /* SK_BY_MODE */
+	8,               /* SK_BY_OWNER_ID */
+	9,               /* SK_BY_OWNER_NAME */
 #endif
-	10 + CORRECTION, /* SORT_BY_SIZE */
-	11 + CORRECTION, /* SORT_BY_TIME_ACCESSED */
-	12 + CORRECTION, /* SORT_BY_TIME_CHANGED */
-	13 + CORRECTION, /* SORT_BY_TIME_MODIFIED */
-	2,               /* SORT_BY_INAME */
+	10 + CORRECTION, /* SK_BY_SIZE */
+	11 + CORRECTION, /* SK_BY_TIME_ACCESSED */
+	12 + CORRECTION, /* SK_BY_TIME_CHANGED */
+	13 + CORRECTION, /* SK_BY_TIME_MODIFIED */
+	2,               /* SK_BY_INAME */
 #ifndef _WIN32
-	7,               /* SORT_BY_PERMISSIONS */
+	7,               /* SK_BY_PERMISSIONS */
 #endif
-	3,               /* SORT_BY_TYPE */
+	3,               /* SK_BY_TYPE */
 };
-ARRAY_GUARD(indexes, 1 + SORT_OPTION_COUNT);
+ARRAY_GUARD(indexes, 1 + SK_COUNT);
 
 static void leave_sort_mode(void);
 static void cmd_ctrl_c(key_info_t key_info, keys_info_t *keys_info);
@@ -115,16 +110,14 @@ static keys_add_info_t builtin_cmds[] = {
 };
 
 void
-init_sort_dialog_mode(int *key_mode)
+init_sort_dialog_mode(void)
 {
 	int ret_code;
 
-	assert(key_mode != NULL);
-
-	mode = key_mode;
-
 	ret_code = add_cmds(builtin_cmds, ARRAY_LEN(builtin_cmds), SORT_MODE);
 	assert(ret_code == 0);
+
+	(void)ret_code;
 }
 
 void
@@ -135,14 +128,14 @@ enter_sort_mode(FileView *active_view)
 
 	view = active_view;
 	descending = (view->sort[0] < 0);
-	*mode = SORT_MODE;
+	vle_mode_set(SORT_MODE, VMT_SECONDARY);
 
 	wattroff(view->win, COLOR_PAIR(DCOLOR_BASE + CURR_LINE_COLOR) | A_BOLD);
 	curs_set(FALSE);
 	update_all_windows();
 
 	top = 4;
-	bottom = top + SORT_OPTION_COUNT - 1;
+	bottom = top + SK_COUNT - 1;
 	curr = top + indexes[abs(view->sort[0])];
 	col = 6;
 
@@ -154,7 +147,7 @@ redraw_sort_dialog(void)
 {
 	int x, y, cy;
 
-	wresize(sort_win, SORT_OPTION_COUNT + 6, SORT_WIN_WIDTH);
+	wresize(sort_win, SK_COUNT + 6, SORT_WIN_WIDTH);
 
 	werase(sort_win);
 	box(sort_win, ACS_VLINE, ACS_HLINE);
@@ -183,7 +176,7 @@ redraw_sort_dialog(void)
 	mvwaddstr(sort_win, cy++, 4, " [   ] Time Created");
 #endif
 	mvwaddstr(sort_win, cy++, 4, " [   ] Time Modified");
-	assert(cy - top == SORT_OPTION_COUNT &&
+	assert(cy - top == SK_COUNT &&
 			"Sort dialog and sort options should not diverge");
 	mvwaddstr(sort_win, curr, 6, caps[descending]);
 
@@ -195,7 +188,7 @@ redraw_sort_dialog(void)
 static void
 leave_sort_mode(void)
 {
-	*mode = NORMAL_MODE;
+	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 
 	ui_view_reset_selection_and_reload(view);
 

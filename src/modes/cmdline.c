@@ -24,27 +24,29 @@
 #include <limits.h>
 
 #include <assert.h> /* assert() */
-#include <ctype.h>
 #include <stddef.h> /* NULL size_t */
-#include <stdlib.h> /* free() */
+#include <stdlib.h> /* free() realloc() */
 #include <string.h> /* strdup() */
 #include <wchar.h> /* wcswidth() */
 #include <wctype.h>
 
 #include "../cfg/config.h"
+#include "../cfg/hist.h"
 #include "../engine/cmds.h"
 #include "../engine/completion.h"
 #include "../engine/keys.h"
-#include "../engine/options.h"
-#include "../menus/menus.h"
+#include "../engine/mode.h"
 #include "../utils/fs_limits.h"
+#include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
 #include "../utils/test_helpers.h"
 #include "../utils/utils.h"
 #include "../bookmarks.h"
 #include "../color_scheme.h"
+#include "../colors.h"
 #include "../commands.h"
+#include "../commands_completion.h"
 #include "../filelist.h"
 #include "../search.h"
 #include "../status.h"
@@ -53,6 +55,7 @@
 #include "dialogs/sort_dialog.h"
 #include "menu.h"
 #include "modes.h"
+#include "normal.h"
 #include "visual.h"
 
 #ifndef TEST
@@ -95,7 +98,6 @@ line_stats_t;
 
 #endif
 
-static int *mode;
 static int prev_mode;
 static CMD_LINE_SUBMODES sub_mode;
 static line_stats_t input_stat;
@@ -131,6 +133,7 @@ static void cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info);
 static void save_input_to_history(const keys_info_t *keys_info,
 		const char input[]);
 static void finish_prompt_submode(const char input[]);
+static int search_submode_to_command_type(int sub_mode);
 static int is_forward_search(CMD_LINE_SUBMODES sub_mode);
 static int is_backward_search(CMD_LINE_SUBMODES sub_mode);
 static void cmd_ctrl_n(key_info_t key_info, keys_info_t *keys_info);
@@ -185,6 +188,9 @@ static void cmd_ctrl_t(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_up(key_info_t key_info, keys_info_t *keys_info);
 #endif /* ENABLE_EXTENDED_KEYS */
 TSTATIC int line_completion(line_stats_t *stat);
+static char * escaped_arg_hook(const char match[]);
+static char * squoted_arg_hook(const char match[]);
+static char * dquoted_arg_hook(const char match[]);
 static void update_line_stat(line_stats_t *stat, int new_len);
 static wchar_t * wcsdel(wchar_t *src, int pos, int len);
 static void stop_completion(void);
@@ -260,17 +266,16 @@ static keys_add_info_t builtin_cmds[] = {
 };
 
 void
-init_cmdline_mode(int *key_mode)
+init_cmdline_mode(void)
 {
 	int ret_code;
 
-	assert(key_mode != NULL);
-
-	mode = key_mode;
 	set_def_handler(CMDLINE_MODE, def_handler);
 
 	ret_code = add_cmds(builtin_cmds, ARRAY_LEN(builtin_cmds), CMDLINE_MODE);
 	assert(ret_code == 0);
+
+	(void)ret_code;
 }
 
 static int
@@ -413,10 +418,10 @@ input_line_changed(void)
 		switch(sub_mode)
 		{
 			case SEARCH_FORWARD_SUBMODE:
-				exec_command(mbinput, curr_view, GET_FSEARCH_PATTERN);
+				(void)find_npattern(curr_view, mbinput, 0, 0);
 				break;
 			case SEARCH_BACKWARD_SUBMODE:
-				exec_command(mbinput, curr_view, GET_BSEARCH_PATTERN);
+				(void)find_npattern(curr_view, mbinput, 1, 0);
 				break;
 			case VSEARCH_FORWARD_SUBMODE:
 				exec_command(mbinput, curr_view, GET_VFSEARCH_PATTERN);
@@ -571,8 +576,8 @@ prepare_cmdline_mode(const wchar_t *prompt, const wchar_t *cmd,
 		complete_cmd_func complete)
 {
 	line_width = getmaxx(stdscr);
-	prev_mode = *mode;
-	*mode = CMDLINE_MODE;
+	prev_mode = vle_mode_get();
+	vle_mode_set(CMDLINE_MODE, VMT_SECONDARY);
 
 	input_stat.line = NULL;
 	input_stat.initial_line = NULL;
@@ -726,11 +731,15 @@ leave_cmdline_mode(void)
 	free(input_stat.line_buf);
 	clean_status_bar();
 
-	if(*mode == CMDLINE_MODE)
-		*mode = prev_mode;
+	if(vle_mode_is(CMDLINE_MODE))
+	{
+		vle_mode_set(prev_mode, VMT_PRIMARY);
+	}
 
-	if(*mode != MENU_MODE)
+	if(!vle_mode_is(MENU_MODE))
+	{
 		update_pos_window(curr_view);
+	}
 
 	attr = cfg.cs.color[CMD_LINE_COLOR].attr;
 	wattroff(status_bar, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR) | attr);
@@ -925,7 +934,7 @@ cmd_ctrl_i(key_info_t key_info, keys_info_t *keys_info)
 		draw_wild_menu(1);
 	input_stat.reverse_completion = 0;
 
-	if(input_stat.complete_continue && get_completion_count() == 2)
+	if(input_stat.complete_continue && vle_compl_get_count() == 2)
 		input_stat.complete_continue = 0;
 
 	do_completion();
@@ -940,7 +949,7 @@ cmd_shift_tab(key_info_t key_info, keys_info_t *keys_info)
 		draw_wild_menu(1);
 	input_stat.reverse_completion = 1;
 
-	if(input_stat.complete_continue && get_completion_count() == 2)
+	if(input_stat.complete_continue && vle_compl_get_count() == 2)
 		input_stat.complete_continue = 0;
 
 	do_completion();
@@ -981,9 +990,9 @@ draw_wild_menu(int op)
 {
 	static int last_pos;
 
-	const char ** list = get_completion_list();
-	int pos = get_completion_pos();
-	int count = get_completion_count() - 1;
+	const char ** list = vle_compl_get_list();
+	int pos = vle_compl_get_pos();
+	int count = vle_compl_get_count() - 1;
 	int i;
 	int len = getmaxx(stdscr);
 
@@ -1141,35 +1150,32 @@ cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 		else
 		{
 			local_filter_apply(curr_view, nonnull_input);
-			load_saving_pos(curr_view, 1);
+			ui_view_schedule_reload(curr_view);
 		}
 	}
-	else if(!cfg.inc_search || prev_mode == VIEW_MODE)
+	else if(!cfg.inc_search || prev_mode == VIEW_MODE || nonnull_input[0] == '\0')
 	{
+		const char *const pattern = (nonnull_input[0] == '\0')
+		                          ? cfg.search_hist.items[0]
+		                          : nonnull_input;
+
 		switch(sub_mode)
 		{
 			case SEARCH_FORWARD_SUBMODE:
-				curr_stats.save_msg = exec_command(p, curr_view, GET_FSEARCH_PATTERN);
-				break;
 			case SEARCH_BACKWARD_SUBMODE:
-				curr_stats.save_msg = exec_command(p, curr_view, GET_BSEARCH_PATTERN);
-				break;
 			case VSEARCH_FORWARD_SUBMODE:
-				curr_stats.save_msg = exec_command(p, curr_view, GET_VFSEARCH_PATTERN);
-				break;
 			case VSEARCH_BACKWARD_SUBMODE:
-				curr_stats.save_msg = exec_command(p, curr_view, GET_VBSEARCH_PATTERN);
-				break;
 			case VIEW_SEARCH_FORWARD_SUBMODE:
-				curr_stats.save_msg = exec_command(p, curr_view, GET_VWFSEARCH_PATTERN);
-				break;
 			case VIEW_SEARCH_BACKWARD_SUBMODE:
-				curr_stats.save_msg = exec_command(p, curr_view, GET_VWBSEARCH_PATTERN);
-				break;
+				{
+					const int command_type = search_submode_to_command_type(sub_mode);
+					curr_stats.save_msg = exec_command(pattern, curr_view, command_type);
+					break;
+				}
 			case MENU_SEARCH_FORWARD_SUBMODE:
 			case MENU_SEARCH_BACKWARD_SUBMODE:
 				curr_stats.need_update = UT_FULL;
-				search_menu_list(p, sub_mode_ptr);
+				curr_stats.save_msg = search_menu_list(pattern, sub_mode_ptr);
 				break;
 
 			default:
@@ -1237,6 +1243,32 @@ finish_prompt_submode(const char input[])
 	modes_pre();
 
 	cb(input);
+}
+
+/* Converts search command-line sub-mode to type of command for the commands.c
+ * unit.  Returns -1 when there is no appropriate command type. */
+static int
+search_submode_to_command_type(int sub_mode)
+{
+	switch(sub_mode)
+	{
+		case SEARCH_FORWARD_SUBMODE:
+			return GET_FSEARCH_PATTERN;
+		case SEARCH_BACKWARD_SUBMODE:
+			return GET_BSEARCH_PATTERN;
+		case VSEARCH_FORWARD_SUBMODE:
+			return GET_VFSEARCH_PATTERN;
+		case VSEARCH_BACKWARD_SUBMODE:
+			return GET_VBSEARCH_PATTERN;
+		case VIEW_SEARCH_FORWARD_SUBMODE:
+			return GET_VWFSEARCH_PATTERN;
+		case VIEW_SEARCH_BACKWARD_SUBMODE:
+			return GET_VWBSEARCH_PATTERN;
+
+		default:
+			assert(0 && "Unknown search command-line submode.");
+			return -1;
+	}
 }
 
 /* Checks whether specified mode is one of forward searching modes.  Returns
@@ -1636,7 +1668,7 @@ cmd_ctrl_underscore(key_info_t key_info, keys_info_t *keys_info)
 {
 	if(!input_stat.complete_continue)
 		return;
-	rewind_completion();
+	vle_compl_rewind();
 
 	if(!input_stat.complete_continue)
 		draw_wild_menu(1);
@@ -1787,9 +1819,10 @@ next_dot_completion(void)
 static int
 insert_dot_completion(const wchar_t completion[])
 {
+	const int dot_index = input_stat.index;
 	if(insert_str(completion) == 0)
 	{
-		input_stat.dot_index = input_stat.index;
+		input_stat.dot_index = dot_index;
 		input_stat.dot_len = wcslen(completion);
 		return 0;
 	}
@@ -2122,6 +2155,7 @@ line_completion(line_stats_t *stat)
 		int i;
 		void *p;
 		wchar_t t;
+		CompletionPreProcessing compl_func_arg;
 
 		/* only complete the part before the cursor
 		 * so just copy that part to line_mb */
@@ -2130,36 +2164,98 @@ line_completion(line_stats_t *stat)
 
 		i = wcstombs(NULL, stat->line, 0) + 1;
 
-		if((p = realloc(line_mb, i * sizeof(char))) == NULL)
+		p = realloc(line_mb, i);
+		if(p == NULL)
 		{
 			free(line_mb);
 			line_mb = NULL;
 			return -1;
 		}
+		line_mb = p;
 
-		line_mb = (char *)p;
 		wcstombs(line_mb, stat->line, i);
 		line_mb_cmd = find_last_command(line_mb);
 
 		stat->line[stat->index] = t;
 
-		reset_completion();
-		offset = stat->complete(line_mb_cmd);
+		vle_compl_reset();
+
+		compl_func_arg = CPP_NONE;
+		if(sub_mode == CMD_SUBMODE)
+		{
+			const CmdLineLocation ipt = get_cmdline_location(line_mb, line_mb + i);
+			switch(ipt)
+			{
+				case CLL_OUT_OF_ARG:
+					/* Do nothing. */
+					break;
+
+				case CLL_NO_QUOTING:
+					vle_compl_set_add_path_hook(&escaped_arg_hook);
+					break;
+
+				case CLL_S_QUOTING:
+					vle_compl_set_add_path_hook(&squoted_arg_hook);
+					compl_func_arg = CPP_SQUOTES_UNESCAPE;
+					break;
+
+				case CLL_D_QUOTING:
+					vle_compl_set_add_path_hook(&dquoted_arg_hook);
+					compl_func_arg = CPP_DQUOTES_UNESCAPE;
+					break;
+
+				case CLL_R_QUOTING:
+					assert(0 && "Unexpected completion inside regexp argument.");
+					break;
+			}
+		}
+
+		offset = stat->complete(line_mb_cmd, (void *)compl_func_arg);
+
+		vle_compl_set_add_path_hook(NULL);
 	}
 
-	set_completion_order(input_stat.reverse_completion);
+	vle_compl_set_order(input_stat.reverse_completion);
 
-	if(get_completion_count() == 0)
+	if(vle_compl_get_count() == 0)
 		return 0;
 
-	completion = next_completion();
+	completion = vle_compl_next();
 	result = line_part_complete(stat, line_mb, line_mb_cmd + offset, completion);
 	free(completion);
 
-	if(get_completion_count() >= 2)
+	if(vle_compl_get_count() >= 2)
 		stat->complete_continue = 1;
 
 	return result;
+}
+
+/* Processes completion match for insertion into command-line as escaped value.
+ * Returns newly allocated string. */
+static char *
+escaped_arg_hook(const char match[])
+{
+#ifndef _WIN32
+	return escape_filename(match, 1);
+#else
+	return strdup(escape_for_cd(match));
+#endif
+}
+
+/* Processes completion match for insertion into command-line as a value in
+ * single quotes.  Returns newly allocated string. */
+static char *
+squoted_arg_hook(const char match[])
+{
+	return escape_for_squotes(match, 1);
+}
+
+/* Processes completion match for insertion into command-line as a value in
+ * double quotes.  Returns newly allocated string. */
+static char *
+dquoted_arg_hook(const char match[])
+{
+	return escape_for_dquotes(match, 1);
 }
 
 static void
@@ -2215,7 +2311,7 @@ stop_history_completion(void)
 		return;
 
 	input_stat.complete_continue = 0;
-	reset_completion();
+	vle_compl_reset();
 	if(cfg.wild_menu &&
 			(sub_mode != MENU_CMD_SUBMODE && input_stat.complete != NULL))
 	{

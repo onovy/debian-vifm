@@ -20,10 +20,11 @@
 #include "commands_menu.h"
 
 #include <assert.h> /* assert() */
+#include <stddef.h> /* NULL size_t wchar_t */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* malloc() free() */
 #include <string.h> /* strdup() strlen() */
-#include <wchar.h> /* wchar_t wcscmp() */
+#include <wchar.h> /* wcscmp() */
 
 #include "../engine/cmds.h"
 #include "../modes/menu.h"
@@ -69,7 +70,7 @@ show_commands_menu(FileView *view)
 	}
 	m.len /= 2;
 
-	m.items = malloc(sizeof(char *)*m.len);
+	m.items = (m.len != 0) ? malloc(sizeof(char *)*m.len) : NULL;
 	for(i = 0; i < m.len; i++)
 	{
 		m.items[i] = format_str("%-*s %s", cmdname_width, list[i*2], list[i*2 + 1]);

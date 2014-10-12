@@ -18,9 +18,10 @@
 
 #include "trash_menu.h"
 
+#include <stddef.h> /* wchar_t */
 #include <stdlib.h> /* free() */
 #include <string.h> /* strdup() */
-#include <wchar.h> /* wchar_t */
+#include <wchar.h> /* wcscmp() */
 
 #include "../utils/string_array.h"
 #include "../status.h"
@@ -42,10 +43,15 @@ show_trash_menu(FileView *view)
 
 	m.title = strdup(" Original paths of files in trash ");
 
+	trash_prune_dead_entries();
+
 	for(i = 0; i < nentries; i++)
 	{
 		const trash_entry_t *const entry = &trash_list[i];
-		m.len = add_to_string_array(&m.items, m.len, 1, entry->path);
+		if(is_under_trash(entry->trash_name))
+		{
+			m.len = add_to_string_array(&m.items, m.len, 1, entry->path);
+		}
 	}
 
 	return display_menu(&m, view);

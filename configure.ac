@@ -1,7 +1,7 @@
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT(configure.in)
-AM_INIT_AUTOMAKE(vifm, 0.7.7)
+AC_INIT(configure.ac)
+AM_INIT_AUTOMAKE(vifm, 0.7.8-beta)
 AM_CONFIG_HEADER(config.h)
 
 AC_DEFINE([PACKAGE_DATA_DIR], [], [Data directory of the package.])
@@ -469,7 +469,11 @@ if test "$use_gtk" = "yes"; then
 			AC_CHECK_FUNC([g_file_query_info], [], [AC_MSG_ERROR([g_file_query_info() function not found.])])
 			AC_CHECK_FUNC([g_object_unref], [], [AC_MSG_ERROR([g_object_unref() function not found.])])
 			AC_DEFINE([HAVE_LIBGTK], [1], [use gtk to determine mime type])
+		else
+			AC_MSG_WARN("Could not find glib-2.0 gtk+-2.0 via pkg-config.  No GTK+ support.")
 		fi
+	else
+		AC_MSG_WARN("Could not find pkg-config.  No GTK+ support.")
 	fi
 fi
 
@@ -579,4 +583,3 @@ AC_OUTPUT([
 Makefile
 src/Makefile
 ])
-

@@ -19,8 +19,8 @@
 
 #include "ui.h"
 
-#include <sys/stat.h> /* stat */
-#include <dirent.h> /* DIR */
+#include <curses.h> /* mvwin() wbkgdset() werase() */
+
 #ifndef _WIN32
 #include <grp.h> /* getgrgid() */
 #include <pwd.h> /* getpwent() */
@@ -31,17 +31,18 @@
 
 #include <assert.h> /* assert() */
 #include <ctype.h>
-#include <signal.h> /* signal() */
 #include <stdarg.h> /* va_list va_start() va_end() */
-#include <stdlib.h> /* malloc() free() */
+#include <stddef.h> /* wchar_t */
+#include <stdlib.h> /* abs() free() malloc() */
 #include <stdio.h> /* snprintf() vsnprintf() */
-#include <string.h> /* memset() strcpy() strlen() */
+#include <string.h> /* memset() strcmp() strcpy() strlen() */
 #include <time.h>
+#include <wchar.h> /* wcslen() */
 
 #include "cfg/config.h"
 #include "cfg/info.h"
+#include "engine/mode.h"
 #include "menus/menus.h"
-#include "modes/file_info.h"
 #include "modes/modes.h"
 #include "modes/view.h"
 #include "utils/fs.h"
@@ -53,11 +54,11 @@
 #include "utils/utf8.h"
 #include "utils/utils.h"
 #include "color_scheme.h"
+#include "colors.h"
 #include "filelist.h"
 #include "main_loop.h"
 #include "opt_handlers.h"
 #include "quickview.h"
-#include "signals.h"
 #include "status.h"
 #include "term_title.h"
 
@@ -86,12 +87,13 @@ static WINDOW *rtop_line2;
 
 static void truncate_with_ellipsis(const char msg[], size_t width,
 		char buffer[]);
-static void update_attributes(void);
+static void create_windows(void);
+static void set_static_windows_attrs(void);
 static void update_geometry(void);
+static void clear_border(WINDOW *border);
 static void update_views(int reload);
 static void reload_lists(void);
 static void reload_list(FileView *view);
-static void swap_view_roles(void);
 static void update_view(FileView *win);
 static void update_window_lazy(WINDOW *win);
 static void switch_panes_content(void);
@@ -376,7 +378,7 @@ expand_status_line_macros(FileView *view, const char *format)
 					}
 					/* Make exception for VISUAL_MODE, since it can contain empty
 					 * selection when cursor is on ../ directory. */
-					else if(get_mode() != VISUAL_MODE)
+					else if(!vle_mode_is(VISUAL_MODE))
 					{
 						size = get_file_size_by_entry(view, view->list_pos);
 					}
@@ -579,7 +581,9 @@ status_bar_message_i(const char *message, int error)
 	char truncated_msg[2048];
 
 	if(curr_stats.load_stage == 0)
+	{
 		return;
+	}
 
 	if(message != NULL)
 	{
@@ -593,10 +597,10 @@ status_bar_message_i(const char *message, int error)
 		save_status_bar_msg(msg);
 	}
 
-	if(msg == NULL)
+	if(msg == NULL || vle_mode_is(CMDLINE_MODE))
+	{
 		return;
-	if(get_mode() == CMDLINE_MODE)
-		return;
+	}
 
 	p = msg;
 	q = msg - 1;
@@ -684,11 +688,8 @@ status_bar_message_i(const char *message, int error)
 	}
 
 	wattrset(status_bar, 0);
-	update_window_lazy(status_bar);
-	if(!is_in_menu_like_mode() && cfg.last_status)
-	{
-		update_window_lazy(stat_win);
-	}
+
+	update_all_windows();
 	doupdate();
 }
 
@@ -791,7 +792,6 @@ int
 setup_ncurses_interface(void)
 {
 	int screen_x, screen_y;
-	int x, y;
 
 	initscr();
 	noecho();
@@ -815,145 +815,15 @@ setup_ncurses_interface(void)
 
 	load_def_scheme();
 
-	werase(stdscr);
+	create_windows();
 
-	menu_win = newwin(screen_y - 1, screen_x, 0, 0);
-	wbkgdset(menu_win, COLOR_PAIR(DCOLOR_BASE + WIN_COLOR));
-	wattrset(menu_win, cfg.cs.color[WIN_COLOR].attr);
-	werase(menu_win);
+	set_static_windows_attrs();
 
-	sort_win = newwin(SORT_OPTION_COUNT + 5, SORT_WIN_WIDTH,
-			(screen_y - SORT_OPTION_COUNT)/2, (screen_x - SORT_WIN_WIDTH)/2);
-	wbkgdset(sort_win, COLOR_PAIR(DCOLOR_BASE + WIN_COLOR));
-	wattrset(sort_win, cfg.cs.color[WIN_COLOR].attr);
-	werase(sort_win);
+	cfg.tab_stop = TABSIZE;
 
-	change_win = newwin(20, 30, (screen_y - 20)/2, (screen_x -30)/2);
-	wbkgdset(change_win, COLOR_PAIR(DCOLOR_BASE + WIN_COLOR));
-	wattrset(change_win, cfg.cs.color[WIN_COLOR].attr);
-	werase(change_win);
-
-	error_win = newwin(10, screen_x -2, (screen_y -10)/2, 1);
-	wbkgdset(error_win, COLOR_PAIR(DCOLOR_BASE + WIN_COLOR));
-	wattrset(error_win, cfg.cs.color[WIN_COLOR].attr);
-	werase(error_win);
-
-	lborder = newwin(screen_y - 2, 1, 1, 0);
-	wbkgdset(lborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) |
-			cfg.cs.color[BORDER_COLOR].attr);
-	werase(lborder);
-
-	if(curr_stats.number_of_windows == 1)
-		lwin.title = newwin(1, screen_x - 2, 0, 1);
-	else
-		lwin.title = newwin(1, screen_x/2 - 2, 0, 1);
-
-	wbkgdset(lwin.title, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_SEL_COLOR) |
-			(cfg.cs.color[TOP_LINE_SEL_COLOR].attr & A_REVERSE));
-	wattrset(lwin.title, cfg.cs.color[TOP_LINE_SEL_COLOR].attr & ~A_REVERSE);
-	werase(lwin.title);
-
-	if(curr_stats.number_of_windows == 1)
-		lwin.win = newwin(screen_y - 3, screen_x - 2, 1, 1);
-	else
-		lwin.win = newwin(screen_y - 3, screen_x/2 - 2 + screen_x%2, 1, 1);
-
-	wbkgdset(lwin.win, COLOR_PAIR(DCOLOR_BASE + WIN_COLOR));
-	wattrset(lwin.win, cfg.cs.color[WIN_COLOR].attr);
-	werase(lwin.win);
-	getmaxyx(lwin.win, y, x);
-	lwin.window_rows = y - 1;
-	lwin.window_cells = y;
-	lwin.window_width = x - 1;
-
-	mborder = newwin(screen_y - 1, 2 - screen_x%2, 1,
-			screen_x/2 - 1 + screen_x%2);
-	wbkgdset(mborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) |
-			cfg.cs.color[BORDER_COLOR].attr);
-	werase(mborder);
-
-	ltop_line1 = newwin(1, 1, 0, 0);
-	wbkgdset(ltop_line1, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-			(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
-	wattrset(ltop_line1, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-	werase(ltop_line1);
-
-	ltop_line2 = newwin(1, 1, 0, 0);
-	wbkgdset(ltop_line2, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-			(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
-	wattrset(ltop_line2, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-	werase(ltop_line2);
-
-	top_line = newwin(1, 2 - screen_x%2, 0, screen_x/2 - 1 + screen_x%2);
-	wbkgdset(top_line, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-			(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
-	wattrset(top_line, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-	werase(top_line);
-
-	rtop_line1 = newwin(1, 1, 0, screen_x - 1);
-	wbkgdset(rtop_line1, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-			(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
-	wattrset(rtop_line1, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-	werase(rtop_line1);
-
-	rtop_line2 = newwin(1, 1, 0, screen_x - 1);
-	wbkgdset(rtop_line2, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-			(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
-	wattrset(rtop_line2, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-	werase(rtop_line2);
-
-	if(curr_stats.number_of_windows == 1)
-		rwin.title = newwin(1, screen_x - 2, 0, 1);
-	else
-		rwin.title = newwin(1, screen_x/2 - 2 + screen_x%2, 0, screen_x/2 + 1);
-	wbkgdset(rwin.title, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
-			(COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) & A_REVERSE));
-	wattrset(rwin.title, cfg.cs.color[TOP_LINE_COLOR].attr & ~A_REVERSE);
-	werase(rwin.title);
-
-	if(curr_stats.number_of_windows == 1)
-		rwin.win = newwin(screen_y - 3, screen_x - 2, 1, 1);
-	else
-		rwin.win = newwin(screen_y - 3, screen_x/2 - 2 + screen_x%2, 1,
-				screen_x/2 + 1);
-
-	wbkgdset(rwin.win, COLOR_PAIR(DCOLOR_BASE + WIN_COLOR));
-	wattrset(rwin.win, cfg.cs.color[WIN_COLOR].attr);
-	werase(rwin.win);
-	getmaxyx(rwin.win, y, x);
-	rwin.window_rows = y - 1;
-	rwin.window_cells = y;
-	rwin.window_width = x - 1;
-
-	rborder = newwin(screen_y - 2, 1, 1, screen_x - 1);
-	wbkgdset(rborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) |
-			cfg.cs.color[BORDER_COLOR].attr);
-	werase(rborder);
-
-	stat_win = newwin(1, screen_x, screen_y - 2, 0);
-	wbkgdset(stat_win, COLOR_PAIR(DCOLOR_BASE + STATUS_LINE_COLOR) |
-			cfg.cs.color[STATUS_LINE_COLOR].attr);
-	werase(stat_win);
-
-	status_bar = newwin(1, screen_x - FIELDS_WIDTH, screen_y - 1, 0);
 #ifdef ENABLE_EXTENDED_KEYS
 	keypad(status_bar, TRUE);
 #endif /* ENABLE_EXTENDED_KEYS */
-	wattrset(status_bar, cfg.cs.color[CMD_LINE_COLOR].attr);
-	wbkgdset(status_bar, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
-	werase(status_bar);
-
-	pos_win = newwin(1, POS_WIN_WIDTH, screen_y - 1, screen_x - POS_WIN_WIDTH);
-	wattrset(pos_win, cfg.cs.color[CMD_LINE_COLOR].attr);
-	wbkgdset(pos_win, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
-	werase(pos_win);
-
-	input_win = newwin(1, INPUT_WIN_WIDTH, screen_y - 1, screen_x - FIELDS_WIDTH);
-	wattrset(input_win, cfg.cs.color[CMD_LINE_COLOR].attr);
-	wbkgdset(input_win, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
-	werase(input_win);
-
-	cfg.tab_stop = TABSIZE;
 
 #if defined(NCURSES_EXT_FUNCS) && NCURSES_EXT_FUNCS >= 20081102
 #ifdef HAVE_SET_ESCDELAY_FUNC
@@ -965,6 +835,57 @@ setup_ncurses_interface(void)
 	update_geometry();
 
 	return 1;
+}
+
+/* Initializes all WINDOW variables by calling newwin() to create ncurses
+ * windows. */
+static void
+create_windows(void)
+{
+	menu_win = newwin(1, 1, 0, 0);
+	sort_win = newwin(1, 1, 0, 0);
+	change_win = newwin(1, 1, 0, 0);
+	error_win = newwin(1, 1, 0, 0);
+
+	lborder = newwin(1, 1, 0, 0);
+
+	lwin.title = newwin(1, 1, 0, 0);
+	lwin.win = newwin(1, 1, 0, 0);
+
+	mborder = newwin(1, 1, 0, 0);
+
+	ltop_line1 = newwin(1, 1, 0, 0);
+	ltop_line2 = newwin(1, 1, 0, 0);
+
+	top_line = newwin(1, 1, 0, 0);
+
+	rtop_line1 = newwin(1, 1, 0, 0);
+	rtop_line2 = newwin(1, 1, 0, 0);
+
+	rwin.title = newwin(1, 1, 0, 0);
+	rwin.win = newwin(1, 1, 0, 0);
+
+	rborder = newwin(1, 1, 0, 0);
+
+	stat_win = newwin(1, 1, 0, 0);
+	status_bar = newwin(1, 1, 0, 0);
+	pos_win = newwin(1, 1, 0, 0);
+	input_win = newwin(1, 1, 0, 0);
+}
+
+/* Set attributes for elements of status bar.  This is the only place where it's
+ * done as they are not customizable separately. */
+static void
+set_static_windows_attrs(void)
+{
+	wattrset(status_bar, cfg.cs.color[CMD_LINE_COLOR].attr);
+	wbkgdset(status_bar, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
+
+	wattrset(pos_win, cfg.cs.color[CMD_LINE_COLOR].attr);
+	wbkgdset(pos_win, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
+
+	wattrset(input_win, cfg.cs.color[CMD_LINE_COLOR].attr);
+	wbkgdset(input_win, COLOR_PAIR(DCOLOR_BASE + CMD_LINE_COLOR));
 }
 
 void
@@ -1004,19 +925,31 @@ correct_size(FileView *view)
 	view->window_cells = view->column_count*y;
 }
 
+/* Updates TUI elements sizes and coordinates for single window
+ * configuration. */
 static void
 only_layout(FileView *view, int screen_x, int screen_y)
 {
+	const int vborder_pos_correction = cfg.side_borders_visible ? 1 : 0;
+	const int vborder_size_correction = cfg.side_borders_visible ? -2 : 0;
+
 	wresize(view->title, 1, screen_x - 2);
 	mvwin(view->title, 0, 1);
 
-	wresize(view->win, screen_y - 3 + !cfg.last_status, screen_x - 2);
-	mvwin(view->win, 1, 1);
+	wresize(view->win,
+			screen_y - 3 + !cfg.last_status, screen_x + vborder_size_correction);
+	mvwin(view->win, 1, vborder_pos_correction);
 }
 
+/* Updates TUI elements sizes and coordinates for vertical configuration of
+ * panes: left one and right one. */
 static void
 vertical_layout(int screen_x, int screen_y)
 {
+	const int vborder_pos_correction = cfg.side_borders_visible ? 1 : 0;
+	const int vborder_size_correction = cfg.side_borders_visible ? -1 : 0;
+	const int border_height = screen_y - 3 + !cfg.last_status;
+
 	int splitter_pos;
 	int splitter_width;
 
@@ -1034,12 +967,14 @@ vertical_layout(int screen_x, int screen_y)
 		curr_stats.splitter_pos = splitter_pos;
 
 	wresize(lwin.title, 1, splitter_pos - 1);
-	wresize(lwin.win, screen_y - 3 + !cfg.last_status, splitter_pos - 1);
-	mvwin(lwin.win, 1, 1);
+	mvwin(lwin.title, 0, 1);
+
+	wresize(lwin.win, border_height, splitter_pos + vborder_size_correction);
+	mvwin(lwin.win, 1, vborder_pos_correction);
 
 	wbkgdset(mborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) |
 			cfg.cs.color[BORDER_COLOR].attr);
-	wresize(mborder, screen_y - 2, splitter_width);
+	wresize(mborder, border_height, splitter_width);
 	mvwin(mborder, 1, splitter_pos);
 
 	mvwin(ltop_line1, 0, 0);
@@ -1054,14 +989,19 @@ vertical_layout(int screen_x, int screen_y)
 	wresize(rwin.title, 1, screen_x - (splitter_pos + splitter_width + 1));
 	mvwin(rwin.title, 0, splitter_pos + splitter_width);
 
-	wresize(rwin.win, screen_y - 3 + !cfg.last_status,
-			screen_x - (splitter_pos + splitter_width + 1));
+	wresize(rwin.win, border_height,
+			screen_x - (splitter_pos + splitter_width) + vborder_size_correction);
 	mvwin(rwin.win, 1, splitter_pos + splitter_width);
 }
 
+/* Updates TUI elements sizes and coordinates for horizontal configuration of
+ * panes: top one and bottom one. */
 static void
 horizontal_layout(int screen_x, int screen_y)
 {
+	const int vborder_pos_correction = cfg.side_borders_visible ? 1 : 0;
+	const int vborder_size_correction = cfg.side_borders_visible ? -2 : 0;
+
 	int splitter_pos;
 
 	if(curr_stats.splitter_pos < 0)
@@ -1081,12 +1021,12 @@ horizontal_layout(int screen_x, int screen_y)
 	wresize(rwin.title, 1, screen_x - 2);
 	mvwin(rwin.title, splitter_pos, 1);
 
-	wresize(lwin.win, splitter_pos - 1, screen_x - 2);
-	mvwin(lwin.win, 1, 1);
+	wresize(lwin.win, splitter_pos - 1, screen_x + vborder_size_correction);
+	mvwin(lwin.win, 1, vborder_pos_correction);
 
 	wresize(rwin.win, screen_y - splitter_pos - 1 - cfg.last_status - 1,
-			screen_x - 2);
-	mvwin(rwin.win, splitter_pos + 1, 1);
+			screen_x + vborder_size_correction);
+	mvwin(rwin.win, splitter_pos + 1, vborder_pos_correction);
 
 	wbkgdset(mborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) |
 			cfg.cs.color[BORDER_COLOR].attr);
@@ -1115,6 +1055,7 @@ resize_all(void)
 	static float prev_x = -1.f, prev_y = -1.f;
 
 	int screen_x, screen_y;
+	int border_height;
 
 	update_geometry();
 	getmaxyx(stdscr, screen_y, screen_x);
@@ -1149,37 +1090,21 @@ resize_all(void)
 	prev_x = screen_x;
 	prev_y = screen_y;
 
-	werase(stdscr);
-	werase(mborder);
-	werase(ltop_line1);
-	werase(ltop_line2);
-	werase(top_line);
-	werase(rtop_line1);
-	werase(rtop_line2);
-	werase(lwin.title);
-	werase(lwin.win);
-	werase(rwin.title);
-	werase(rwin.win);
-	werase(stat_win);
-	werase(pos_win);
-	werase(input_win);
-	werase(rborder);
-	werase(lborder);
-	werase(status_bar);
-
 	wresize(stdscr, screen_y, screen_x);
 	wresize(menu_win, screen_y - 1, screen_x);
 	wresize(error_win, (screen_y - 10)/2, screen_x - 2);
 	mvwin(error_win, (screen_y - 10)/2, 1);
 
+	border_height = screen_y - 3 + !cfg.last_status;
+
 	wbkgdset(lborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) |
 			cfg.cs.color[BORDER_COLOR].attr);
-	wresize(lborder, screen_y - 2, 1);
+	wresize(lborder, border_height, 1);
 	mvwin(lborder, 1, 0);
 
 	wbkgdset(rborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) |
 			cfg.cs.color[BORDER_COLOR].attr);
-	wresize(rborder, screen_y - 2, 1);
+	wresize(rborder, border_height, 1);
 	mvwin(rborder, 1, screen_x - 1);
 
 	if(curr_stats.number_of_windows == 1)
@@ -1267,15 +1192,23 @@ update_screen(UpdateType update_kind)
 	resize_all();
 
 	if(curr_stats.restart_in_progress)
+	{
 		return;
+	}
 
 	update_attributes();
-	werase(lborder);
-	werase(mborder);
-	werase(rborder);
+
+	if(cfg.side_borders_visible)
+	{
+		clear_border(lborder);
+		clear_border(rborder);
+	}
+	clear_border(mborder);
 
 	if(curr_stats.too_small_term)
+	{
 		return;
+	}
 
 	curr_stats.need_update = UT_NONE;
 
@@ -1286,11 +1219,15 @@ update_screen(UpdateType update_kind)
 	if(!is_status_bar_multiline())
 	{
 		if(curr_view->selected_files)
+		{
 			print_selected_msg();
+		}
 		else
+		{
 			clean_status_bar();
+		}
 
-		if(get_mode() == VIEW_MODE)
+		if(vle_mode_is(VIEW_MODE))
 		{
 			view_draw_pos();
 		}
@@ -1301,11 +1238,15 @@ update_screen(UpdateType update_kind)
 	}
 
 	if(curr_stats.save_msg == 0)
+	{
 		status_bar_message("");
+	}
 
-	if(get_mode() == VIEW_MODE ||
+	if(vle_mode_is(VIEW_MODE) ||
 			(curr_stats.number_of_windows == 2 && other_view->explore_mode))
+	{
 		view_redraw();
+	}
 
 	update_all_windows();
 
@@ -1320,8 +1261,30 @@ update_screen(UpdateType update_kind)
 	}
 
 	update_input_buf();
-	
+
 	curr_stats.need_update = UT_NONE;
+}
+
+/* Clears border, possibly by filling it with a pattern (depends on
+ * configuration). */
+static void
+clear_border(WINDOW *border)
+{
+	int i;
+	int height;
+
+	werase(border);
+
+	if(strcmp(cfg.border_filler, " ") == 0)
+	{
+		return;
+	}
+
+	height = getmaxy(border);
+	for(i = 0; i < height; ++i)
+	{
+		mvwaddstr(border, i, 0, cfg.border_filler);
+	}
 }
 
 /* Updates (redraws or reloads) views. */
@@ -1370,6 +1333,8 @@ change_window(void)
 {
 	swap_view_roles();
 
+	load_local_options(curr_view);
+
 	if(curr_stats.number_of_windows != 1)
 	{
 		if(!other_view->explore_mode)
@@ -1387,56 +1352,71 @@ change_window(void)
 	curr_stats.need_update = UT_REDRAW;
 }
 
-/* Swaps curr_view and other_view pointers and updates things that are bound to
- * current view, which is obviously changed after swapping. */
-static void
+void
 swap_view_roles(void)
 {
-	FileView *tmp = curr_view;
+	FileView *const tmp = curr_view;
 	curr_view = other_view;
 	other_view = tmp;
-
-	load_local_options(curr_view);
 }
 
 void
 update_all_windows(void)
 {
+	int in_menu;
+
 	if(curr_stats.load_stage < 2)
+	{
 		return;
-
-	/* In One window view */
-	if(curr_stats.number_of_windows == 1)
-	{
-		update_view(curr_view);
-	}
-	/* Two Pane View */
-	else
-	{
-		update_window_lazy(mborder);
-		update_window_lazy(top_line);
-
-		update_view(&lwin);
-		update_view(&rwin);
 	}
 
-	update_window_lazy(lborder);
-	if(cfg.last_status)
+  in_menu = is_in_menu_like_mode();
+
+	if(!in_menu)
 	{
-		update_window_lazy(stat_win);
+		if(curr_stats.number_of_windows == 1)
+		{
+			/* In one window view. */
+			update_view(curr_view);
+		}
+		else
+		{
+			/* Two pane View. */
+			update_window_lazy(mborder);
+			update_window_lazy(top_line);
+
+			update_view(&lwin);
+			update_view(&rwin);
+		}
+
+		if(cfg.side_borders_visible)
+		{
+			update_window_lazy(lborder);
+			update_window_lazy(rborder);
+		}
+
+		if(cfg.last_status)
+		{
+			update_window_lazy(stat_win);
+		}
 	}
+
 	update_window_lazy(pos_win);
 	update_window_lazy(input_win);
-	update_window_lazy(rborder);
 	update_window_lazy(status_bar);
 
-	update_window_lazy(ltop_line1);
-	update_window_lazy(ltop_line2);
-	update_window_lazy(rtop_line1);
-	update_window_lazy(rtop_line2);
+	if(!in_menu)
+	{
+		update_window_lazy(ltop_line1);
+		update_window_lazy(ltop_line2);
+		update_window_lazy(rtop_line1);
+		update_window_lazy(rtop_line2);
+	}
 
 	if(!curr_stats.errmsg_shown && curr_stats.load_stage >= 2)
+	{
 		doupdate();
+	}
 }
 
 /* Updates all parts of file view. */
@@ -1510,7 +1490,7 @@ show_progress(const char *msg, int period)
 
 	pause = 1;
 
-	status_bar_messagef("%s %c", msg, marks[count]);
+	ui_sb_quick_msgf("%s %c", msg, marks[count]);
 
 	count = (count + 1) % sizeof(marks);
 }
@@ -1535,46 +1515,7 @@ redraw_lists(void)
 	}
 }
 
-int
-load_color_scheme(const char name[])
-{
-	col_scheme_t prev_cs;
-	char full[PATH_MAX];
-
-	if(!color_scheme_exists(name))
-	{
-		show_error_msgf("Color Scheme", "Invalid color scheme name: \"%s\"", name);
-		return 0;
-	}
-
-	prev_cs = cfg.cs;
-	curr_stats.cs_base = DCOLOR_BASE;
-	curr_stats.cs = &cfg.cs;
-	cfg.cs.defaulted = 0;
-
-	snprintf(full, sizeof(full), "%s/colors/%s", cfg.config_dir, name);
-	if(source_file(full) != 0)
-	{
-		show_error_msgf("Color Scheme", "Can't load colorscheme: \"%s\"", name);
-		return 0;
-	}
-	copy_str(cfg.cs.name, sizeof(cfg.cs.name), name);
-	check_color_scheme(&cfg.cs);
-
-	update_attributes();
-
-	if(curr_stats.load_stage >= 2 && cfg.cs.defaulted)
-	{
-		cfg.cs = prev_cs;
-		load_color_scheme_colors();
-		update_screen(UT_REDRAW);
-		show_error_msg("Color Scheme Error", "Not supported by the terminal");
-		return 1;
-	}
-	return 0;
-}
-
-static void
+void
 update_attributes(void)
 {
 	int attr;
@@ -1583,12 +1524,15 @@ update_attributes(void)
 		return;
 
 	attr = cfg.cs.color[BORDER_COLOR].attr;
-	wbkgdset(lborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) | attr);
-	werase(lborder);
+	if(cfg.side_borders_visible)
+	{
+		wbkgdset(lborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) | attr);
+		werase(lborder);
+		wbkgdset(rborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) | attr);
+		werase(rborder);
+	}
 	wbkgdset(mborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) | attr);
 	werase(mborder);
-	wbkgdset(rborder, COLOR_PAIR(DCOLOR_BASE + BORDER_COLOR) | attr);
-	werase(rborder);
 
 	wbkgdset(ltop_line1, COLOR_PAIR(DCOLOR_BASE + TOP_LINE_COLOR) |
 			(cfg.cs.color[TOP_LINE_COLOR].attr & A_REVERSE));
@@ -1649,12 +1593,6 @@ wprinta(WINDOW *win, const char str[], int line_attrs)
 	wattron(win, line_attrs);
 	wprint(win, str);
 	wattroff(win, line_attrs);
-}
-
-void
-request_view_update(FileView *view)
-{
-	memset(&view->dir_mtime, -1, sizeof(view->dir_mtime));
 }
 
 void
@@ -1736,7 +1674,7 @@ switch_panes_content(void)
 	WINDOW* tmp;
 	int t;
 
-	if(get_mode() != VIEW_MODE)
+	if(!vle_mode_is(VIEW_MODE))
 	{
 		view_switch_views();
 	}
@@ -1807,16 +1745,12 @@ only(void)
 void
 format_entry_name(FileView *view, size_t pos, size_t buf_len, char buf[])
 {
+	const FileType type = ui_view_entry_target_type(view, pos);
 	dir_entry_t *const entry = &view->dir_entry[pos];
-	char *const full_path = format_str("%s/%s", view->curr_dir, entry->name);
-	const FileType type = (entry->type == LINK && check_link_is_dir(full_path)) ?
-		DIRECTORY : entry->type;
 
 	const char prefix[2] = { cfg.decorations[type][DECORATION_PREFIX] };
 	const char suffix[2] = { cfg.decorations[type][DECORATION_SUFFIX] };
 	size_t name_len = 1;
-
-	free(full_path);
 
 	/* FIXME: remove this hack for directories. */
 	if(type == DIRECTORY)
@@ -1892,7 +1826,7 @@ ui_view_title_update(FileView *view)
 {
 	char *buf;
 	size_t len;
-	int gen_view = get_mode() == VIEW_MODE && !curr_view->explore_mode;
+	const int gen_view = vle_mode_is(VIEW_MODE) && !curr_view->explore_mode;
 	FileView *selected = gen_view ? other_view : curr_view;
 
 	if(curr_stats.load_stage < 2)
@@ -1976,13 +1910,13 @@ ui_view_title_update(FileView *view)
 }
 
 int
-ui_view_sort_list_contains(const char sort[SORT_OPTION_COUNT], char key)
+ui_view_sort_list_contains(const char sort[SK_COUNT], char key)
 {
 	int i = -1;
-	while(++i < SORT_OPTION_COUNT)
+	while(++i < SK_COUNT)
 	{
 		const int sort_key = abs(sort[i]);
-		if(sort_key > LAST_SORT_OPTION)
+		if(sort_key > SK_LAST)
 		{
 			return 0;
 		}
@@ -1995,31 +1929,31 @@ ui_view_sort_list_contains(const char sort[SORT_OPTION_COUNT], char key)
 }
 
 void
-ui_view_sort_list_ensure_well_formed(char sort[SORT_OPTION_COUNT])
+ui_view_sort_list_ensure_well_formed(char sort[SK_COUNT])
 {
 	int found_name_key = 0;
 	int i = -1;
-	while(++i < SORT_OPTION_COUNT)
+	while(++i < SK_COUNT)
 	{
 		const int sort_key = abs(sort[i]);
-		if(sort_key > LAST_SORT_OPTION)
+		if(sort_key > SK_LAST)
 		{
 			break;
 		}
-		else if(sort_key == SORT_BY_NAME || sort_key == SORT_BY_INAME)
+		else if(sort_key == SK_BY_NAME || sort_key == SK_BY_INAME)
 		{
 			found_name_key = 1;
 		}
 	}
 
-	if(!found_name_key && i < SORT_OPTION_COUNT)
+	if(!found_name_key && i < SK_COUNT)
 	{
-		sort[i++] = DEFAULT_SORT_KEY;
+		sort[i++] = SK_DEFAULT;
 	}
 
-	if(i < SORT_OPTION_COUNT)
+	if(i < SK_COUNT)
 	{
-		memset(&sort[i], NO_SORT_OPTION, SORT_OPTION_COUNT - i);
+		memset(&sort[i], SK_NONE, SK_COUNT - i);
 	}
 }
 
@@ -2033,6 +1967,120 @@ int
 ui_view_is_visible(const FileView *const view)
 {
 	return curr_stats.number_of_windows == 2 || curr_view == view;
+}
+
+void
+ui_view_clear_history(FileView *const view)
+{
+	free_history_items(view->history, view->history_num);
+	view->history_num = 0;
+	view->history_pos = 0;
+}
+
+int
+ui_view_displays_columns(const FileView *const view)
+{
+	return !view->ls_view;
+}
+
+FileType
+ui_view_entry_target_type(const FileView *const view, size_t pos)
+{
+	const dir_entry_t *const entry = &view->dir_entry[pos];
+	if(entry->type == LINK)
+	{
+		char *const full_path = format_str("%s/%s", view->curr_dir, entry->name);
+		const FileType type = (get_symlink_type(full_path) != SLT_UNKNOWN)
+		                    ? DIRECTORY
+		                    : LINK;
+		free(full_path);
+		return type;
+	}
+	else
+	{
+		return entry->type;
+	}
+}
+
+int
+ui_view_available_width(const FileView *const view)
+{
+	if(cfg.filelist_col_padding)
+	{
+		return (int)view->window_width - 1;
+	}
+	else
+	{
+		return (int)view->window_width + 1;
+	}
+}
+
+void
+ui_sb_quick_msgf(const char format[], ...)
+{
+	va_list ap;
+	va_start(ap, format);
+
+	checked_wmove(status_bar, 0, 0);
+	werase(status_bar);
+	vwprintw(status_bar, format, ap);
+	wnoutrefresh(status_bar);
+	doupdate();
+
+	va_end(ap);
+}
+
+void
+ui_view_schedule_redraw(FileView *view)
+{
+	++view->postponed_redraw;
+}
+
+void
+ui_view_schedule_reload(FileView *view)
+{
+	if(view->postponed_reload >= 0)
+	{
+		++view->postponed_reload;
+	}
+}
+
+void
+ui_view_schedule_full_reload(FileView *view)
+{
+	view->postponed_reload = -abs(view->postponed_reload) - 1;
+}
+
+int
+ui_view_is_redraw_scheduled(const FileView *view)
+{
+	return view->postponed_redraw != 0;
+}
+
+int
+ui_view_is_reload_scheduled(const FileView *view)
+{
+	return view->postponed_reload != 0;
+}
+
+int
+ui_view_is_full_reload_scheduled(const FileView *view)
+{
+	return view->postponed_reload < 0;
+}
+
+void
+ui_view_redrawn(FileView *view)
+{
+	view->postponed_redraw = 0;
+}
+
+void
+ui_view_reloaded(FileView *view)
+{
+	ui_view_redrawn(view);
+
+	view->postponed_reload = 0;
 }
 
 void

@@ -19,6 +19,8 @@
 #ifndef VIFM__OPS_H__
 #define VIFM__OPS_H__
 
+#include "io/ioeta.h"
+
 typedef enum
 {
 	OP_NONE,
@@ -27,8 +29,10 @@ typedef enum
 	OP_REMOVESL, /* cl */
 	OP_COPY,     /* copy and clone */
 	OP_COPYF,    /* copy with file overwrite */
+	OP_COPYA,    /* copy with file appending file part */
 	OP_MOVE,     /* move, rename and substitute */
 	OP_MOVEF,    /* move with file overwrite */
+	OP_MOVEA,    /* move with file appending file part */
 	OP_MOVETMP1, /* multiple files rename */
 	OP_MOVETMP2, /* multiple files rename */
 	OP_MOVETMP3, /* multiple files rename */
@@ -48,9 +52,45 @@ typedef enum
 	OP_RMDIR,
 	OP_MKFILE,
 	OP_COUNT
-}OPS;
+}
+OPS;
 
-int perform_operation(OPS op, void *data, const char *src, const char *dst);
+/* Description of file operation on a set of files.  Collects information and
+ * helps to keep track of progress. */
+typedef struct
+{
+	OPS main_op;          /* Primary operation performed on items. */
+	int total;            /* Total number of items to be processed. */
+	int current;          /* Number of current item. */
+	int succeeded;        /* Number of successfully processed items. */
+	ioeta_estim_t *estim; /* When non-NULL, populated with estimates for items and
+	                         also frees it on ops_free(). */
+	const char *descr;    /* Description of operations. */
+	int shallow_eta;      /* Count only top level items, without recursion. */
+	char *base_dir;       /* Base directory in which operation is taking place. */
+}
+ops_t;
+
+/* Allocates and initializes new ops_t.  Returns just allocated structure. */
+ops_t * ops_alloc(OPS main_op, const char descr[], const char base_dir[]);
+
+/* Describes main operation with one generic word.  Returns the description. */
+const char * ops_describe(const ops_t *ops);
+
+/* Puts new item to the ops.  Destination argument is a hint to optimize
+ * estimating performance, it can be NULL. */
+void ops_enqueue(ops_t *ops, const char src[], const char dst[]);
+
+/* Advances ops to the next item. */
+void ops_advance(ops_t *ops, int succeeded);
+
+/* Frees ops_t.  The ops can be NULL. */
+void ops_free(ops_t *ops);
+
+/* Performs single operations, possibly part of the ops (which can be NULL).
+ * Returns non-zero on error, otherwise zero is returned. */
+int perform_operation(OPS op, ops_t *ops, void *data, const char src[],
+		const char dst[]);
 
 #endif /* VIFM__OPS_H__ */
 

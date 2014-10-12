@@ -1,3 +1,5 @@
+#include <unistd.h> /* chdir() */
+
 #include <stdlib.h>
 #include <string.h>
 
@@ -65,8 +67,6 @@ setup(void)
 
 	curr_view = &lwin;
 	other_view = &rwin;
-
-	cfg.max_args = 8192;
 }
 
 static void

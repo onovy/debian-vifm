@@ -174,15 +174,16 @@ setup(void)
 }
 
 static void
-teardown(void)
-{
-}
-
-static void
-test_trimming(void)
+test_leading_whitespace_trimming(void)
 {
 	assert_int_equal(0, execute_cmd("q"));
 	assert_int_equal(0, execute_cmd(" q"));
+	assert_int_equal(0, execute_cmd("   q"));
+	assert_int_equal(0, execute_cmd("\tq"));
+	assert_int_equal(0, execute_cmd("\t\tq"));
+	assert_int_equal(0, execute_cmd("\t\t q"));
+	assert_int_equal(0, execute_cmd(" \t \tq"));
+	assert_int_equal(0, execute_cmd("\t \tq"));
 }
 
 static void
@@ -330,6 +331,22 @@ test_range_plus_minus(void)
 	assert_int_equal(0, execute_cmd(".,.-500"));
 	assert_int_equal(50, cmdi.begin);
 	assert_int_equal(0, cmdi.end);
+}
+
+static void
+test_range_comma_vs_semicolon_bases(void)
+{
+	cmds_conf.begin = 0;
+	cmds_conf.current = 0;
+	cmds_conf.end = 3;
+
+	assert_int_equal(0, execute_cmd("2,+2"));
+	assert_int_equal(1, cmdi.begin);
+	assert_int_equal(2, cmdi.end);
+
+	assert_int_equal(0, execute_cmd("2;+2"));
+	assert_int_equal(1, cmdi.begin);
+	assert_int_equal(3, cmdi.end);
 }
 
 static void
@@ -498,7 +515,7 @@ test_custom_separator_and_emark(void)
 }
 
 static void
-test_regexp_flag(void)
+test_regexp_flag_strips_slashes(void)
 {
 	assert_int_equal(0, execute_cmd("e /te|xt/"));
 	assert_int_equal(1, cmdi.argc);
@@ -506,6 +523,30 @@ test_regexp_flag(void)
 
 	assert_int_equal(0, execute_cmd("filter /te|xt/"));
 	assert_int_equal(1, cmdi.argc);
+	assert_string_equal("te|xt", arg);
+}
+
+static void
+test_regexp_flag_slashes_and_spaces(void)
+{
+	assert_int_equal(0, execute_cmd("filter /te|xt/i"));
+	assert_int_equal(2, cmdi.argc);
+	assert_string_equal("te|xt", arg);
+
+	assert_int_equal(0, execute_cmd("filter/te|xt/i"));
+	assert_int_equal(2, cmdi.argc);
+	assert_string_equal("te|xt", arg);
+}
+
+static void
+test_regexp_flag_bang_slashes_and_spaces(void)
+{
+	assert_int_equal(0, execute_cmd("filter! /te|xt/i"));
+	assert_int_equal(2, cmdi.argc);
+	assert_string_equal("te|xt", arg);
+
+	assert_int_equal(0, execute_cmd("filter!/te|xt/i"));
+	assert_int_equal(2, cmdi.argc);
 	assert_string_equal("te|xt", arg);
 }
 
@@ -578,25 +619,25 @@ test_only_one_mark(void)
 }
 
 static void
-test_args_trimming(void)
+test_args_whitespace_trimming(void)
 {
 	assert_int_equal(0, execute_cmd("call hi"));
 	assert_int_equal(1, cmdi.argc);
 	assert_string_equal("hi", arg);
 
-	assert_int_equal(0, execute_cmd("call 'hi'"));
+	assert_int_equal(0, execute_cmd("call\t'hi'"));
 	assert_int_equal(1, cmdi.argc);
 	assert_string_equal("'hi'", arg);
 
-	assert_int_equal(0, execute_cmd("call hi "));
+	assert_int_equal(0, execute_cmd("call\t hi "));
 	assert_int_equal(1, cmdi.argc);
 	assert_string_equal("hi", arg);
 
-	assert_int_equal(0, execute_cmd("call hi "));
+	assert_int_equal(0, execute_cmd("call hi \t"));
 	assert_int_equal(1, cmdi.argc);
 	assert_string_equal("hi", arg);
 
-	assert_int_equal(0, execute_cmd("call hi\\  "));
+	assert_int_equal(0, execute_cmd("call\t \thi\\  "));
 	assert_int_equal(1, cmdi.argc);
 	assert_string_equal("hi\\ ", arg);
 }
@@ -608,6 +649,22 @@ test_bg_and_no_args(void)
 	assert_false(cmdi.bg);
 
 	assert_int_equal(0, execute_cmd("file &"));
+	assert_true(cmdi.bg);
+}
+
+static void
+test_bg_followed_by_whitespace(void)
+{
+	assert_int_equal(0, execute_cmd("file & "));
+	assert_true(cmdi.bg);
+
+	assert_int_equal(0, execute_cmd("file &  "));
+	assert_true(cmdi.bg);
+
+	assert_int_equal(0, execute_cmd("file& "));
+	assert_true(cmdi.bg);
+
+	assert_int_equal(0, execute_cmd("file&  "));
 	assert_true(cmdi.bg);
 }
 
@@ -679,14 +736,14 @@ input_tests(void)
 	test_fixture_start();
 
 	fixture_setup(setup);
-	fixture_teardown(teardown);
 
-	run_test(test_trimming);
+	run_test(test_leading_whitespace_trimming);
 	run_test(test_range_acceptance);
 	run_test(test_single_quote_doubling);
 	run_test(test_range);
 	run_test(test_semicolon_range);
 	run_test(test_range_plus_minus);
+	run_test(test_range_comma_vs_semicolon_bases);
 	run_test(test_range_and_spaces);
 	run_test(test_empty_range_empty_command_called);
 	run_test(test_bang_acceptance);
@@ -699,14 +756,17 @@ input_tests(void)
 	run_test(test_custom_separator);
 	run_test(test_custom_separator_and_arg_format);
 	run_test(test_custom_separator_and_emark);
-	run_test(test_regexp_flag);
+	run_test(test_regexp_flag_strips_slashes);
+	run_test(test_regexp_flag_slashes_and_spaces);
+	run_test(test_regexp_flag_bang_slashes_and_spaces);
 	run_test(test_backgrounding);
 	run_test(test_no_args_after_qmark_1);
 	run_test(test_args_after_qmark_2);
 	run_test(test_no_space_before_e_and_q_marks);
 	run_test(test_only_one_mark);
-	run_test(test_args_trimming);
+	run_test(test_args_whitespace_trimming);
 	run_test(test_bg_and_no_args);
+	run_test(test_bg_followed_by_whitespace);
 	run_test(test_short_forms);
 	run_test(test_qmark_and_bg);
 	run_test(test_extra_long_command_name);

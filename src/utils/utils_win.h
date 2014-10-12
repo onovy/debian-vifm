@@ -50,20 +50,20 @@ int wcswidth(const wchar_t str[], size_t max_len);
  * *returned_exit_code to non-zero and returns exit code of a process. */
 int win_exec_cmd(char cmd[], int *const returned_exit_code);
 
-/* Checks executable existence trying to add executable extensions if needed. */
-int win_executable_exists(const char path[]);
-
 int is_win_executable(const char name[]);
 
 int is_vista_and_above(void);
 
 /* Converts Windows attributes to a string.
- * Returns pointer to a statically allocated buffer */
+ * Returns pointer to a statically allocated buffer. */
 const char * attr_str(DWORD attr);
 
 /* Converts Windows attributes to a long string containing all attribute values.
- * Returns pointer to a statically allocated buffer */
+ * Returns pointer to a statically allocated buffer. */
 const char * attr_str_long(DWORD attr);
+
+/* Returns pointer to a statically allocated buffer. */
+const char * escape_for_cd(const char str[]);
 
 #endif /* VIFM__UTILS__UTILS_WIN_H__ */
 

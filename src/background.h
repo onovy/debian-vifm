@@ -28,6 +28,14 @@
 
 #include <stdio.h>
 
+/* Special value of process id for internal tasks running in background
+ * threads. */
+#define BG_INTERNAL_TASK_PID ((pid_t)-1)
+
+/* Special value of total amount of work in job_t structure to indicate
+ * undefined total number of countable operations. */
+#define BG_UNDEFINED_TOTAL (-1)
+
 typedef struct job_t
 {
 	pid_t pid;
@@ -47,7 +55,11 @@ typedef struct job_t
 	HANDLE hprocess;
 #endif
 	struct job_t *next;
-}job_t;
+}
+job_t;
+
+/* Background task entry point function signature. */
+typedef void (*bg_task_func)(void *arg);
 
 extern struct job_t *jobs;
 
@@ -56,7 +68,12 @@ void init_background(void);
 
 /* Returns zero on success, otherwise non-zero is returned. */
 int start_background_job(const char *cmd, int skip_errors);
-int background_and_wait_for_status(char *cmd);
+
+/* Runs command in background not redirecting its streams.  To determine an
+ * error uses exit status only.  cancelled can be NULL when cancellable is 0.
+ * Returns status on success, otherwise -1 is returned.  Sets correct value of
+ * *cancelled even on error. */
+int background_and_wait_for_status(char cmd[], int cancellable, int *cancelled);
 
 /* Runs command in background and displays its errors to a user.  To determine
  * an error uses both stderr stream and exit status.  Returns zero on success,
@@ -70,11 +87,8 @@ pid_t background_and_capture(char *cmd, FILE **out, FILE **err);
 
 void add_finished_job(pid_t pid, int status);
 void check_background_jobs(void);
-void update_jobs_list(void);
 
-void add_inner_bg_job(job_t *job);
 void inner_bg_next(void);
-void remove_inner_bg_job(void);
 
 #ifndef _WIN32
 #define NO_JOB_ID (-1)
@@ -83,6 +97,23 @@ job_t * add_background_job(pid_t pid, const char *cmd, int fd);
 #define NO_JOB_ID INVALID_HANDLE_VALUE
 job_t * add_background_job(pid_t pid, const char *cmd, HANDLE hprocess);
 #endif
+
+/* Start new background task, executed in a separate thread.  Returns zero on
+ * success, otherwise non-zero is returned. */
+int bg_execute(const char desc[], int total, bg_task_func task_func,
+		void *args);
+
+/* Checks whether there are any internal jobs (not external applications tracked
+ * by vifm) running in background. */
+int bg_has_active_jobs(void);
+
+/* Performs preparations necessary for safe access of the jobs list.  Effect of
+ * calling this function must be reverted by calling bg_jobs_unfreeze().
+ * Returns zero on success, otherwise non-zero is returned. */
+int bg_jobs_freeze(void);
+
+/* Undoes changes made by bg_jobs_freeze(). */
+void bg_jobs_unfreeze(void);
 
 #endif /* VIFM__BACKGROUND_H__ */
 

@@ -26,9 +26,7 @@
 #include <stdlib.h> /* free() malloc() realloc() */
 #include <string.h> /* strcspn() */
 
-#include "file_streams.h"
 #include "fs_limits.h"
-#include "str.h"
 
 static char * read_whole_file(const char filepath[], size_t *read);
 static char * read_nonseekable_stream(FILE *const fp, size_t *read);
@@ -171,7 +169,7 @@ read_file_of_lines(const char filepath[], int *nlines)
 {
 	size_t text_len;
 	char *const text = read_whole_file(filepath, &text_len);
-	char **list = text_to_lines(text, text_len, nlines);
+	char **list = (text == NULL) ? NULL : text_to_lines(text, text_len, nlines);
 	if(list == NULL)
 	{
 		list = malloc(sizeof(*list));
@@ -188,6 +186,8 @@ read_whole_file(const char filepath[], size_t *read)
 {
 	char *content = NULL;
 	FILE *fp;
+
+	*read = 0U;
 
 	if((fp = fopen(filepath, "rb")) != NULL)
 	{
@@ -211,7 +211,7 @@ read_stream_lines(FILE *f, int *nlines)
 {
 	size_t text_len;
 	char *const text = read_nonseekable_stream(f, &text_len);
-	return text_to_lines(text, text_len, nlines);
+	return (text == NULL) ? NULL : text_to_lines(text, text_len, nlines);
 }
 
 /* Reads content of the fp stream that doesn't support seek operation (e.g. it
@@ -250,6 +250,11 @@ read_nonseekable_stream(FILE *const fp, size_t *read)
 		{
 			*read = len;
 		}
+	}
+
+	if(content == NULL)
+	{
+		*read = 0U;
 	}
 
 	return content;

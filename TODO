@@ -64,7 +64,6 @@ Vi(m) specific features that need to be added.
     Kinda macros like in Vim (qa ... q).
     Something like <silent> in Vim (no command blinking in the command-line)
     :let mapleader and <leader> support.
-    'cdpath' ('cd') option.
     Completion of first argument for :map commands.
     Support hex and octal numbers in :set
     Add support for ^= in :set command.
@@ -106,7 +105,6 @@ Possible things to add.
     Support of command line arguments like ~/some.ssh/server/path (for FUSE).
     Think about running vim on :help command in kind of sandbox, so the only
         help files available were those provided by vifm.
-    Maybe provide a way to skip non-existent directory errors on <c-o>/<c-i>.
     Something to control the frequency of directory change changes.
     Invalidate calculated directory size if its modification time changed.
     Add search history for less-like mode.
@@ -144,8 +142,6 @@ Other (questionable) things.
         in a view (at least in current).  To be used in udf commands to
         make a choice between using %b and %f.  Or maybe adding a macro
         for this is a better way to go?
-    Add a builtin function to check whether some external application is
-        available?
     Use custom title for fuse mounts, e.g.:
         - fuse://...
         - /../fuse_file/...
@@ -183,3 +179,7 @@ Code improvements.
         pointers.
     Be consistent on menu titles (some of them have spaces, some don't).
     put_competion() function that doesn't duplicate string parameter.
+    Maybe move cancellation out of ui.c.
+    Separate filelist data from view data (extract into separate structure).
+    Create separate utilities for engine/ part to make them self-consistent.
+    Maybe extract history related code out of filelist.c to separate file..

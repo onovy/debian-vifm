@@ -4,7 +4,7 @@
 
 EAPI=5
 
-EGIT_REPO_URI="git://github.com/ksteen/vifm.git"
+EGIT_REPO_URI="git://github.com/vifm/vifm.git"
 if [[ ${PV} == "9999" ]]; then
 	KEYWORDS=""
 	GIT_ECLASS="git-2"
@@ -18,7 +18,7 @@ inherit 'base' 'vim-doc' ${GIT_ECLASS}
 
 
 DESCRIPTION="Console file manager with vi(m)-like keybindings"
-HOMEPAGE="http://vifm.sourceforge.net/"
+HOMEPAGE="http://vifm.info/"
 
 LICENSE="GPL-2"
 SLOT="0"

@@ -20,8 +20,6 @@
 #ifndef VIFM__CFG__CONFIG_H__
 #define VIFM__CFG__CONFIG_H__
 
-#include <curses.h>
-
 #include <stddef.h> /* size_t */
 
 #include "../utils/fs_limits.h"
@@ -60,7 +58,6 @@ typedef struct config_t
 	char *vi_x_command;
 	int vi_x_cmd_bg;
 	int use_trash;
-	int vim_filter;
 
 	/* Whether support of terminal multiplexers is enabled. */
 	int use_term_multiplexer;
@@ -70,7 +67,6 @@ typedef struct config_t
 
 	int auto_execute;
 	int show_one_window;
-	long max_args;
 	int use_iec_prefixes;
 	int wrap_quick_view;
 	char *time_format;
@@ -110,6 +106,7 @@ typedef struct config_t
 	int inc_search;
 	int selection_is_primary; /* For yy, dd and DD: act on selection not file. */
 	int tab_switches_pane; /* Whether <tab> is switch pane or history forward. */
+	int use_system_calls; /* Prefer performing operations with system calls. */
 	int last_status;
 	int tab_stop;
 	char *ruler_format;
@@ -125,7 +122,22 @@ typedef struct config_t
 	char *find_prg; /* find tool calling pattern. */
 	char *grep_prg; /* grep tool calling pattern. */
 	char *locate_prg; /* locate tool calling pattern. */
-}config_t;
+
+	/* Coma separated list of places to look for relative path to directories. */
+	char *cd_path;
+
+	/* Whether there should be reserved single character width space before and
+	 * after file list column inside a view. */
+	int filelist_col_padding;
+
+	/* Whether side borders are visible (separator in the middle isn't
+	 * affected). */
+	int side_borders_visible;
+
+	/* Per line pattern for borders. */
+	char *border_filler;
+}
+config_t;
 
 extern config_t cfg;
 

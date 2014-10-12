@@ -1,3 +1,292 @@
+0.7.7 to 0.7.8-beta
+
+	Removed ltmain.sh script, which is part of libtool, which is not used
+	anymore.  Thanks to Hendrik Jaeger (a.k.a.  henk).
+
+	Added executable() builtin function that checks whether executable exists
+	at given path or in one of directories listed in $PATH.
+
+	Added one more :if command example to documentation.  Thanks to John
+	Magolske.
+
+	Added more human-friendly (xterm-like) names for 256 colors.  Thanks to
+	Michael Vetter (a.k.a. jubalh).
+
+	Added i and I flags to :filter command to control filter case sensitivity.
+	Thanks to filterfalse.
+
+	Added filter flags to output of :filter? command and formatted output as a
+	table.
+
+	Added cancellation (handling of Ctrl-C) for FUSE mounting (but not
+	unmounting).
+
+	Added multiblock "selection" (in quotes because it's also block
+	deselection and inversion of selection for completeness).  Thanks to
+	ranousse, Michelle Bonk (a.k.a. unixtechie).
+
+	Added av normal mode shortcut that activates selection amending mode.
+
+	Added/updated av/v/V visual mode keys to switch type of current visual mode.
+
+	Added Ctrl-G key to visual selection amending mode, which switches kind of
+	amending (append/remove/invert).
+
+	Added ":highlight clear" to reset to builtin colors.  This balances
+	change in resetting color scheme to default one.  Useful for building color
+	schemes that are partially based on the builtin one.
+
+	Added full command names to the manual page to ease searching them.
+	Thanks to y2kbugger.
+
+	Added 'syscalls' boolean option.  It makes Vifm prefer to perform
+	file-system operations with external applications on rather then with
+	system calls.  {EXPERIMENTAL}, {WORK-IN-PROGRESS}.  The option will be
+	eventually removed.  Mostly *nix-like systems are affected.
+
+	Added implementation for directory and file removal, copying, moving, file,
+	directory and symbolic link creation with system calls.  Advanced stuff
+	like ACL is not supported at least not at the moment.  Available only if
+	'syscalls' option is set.
+
+	Added 'cdpath' option.  Thanks to Bruce Hunsaker (a.k.a. hunsakerbn).
+
+	Added progress for file system operations.  Available only if 'syscalls'
+	option is set.
+
+	Added =pattern special form of user-defined command that sets local filter
+	to the given value (alike "/pattern" and "filter value").  Thanks to
+	filterfalse.
+
+	Added "[a]ppend the end" conflict resolution option (appends the rest of
+	file, e.g. if previous operation was terminated).  Available only if
+	'syscalls' option is set. Thanks to Sergei Shilovsky.
+
+	Added OtherLine highlight group for cursor of inactive pane.  Thanks to
+	Svyatoslav Mishyn, a.k.a. juef.
+
+	Added 'tuioptions' option.  Controls padding of file lists in panels and
+	visibility of side borders.  Thanks to Bruce Hunsaker (a.k.a. hunsakerbn)
+	and Svyatoslav Mishyn (a.k.a. juef).
+
+	Added 'fillchars' option.  Configures fill character for vertical borders.
+	Thanks Svyatoslav Mishyn (a.k.a. juef).
+
+	Added Vim plugin directory to share/vifm/vim on `make install`.  Thanks
+	Svyatoslav Mishyn (a.k.a. juef).
+
+	Added has() builtin function that checks whether particular property is
+	enabled (two properties for now: "unix" and "win").  Thanks to filterfalse.
+
+	Added logical NOT unary operator ("!").
+
+	Added function name completion on command-line.
+
+	Added file renaming filetype plugin for Vim.  It displays list of original
+	file names in a vertical split.  Thanks to Factorial Prime.
+
+	Added file additional mail filetype plugin for Vim.  It allows one to pick
+	attachments via Vifm on <localleader>a shortcut.  Thanks to Pavneet Arora.
+
+	Added merge all option for name conflict resolution.  Same as "merge", but
+	remember the choice for future conflicts of directories.  Thanks to
+	willemw12.
+
+	Highlight environment variables in :source command.
+
+	Do not highlight option names in the right-hand side of assignments of
+	:set command.
+
+	Highlight numbers and all operators (most were missing) in expressions.
+
+	Highlight wrapped :! commands properly.
+
+	Various syntax highlight improvements related to handling of command
+	arguments.
+
+	Make Vim plugin use cmd.exe as default shell on Windows.  Thanks to
+	Jonathan Da Silva.
+
+	Provided additional repository for Vim plugin (see the README for URL).
+
+	Documented how to use 256 colors in :highlight command.  Thanks to Michael
+	Vetter (a.k.a. jubalh).
+
+	Rewrote trash content removal with system calls in background thread to
+	omit unportable invocation of shells.  It's also visible in :jobs menu.
+	Thanks to lyuts and ckester.
+
+	Ignore trailing whitespace after background mark (" &") in command-line
+	mode.
+
+	Made :filter command consider trailing slash for symbolic links that point
+	to directories.  Thanks to filterfalse.
+
+	Do not reset selection on navigating to a mark in current directory.
+	Thanks to filterfalse.
+
+	Display error on encountering unknown values assigned to 'sort' option.
+
+	Allowed use of :filter syntax in user-defined filter commands (e.g.
+	"command conf filter/.*\.cfg$/").
+
+	Do not reset color scheme to default one on :restart if another existing
+	one is stored in vifminfo file.
+
+	Allowed tabulation to be used as arguments separators in command-line
+	commands.  Thanks to y2kbugger.
+
+	Renamed "default color scheme" to "primary color scheme" in documentation
+	to avoid confusion.
+
+	Separate visual selection marks ('<' and '>'), which allows to restore it
+	via "gv" in both panes.  Thanks to filterfalse.
+
+	Reset search results on toggling 'hlsearch' to apply new option value on
+	the next search query (/, ?, n, N).
+
+	Include regular expression in search error message that says that it's
+	wrong.
+
+	Avoid displaying useless search messages (those that user can't see, but
+	that are shown in :messages).
+
+	Implement "(" and ")" keys for "perms" and "type" sorting keys.  Thanks to
+	filterfalse.
+
+	Smart paths completion that allows completion of quoted arguments (both '
+	and " types of quotes) and considers argument type context by performing
+	escaping when needed.
+
+	Documented environment variables used by vifm separately as usually done
+	in documentation for other applications.
+
+	Made +/- operands after semicolon in command-line range adjust base range
+	end position rather than base cursor position as Vim does.  Thanks to
+	filterfalse.
+
+	Documented connection between local filter and 'incsearch'.  Thanks to
+	filterfalse.
+
+	Repeat search with last used search pattern on empty pattern of the search
+	mode.
+
+	Automatically remove non-existent directories from directory history on
+	:history command to speed up future operations (this clean up is very cheap
+	on composing menu).
+
+	Optimized speed of checking existence of a directory (important on
+	displaying directory history).
+
+	Skip nonexistent directories on Ctrl-O/Ctrl-I.
+
+	Extended 'slowfs' option format to allow path prefixes (in particular,
+	it's useful for autofs).  Thanks to Евгений Жаров (a.k.a. ezharov).
+
+	Renamed configure.in to configure.ac.  Thanks to Hendrik Jaeger (a.k.a.
+	henk).
+
+	Made it possible to hide Vifm's documentation from Vim when it's not run by
+	Vifm's :help command.  Thanks to ranousse.
+
+	Separated Vifm's vimdoc from plugin documentation.
+
+	Do not store temporary messages of command-line in history (progress
+	messages).
+
+	Hidden misleading error message from git during successful build.
+
+	Made expand() builtin function expand environment variables.  Thanks to
+	filterfalse.
+
+	Do not show dead entries in :lstrash menu.
+
+	Hide files from previously used trash directories in :lstrash.  Thanks to
+	filterfalse.
+
+	Changed "overwrite all" key from "a" to "O" for consistency.  Thanks to
+	willemw12.
+
+	Fixed odd creation of ~/.vifm/Trash directory even when it's redefined in
+	vifmrc using 'trashdir' option.
+
+	Fixed segmentation fault on running vifm with single argument if restored
+	cursor is in the right pane.  Thanks to Svyatoslav Mishyn, a.k.a. juef.
+
+	Fixed visual glitch for long wide character (CJK) file names with disabled
+	cropping.  Thanks to anonymous from linux.org.ru.
+
+	Fixed trash emptying when csh-like shell is in use.  Thanks to lyuts.
+
+	Fixed "$APPDATA/Vifm" directory existence check for Vim plugin on Windows.
+	Thanks to Jonathan Da Silva.
+
+	Fixed running external commands with long titles inside terminal
+	multiplexers.  Invoked shell in current directory.
+
+	Fixed processing of marks command followed by anything in right-hand side of
+	a mapping.  Thanks to filterfalse.
+
+	Fixed a minor UI glitch with drawing rightmost character position of the
+	stat window after startup.
+
+	Fixed segmentation fault during startup in a small terminal on OS X.
+	Thanks to Daniel Dettlaff (a.k.a. dmilith).
+
+	Fixed right aligned cropping for CJK (e.g. viewcolumns={name}..,{} could
+	print one more character position or fail due to assertion).
+
+	Fixed unexpectedly broken compilation on FreeBSD.  Thanks to Daniel
+	Dettlaff (a.k.a. dmilith).
+
+	Fixed view update after :restart in some cases.  Thanks to filterfalse.
+
+	Fixed UI glitches and most of flickering of the TUI on :restart.
+
+	Fixed check for wrong color number in :highlight.  Thanks to y2kbugger.
+
+	Fixed :highlight command recovery.  Thanks to y2kbugger.
+
+	Fixed :!! command, seems to be not working for a while.
+
+	Fixed segmentation fault on no view history and ":set autochpos" in
+	vifmrc.  Thanks to ranousse.
+
+	Fixed small visual multiline status bar update issue.  Thanks to ranousse.
+
+	Fixed non-updated single character of status line for multiline status
+	bar.
+
+	Fixed processing file names with sharp sign for some shells.  Thanks to
+	Flaviu Tamas (a.k.a. flaviut).
+
+	Fixed message about wrong search pattern regular expression.
+
+	Fixed Ctrl-C detection, false positives occurred on resizing
+	terminal (both come as signals into program).
+
+	Fixed some small issues and UI glitches related to 'lsview' and
+	'viewcolumns' options.
+
+	Fixed operations with directories that have very long names.
+
+	Fixed stripping special sequences from vifm-help.txt on OS X.  Thanks to
+	Stephen L. Holtz (a.k.a. stephenholtz).
+
+	Fixed ga and gA commands for files bigger than 4 GiB on 32-bit operating
+	systems.  Thanks to filterfalse.
+
+	Fixed some buffer overrun bugs discovered on OS X and made tests more
+	BSD-utils friendly.
+
+	Fixed segmentation fault on Alt-. command in command-line mode (since
+	0.7.7).
+
+	Fixed wrong single file selection after applying local filter (also wrong
+	number of selected files on status bar).  Thanks to filterfalse.
+
+	Fixed tracking of files in trash on Windows.  Thanks to filterfalse.
+
 0.7.7-beta to 0.7.7
 
 	Improved documentation on :file[x]type commands and time sorting keys.

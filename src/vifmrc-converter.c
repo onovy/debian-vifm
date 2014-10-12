@@ -22,13 +22,13 @@
 
 #include <curses.h>
 
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <ctype.h>
 #include <errno.h> /* ENOENT */
 #include <locale.h> /* setlocale() */
+#include <stddef.h> /* size_t */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h>
 #include <string.h> /* strcpy() */
@@ -36,6 +36,7 @@
 #include "utils/fs_limits.h"
 #include "utils/macros.h"
 #include "color_scheme.h"
+#include "colors.h"
 
 #define MAX_LEN 1024
 
@@ -171,6 +172,7 @@ char *HI_GROUPS[] =
 	[CMD_LINE_COLOR]     = "CmdLine",
 	[ERROR_MSG_COLOR]    = "ErrorMsg",
 	[BORDER_COLOR]       = "Border",
+	[OTHER_LINE_COLOR]   = "OtherLine",
 };
 ARRAY_GUARD(HI_GROUPS, MAXNUM_COLOR - 2);
 
@@ -204,6 +206,7 @@ static const int default_colors[][3] = {
 	[CMD_LINE_COLOR]     = { COLOR_WHITE,   COLOR_BLACK, 0                       },
 	[ERROR_MSG_COLOR]    = { COLOR_RED,     COLOR_BLACK, 0                       },
 	[BORDER_COLOR]       = { COLOR_BLACK,   COLOR_WHITE, 0                       },
+	[OTHER_LINE_COLOR]   = { -1,            -1,          -1                      },
 };
 ARRAY_GUARD(default_colors, MAXNUM_COLOR - 2);
 
@@ -1162,15 +1165,15 @@ static void
 init_color_scheme(col_scheme_t *cs)
 {
 	int i;
-	strcpy(cs->dir, "/");
-	cs->defaulted = 0;
-
 	for(i = 0; i < ARRAY_LEN(default_colors); i++)
 	{
 		cs->color[i].fg = default_colors[i][0];
 		cs->color[i].bg = default_colors[i][1];
 		cs->color[i].attr = default_colors[i][2];
 	}
+
+	strcpy(cs->dir, "/");
+	cs->state = CSS_NORMAL;
 }
 
 static void

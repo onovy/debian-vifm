@@ -27,10 +27,9 @@
 #include <curses.h>
 #include <stddef.h> /* size_t */
 #include <stdint.h> /* uint64_t */
-#include <stdlib.h> /* off_t mode_t... */
-#include <inttypes.h> /* uintmax_t */
+#include <stdlib.h> /* mode_t */
 #include <sys/types.h>
-#include <unistd.h>
+#include <time.h> /* time_t timespec */
 
 #include "utils/filter.h"
 #include "utils/fs_limits.h"
@@ -54,41 +53,48 @@
 #define FIELDS_WIDTH (INPUT_WIN_WIDTH + POS_WIN_WIDTH)
 
 /* New values should be added at the end of enumeration to do not brake sort
- * settings stored in vifminfo files.  Also LAST_SORT_OPTION and
- * SORT_OPTION_COUNT should be updated accordingly. */
+ * settings stored in vifminfo files.  Also SK_LAST and SK_COUNT should be
+ * updated accordingly. */
+typedef enum
+{
+	SK_BY_EXTENSION = 1,
+	SK_BY_NAME,
+#ifndef _WIN32
+	SK_BY_GROUP_ID,
+	SK_BY_GROUP_NAME,
+	SK_BY_MODE,
+	SK_BY_OWNER_ID,
+	SK_BY_OWNER_NAME,
+#endif
+	SK_BY_SIZE,
+	SK_BY_TIME_ACCESSED,
+	SK_BY_TIME_CHANGED,
+	SK_BY_TIME_MODIFIED,
+	SK_BY_INAME,
+#ifndef _WIN32
+	SK_BY_PERMISSIONS,
+#endif
+	SK_BY_TYPE,
+}
+SortingKey;
+
 enum
 {
-	SORT_BY_EXTENSION = 1,
-	SORT_BY_NAME,
-#ifndef _WIN32
-	SORT_BY_GROUP_ID,
-	SORT_BY_GROUP_NAME,
-	SORT_BY_MODE,
-	SORT_BY_OWNER_ID,
-	SORT_BY_OWNER_NAME,
-#endif
-	SORT_BY_SIZE,
-	SORT_BY_TIME_ACCESSED,
-	SORT_BY_TIME_CHANGED,
-	SORT_BY_TIME_MODIFIED,
-	SORT_BY_INAME,
-#ifndef _WIN32
-	SORT_BY_PERMISSIONS,
-#endif
-	SORT_BY_TYPE,
-
 	/* Default sort key. */
 #ifndef _WIN32
-	DEFAULT_SORT_KEY = SORT_BY_NAME,
+	SK_DEFAULT = SK_BY_NAME,
 #else
-	DEFAULT_SORT_KEY = SORT_BY_INAME,
+	SK_DEFAULT = SK_BY_INAME,
 #endif
+
 	/* Value of the last sort option. */
-	LAST_SORT_OPTION = SORT_BY_TYPE,
+	SK_LAST = SK_BY_TYPE,
+
 	/* Number of sort options. */
-	SORT_OPTION_COUNT = LAST_SORT_OPTION,
+	SK_COUNT = SK_LAST,
+
 	/* Special value to use for unset options. */
-	NO_SORT_OPTION = LAST_SORT_OPTION + 1
+	SK_NONE = SK_LAST + 1
 };
 
 /* Type of file numbering. */
@@ -124,10 +130,15 @@ typedef struct
 	time_t ctime;
 	char date[16];
 	FileType type;
+
 	int selected;
+	int was_selected; /* Temporary field to store previous selection state. */
+
 	int search_match;
-	int list_num; /* to be used by sorting comparer to perform stable sort */
-}dir_entry_t;
+
+	int list_num; /* Used by sorting comparer to perform stable sort. */
+}
+dir_entry_t;
 
 typedef struct
 {
@@ -205,7 +216,7 @@ typedef struct
 	}
 	local_filter;
 
-	char sort[SORT_OPTION_COUNT];
+	char sort[SK_COUNT];
 
 	int history_num;
 	int history_pos;
@@ -225,6 +236,10 @@ typedef struct
 	NumberingType num_type; /* Whether and how line numbers are displayed. */
 	int num_width; /* Min number of characters reserved for number field. */
 	int real_num_width; /* Real character count reserved for number field. */
+
+	int postponed_redraw; /* Number of scheduled redraw requests. */
+	int postponed_reload; /* Number of scheduled reload requests, negative if
+	                         there was at least one full reload request. */
 }
 FileView;
 
@@ -264,22 +279,23 @@ void status_bar_error(const char *message);
 void status_bar_errorf(const char *message, ...);
 int is_status_bar_multiline(void);
 void clean_status_bar(void);
+/* Swaps curr_view and other_view pointers (activa and inactive panes).  Also
+ * updates things (including UI) that are bound to views. */
 void change_window(void);
+/* Swaps curr_view and other_view pointers. */
+void swap_view_roles(void);
 void update_all_windows(void);
 void update_input_bar(const wchar_t *str);
 void clear_num_window(void);
 void show_progress(const char *msg, int period);
 void redraw_lists(void);
-/* Returns new value for curr_stats.save_msg. */
-int load_color_scheme(const char name[]);
+/* Forced immediate update of attributes for most of windows. */
+void update_attributes(void);
 /* Prints str in current window position. */
 void wprint(WINDOW *win, const char str[]);
 /* Prints str in current window position with specified line attributes, which
  * set during print operation only. */
 void wprinta(WINDOW *win, const char str[], int line_attrs);
-/* Sets inner flag or signals about needed view update in some other way.
- * It doesn't perform any update, just request one to happen in the future. */
-void request_view_update(FileView *view);
 /* Performs resizing of some of TUI elements for menu like modes. */
 void resize_for_menu_like(void);
 /* Performs real pane redraw in the TUI and maybe some related operations. */
@@ -319,15 +335,63 @@ void ui_views_update_titles(void);
 void ui_view_title_update(FileView *view);
 /* Looks for the given key in sort option.  Returns non-zero when found,
  * otherwise zero is returned. */
-int ui_view_sort_list_contains(const char sort[SORT_OPTION_COUNT], char key);
+int ui_view_sort_list_contains(const char sort[SK_COUNT], char key);
 /* Ensures that list of sorting keys contains either "name" or "iname". */
-void ui_view_sort_list_ensure_well_formed(char sort[SORT_OPTION_COUNT]);
+void ui_view_sort_list_ensure_well_formed(char sort[SK_COUNT]);
 /* Checks whether file numbers should be displayed for the view.  Returns
  * non-zero if so, otherwise zero is returned. */
 int ui_view_displays_numbers(const FileView *const view);
 /* Checks whether view is visible on the screen.  Returns non-zero if so,
  * otherwise zero is returned. */
 int ui_view_is_visible(const FileView *const view);
+/* Cleans directory history of the view. */
+void ui_view_clear_history(FileView *const view);
+/* Checks whether view displays column view.  Returns non-zero if so, otherwise
+ * zero is returned. */
+int ui_view_displays_columns(const FileView *const view);
+/* Gets real type of file view entry.  Returns type of entry, resolving symbolic
+ * link if needed. */
+FileType ui_view_entry_target_type(const FileView *const view, size_t pos);
+/* Gets width of part of the view that is available for file list.  Returns the
+ * width. */
+int ui_view_available_width(const FileView *const view);
+
+/* Immediately (UI is updated) displays message on the status bar without
+ * storing it in message history. */
+void ui_sb_quick_msgf(const char format[], ...);
+
+/* View update scheduling. */
+
+/* Schedules redraw of the view for the future.  Doesn't perform any actual
+ * update. */
+void ui_view_schedule_redraw(FileView *view);
+
+/* Schedules reload of the view for the future.  Doesn't perform any actual
+ * work. */
+void ui_view_schedule_reload(FileView *view);
+
+/* Schedules full reload of the view for the future.  Doesn't perform any actual
+ * work. */
+void ui_view_schedule_full_reload(FileView *view);
+
+/* Checks whether redraw of the view is scheduled.  Return non-zero if so,
+ * otherwise zero is returned. */
+int ui_view_is_redraw_scheduled(const FileView *view);
+
+/* Checks whether reload of the view is scheduled.  Return non-zero if so,
+ * otherwise zero is returned. */
+int ui_view_is_reload_scheduled(const FileView *view);
+
+/* Checks whether full reload of the view is scheduled.  Return non-zero if so,
+ * otherwise zero is returned. */
+int ui_view_is_full_reload_scheduled(const FileView *view);
+
+/* Clears previously scheduled redraw request of the view, if any. */
+void ui_view_redrawn(FileView *view);
+
+/* Clears previously scheduled reload request of the view, if any.  Also clears
+ * redraw request. */
+void ui_view_reloaded(FileView *view);
 
 /* Operation cancellation. */
 

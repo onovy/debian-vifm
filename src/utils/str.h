@@ -20,8 +20,7 @@
 #ifndef VIFM__UTILS__STR_H__
 #define VIFM__UTILS__STR_H__
 
-#include <stddef.h> /* size_t */
-#include <wchar.h> /* wchar_t */
+#include <stddef.h> /* size_t wchar_t */
 
 #if defined(_WIN64)
 #define WPRINTF_MBSTR L"s"
@@ -173,19 +172,44 @@ int has_uppercase_letters(const char str[]);
 
 /* Copies characters from the string pointed to by str to piece of memory of
  * size dst_len pointed to by dst.  Ensures that copied string ends with null
- * character.  Does nothing for zero dst_len. */
-void copy_str(char dst[], size_t dst_len, const char src[]);
+ * character.  Does nothing for zero dst_len.  Returns number of characters
+ * written, including terminating null character. */
+size_t copy_str(char dst[], size_t dst_len, const char src[]);
 
 /* Copies characters from the string pointed to by src and terminated by the
  * terminator to piece of memory of size dst_len pointed to by dst.  Ensures
  * that copied string ends with null character.  Does nothing for zero
- * dst_len. */
-void copy_substr(char dst[], size_t dst_len, const char src[], char terminator);
+ * dst_len. Returns number of characters written, including terminating null
+ * character. */
+size_t copy_substr(char dst[], size_t dst_len, const char src[],
+		char terminator);
 
 /* Converts string into integer handling underflow and overflow.  Returns
  * converted number, which is INT_MIN/INT_MAX in case underflow/overflow is
  * happened. */
 int str_to_int(const char str[]);
+
+/* Replaces all occurrences of the from non-nul character in the str to the to
+ * character. */
+void replace_char(char str[], char from, char to);
+
+/*
+ * Splits string on a separator multiple times returning next part.  *state must
+ * be NULL for the first call.  Usage example:
+ *   char *part = input, *state = NULL;
+ *   while((part = split_and_get(part, ':', &state)) != NULL)
+ *   {
+ *     process <part>;
+ *   }
+ * Each next step undoes string change made on the previous one, so it could
+ * also be (parts of <input> will be added from left to right):
+ *   char *prefix = input, *state = NULL;
+ *   while((prefix = split_and_get(prefix, ':', &state)) != NULL)
+ *   {
+ *     process <prefix>;
+ *   }
+ */
+char * split_and_get(char str[], char sep, char **state);
 
 #if defined(_WIN32) && !defined(strtok_r)
 #define strtok_r(str, delim, saveptr) (*(saveptr) = strtok((str), (delim)))

@@ -22,20 +22,18 @@
 #include <ctype.h> /* tolower() isspace() */
 #include <limits.h> /* INT_MAX INT_MIN LONG_MAX LONG_MIN */
 #include <stdarg.h> /* va_list va_start() va_copy() va_end() */
-#include <stddef.h> /* NULL size_t */
+#include <stddef.h> /* NULL size_t wchar_t */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* free() malloc() mbstowcs() realloc() strtol()
                        wcstombs() */
 #include <string.h> /* strncmp() strlen() strcmp() strchr() strrchr()
                        strncpy() */
-#include <wchar.h> /* vswprintf() wchar_t */
+#include <wchar.h> /* vswprintf() */
 #include <wctype.h> /* towlower() iswupper() */
 
 #include "macros.h"
 #include "utf8.h"
 #include "utils.h"
-
-#include "macros.h"
 
 void
 chomp(char str[])
@@ -446,29 +444,33 @@ has_uppercase_letters(const char str[])
 	return has_uppercase;
 }
 
-void
+size_t
 copy_str(char dst[], size_t dst_len, const char src[])
 {
-	if(dst != src)
-	{
-		copy_substr(dst, dst_len, src, '\0');
-	}
+	/* XXX: shouldn't we return "strlen(src)" instead "0U"? */
+	return (dst == src) ? 0U : copy_substr(dst, dst_len, src, '\0');
 }
 
-void
+size_t
 copy_substr(char dst[], size_t dst_len, const char src[], char terminator)
 {
-	if(dst_len != 0U)
+	char *past_end;
+
+	if(dst_len == 0U)
 	{
-		char *past_end;
-		if((past_end = memccpy(dst, src, terminator, dst_len)) == NULL)
-		{
-			dst[dst_len - 1] = '\0';
-		}
-		else
-		{
-			past_end[-1] = '\0';
-		}
+		return 0U;
+	}
+
+	past_end = memccpy(dst, src, terminator, dst_len);
+	if(past_end == NULL)
+	{
+		dst[dst_len - 1] = '\0';
+		return dst_len;
+	}
+	else
+	{
+		past_end[-1] = '\0';
+		return past_end - dst;
 	}
 }
 
@@ -480,6 +482,52 @@ str_to_int(const char str[])
 	return (number == LONG_MAX)
 	     ? INT_MAX
 	     : ((number == LONG_MIN) ? INT_MIN : number);
+}
+
+void
+replace_char(char str[], char from, char to)
+{
+	while(*str != '\0')
+	{
+		if(*str == from)
+		{
+			*str = to;
+		}
+		++str;
+	}
+}
+
+char *
+split_and_get(char str[], char sep, char **state)
+{
+	char *end;
+
+	if(*state != NULL)
+	{
+		if(**state == '\0')
+		{
+			return NULL;
+		}
+
+		str += strlen(str);
+		*str++ = sep;
+	}
+
+	end = strchr(str, sep);
+	while(end != NULL)
+	{
+		if(end != str)
+		{
+			*end = '\0';
+			break;
+		}
+
+		str = end + 1;
+		end = strchr(str, sep);
+	}
+
+	*state = (end == NULL) ? (str + strlen(str)) : (end + 1);
+	return (*str == '\0') ? NULL : str;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

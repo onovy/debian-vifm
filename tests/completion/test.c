@@ -6,16 +6,12 @@
 
 void completion_tests(void);
 void groups_unite_tests(void);
-
-static void
-setup(void)
-{
-}
+void add_hook_tests(void);
 
 static void
 teardown(void)
 {
-	reset_completion();
+	vle_compl_reset();
 }
 
 static void
@@ -23,12 +19,12 @@ all_tests(void)
 {
 	completion_tests();
 	groups_unite_tests();
+	add_hook_tests();
 }
 
 int
 main(int argc, char **argv)
 {
-	suite_setup(setup);
 	suite_teardown(teardown);
 
 	return run_tests(all_tests) == 0;

@@ -19,30 +19,52 @@
 #ifndef VIFM__ENGINE__COMPLETION_H__
 #define VIFM__ENGINE__COMPLETION_H__
 
-/* Returns zero on success. */
-int add_completion(const char *completion);
+/* Match addition hook function signature.  Must return newly allocated
+ * string. */
+typedef char * (*vle_compl_add_path_hook_f)(const char match[]);
 
-void completion_group_end(void);
+/* Adds raw match as completion match.  Returns zero on success, otherwise
+ * non-zero is returned. */
+int vle_compl_add_match(const char match[]);
+
+/* Adds path as completion match.  Path is preprocessed with path add hook.
+ * Returns zero on success, otherwise non-zero is returned. */
+int vle_compl_add_path_match(const char path[]);
+
+/* Adds original input to the completion, should be called after all matches are
+ * registered with vle_compl_add_match().  Returns zero on success, otherwise
+ * non-zero is returned. */
+int vle_compl_add_last_match(const char origin[]);
+
+/* Adds original path path input to the completion, should be called after all
+ * matches are registered with vle_compl_add_path_match().  Returns zero on
+ * success, otherwise non-zero is returned. */
+int vle_compl_add_last_path_match(const char origin[]);
+
+void vle_compl_finish_group(void);
 
 /* Squashes all existing completion groups into one.  Performs resorting and
  * de-duplication of resulting single group. */
-void completion_groups_unite(void);
+void vle_compl_unite_groups(void);
 
-void reset_completion(void);
+void vle_compl_reset(void);
 
 /* Returns copy of the string or NULL. */
-char * next_completion(void);
+char * vle_compl_next(void);
 
-int get_completion_count(void);
+int vle_compl_get_count(void);
 
-void set_completion_order(int reversed);
+void vle_compl_set_order(int reversed);
 
-const char ** get_completion_list(void);
+const char ** vle_compl_get_list(void);
 
-int get_completion_pos(void);
+int vle_compl_get_pos(void);
 
 /* Go to the last item (probably to user input). */
-void rewind_completion(void);
+void vle_compl_rewind(void);
+
+/* Sets match addition hook.  NULL value resets hook. */
+void vle_compl_set_add_path_hook(vle_compl_add_path_hook_f hook);
 
 #endif /* VIFM__ENGINE__COMPLETION_H__ */
 

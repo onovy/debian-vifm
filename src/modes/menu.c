@@ -24,21 +24,19 @@
 #include <curses.h>
 
 #include <assert.h> /* assert() */
-#include <ctype.h>
-#include <stddef.h> /* NULL */
+#include <stddef.h> /* NULL wchar_t */
+#include <stdlib.h> /* free() malloc() */
 #include <string.h>
-#include <wchar.h> /* wchar_t */
 
 #include "../cfg/config.h"
 #include "../engine/cmds.h"
 #include "../engine/keys.h"
+#include "../engine/mode.h"
 #include "../menus/menus.h"
 #include "../utils/macros.h"
 #include "../utils/utils.h"
-#include "../bookmarks.h"
 #include "../commands.h"
 #include "../filelist.h"
-#include "../fileops.h"
 #include "../status.h"
 #include "../ui.h"
 #include "cmdline.h"
@@ -47,7 +45,7 @@
 static const int SCROLL_GAP = 2;
 
 static int complete_args(int id, const char *args, int argc, char **argv,
-		int arg_pos);
+		int arg_pos, void *arg);
 static int swap_range(void);
 static int resolve_mark(char mark);
 static char * menu_expand_macros(const char *str, int for_shell, int *usr1,
@@ -104,7 +102,6 @@ static int search_menu(menu_info *m, int start_pos);
 static int search_menu_forwards(menu_info *m, int start_pos);
 static int search_menu_backwards(menu_info *m, int start_pos);
 
-static int *mode;
 static FileView *view;
 static menu_info *menu;
 static int last_search_backward;
@@ -188,7 +185,8 @@ static cmds_conf_t cmds_conf = {
 };
 
 static int
-complete_args(int id, const char *args, int argc, char **argv, int arg_pos)
+complete_args(int id, const char *args, int argc, char **argv, int arg_pos,
+		void *arg)
 {
 	return 0;
 }
@@ -234,16 +232,14 @@ skip_at_beginning(int id, const char *args)
 }
 
 void
-init_menu_mode(int *key_mode)
+init_menu_mode(void)
 {
 	int ret_code;
 
-	assert(key_mode != NULL);
-
-	mode = key_mode;
-
 	ret_code = add_cmds(builtin_cmds, ARRAY_LEN(builtin_cmds), MENU_MODE);
 	assert(ret_code == 0);
+
+	(void)ret_code;
 
 	set_def_handler(MENU_MODE, key_handler);
 
@@ -277,7 +273,7 @@ enter_menu_mode(menu_info *m, FileView *active_view)
 
 	view = active_view;
 	menu = m;
-	*mode = MENU_MODE;
+	vle_mode_set(MENU_MODE, VMT_PRIMARY);
 	curr_stats.need_update = UT_FULL;
 	was_redraw = 0;
 
@@ -326,11 +322,16 @@ leave_menu_mode(void)
 	clean_selected_files(view);
 	redraw_view(view);
 
-	*mode = NORMAL_MODE;
+	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
+
 	if(was_redraw)
+	{
 		update_screen(UT_FULL);
+	}
 	else
+	{
 		update_all_windows();
+	}
 }
 
 static void
@@ -436,16 +437,16 @@ cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 {
 	static menu_info *saved_menu;
 
-	*mode = NORMAL_MODE;
+	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 	saved_menu = menu;
 	if(menu->execute_handler != NULL && menu->execute_handler(curr_view, menu))
 	{
-		*mode = MENU_MODE;
+		vle_mode_set(MENU_MODE, VMT_PRIMARY);
 		menu_redraw();
 		return;
 	}
 
-	if(*mode != MENU_MODE)
+	if(!vle_mode_is(MENU_MODE))
 	{
 		reset_popup_menu(saved_menu);
 	}
@@ -850,7 +851,7 @@ load_menu_pos(void)
 }
 
 int
-search_menu_list(const char *pattern, menu_info *m)
+search_menu_list(const char pattern[], menu_info *m)
 {
 	int save = 0;
 	int i;
@@ -897,6 +898,7 @@ search_menu(menu_info *m, int start_pos)
 		m->matches = malloc(sizeof(int)*m->len);
 
 	memset(m->matches, 0, sizeof(int)*m->len);
+	m->matching_entries = 0;
 
 	if(m->regexp[0] == '\0')
 		return 0;
@@ -905,7 +907,6 @@ search_menu(menu_info *m, int start_pos)
 	if((err = regcomp(&re, m->regexp, cflags)) == 0)
 	{
 		int x;
-		m->matching_entries = 0;
 		for(x = 0; x < m->len; x++)
 		{
 			if(regexec(&re, m->items[x], 0, NULL, 0) != 0)
@@ -978,15 +979,14 @@ search_menu_forwards(menu_info *m, int start_pos)
 		{
 			menu_print_search_msg(m);
 		}
-		return 1;
 	}
-	return 0;
+	return 1;
 }
 
 static int
 search_menu_backwards(menu_info *m, int start_pos)
 {
-	/* FIXME: code duplicatio with search_menu_forwards. */
+	/* FIXME: code duplication with search_menu_forwards. */
 
 	int match_up = -1;
 	int match_down = -1;
@@ -1046,7 +1046,7 @@ execute_cmdline_command(const char cmd[])
 {
 	if(exec_command(cmd, curr_view, GET_COMMAND) < 0)
 	{
-		status_bar_error("An error occuried while trying to execute command");
+		status_bar_error("An error occurred while trying to execute command");
 	}
 	init_cmds(0, &cmds_conf);
 }
@@ -1054,6 +1054,29 @@ execute_cmdline_command(const char cmd[])
 void
 menu_print_search_msg(const menu_info *m)
 {
+	int cflags;
+	regex_t re;
+	int err;
+
+	/* Can be NULL after regex compilation failure. */
+	if(m->regexp == NULL)
+	{
+		return;
+	}
+
+	cflags = get_regexp_cflags(m->regexp);
+	err = regcomp(&re, m->regexp, cflags);
+
+	if(err != 0)
+	{
+		status_bar_errorf("Regexp (%s) error: %s", m->regexp,
+				get_regexp_error(err, &re));
+		regfree(&re);
+		return;
+	}
+
+	regfree(&re);
+
 	if(m->matching_entries > 0)
 	{
 		status_bar_messagef("%d %s", m->matching_entries,

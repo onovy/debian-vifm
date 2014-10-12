@@ -22,24 +22,29 @@
 #ifdef _WIN32
 #include <ctype.h>
 #endif
-#include <stddef.h> /* size_t */
+#include <stddef.h> /* NULL size_t */
+#include <stdio.h>  /* snprintf() */
 #include <stdlib.h> /* malloc() free() */
-#include <string.h> /* strcat() strcmp() strcasecmp() strncmp() strncasecmp()
-                       strncat() strchr() strcpy() strlen() strrchr() */
+#include <string.h> /* strcat() strcmp() strcasecmp() strdup() strncmp()
+                       strncasecmp() strncat() strchr() strcpy() strlen()
+                       strrchr() */
 
 #ifndef _WIN32
 #include <pwd.h> /* getpwnam() */
 #endif
 
 #include "../cfg/config.h"
+#include "../path_env.h"
 #ifdef _WIN32
 #include "env.h"
 #endif
 #include "fs.h"
 #include "fs_limits.h"
 #include "str.h"
+#include "utils.h"
 
 static int skip_dotdir_if_any(const char *path[], int fully);
+static char * try_replace_tilde(const char path[]);
 
 /* like chomp() but removes trailing slash */
 void
@@ -345,6 +350,8 @@ escape_filename(const char *string, int quote_percent)
 				if(quote_percent)
 					*dup++ = '%';
 				break;
+
+			/* Escape the following characters anywhere in the line. */
 			case '\'':
 			case '\\':
 			case '\r':
@@ -368,10 +375,12 @@ escape_filename(const char *string, int quote_percent)
 			case '*':
 			case '(':
 			case ')':
+			case '#':
 				*dup++ = '\\';
 				break;
+
+			/* Escape the following characters only at the beginning of the line. */
 			case '~':
-			case '#':
 				if(dup == ret)
 					*dup++ = '\\';
 				break;
@@ -406,22 +415,48 @@ replace_home_part(const char directory[])
 }
 
 char *
-expand_tilde(char path[])
+expand_tilde(const char path[])
+{
+	char *const expanded_path = try_replace_tilde(path);
+	if(expanded_path == path)
+	{
+		return strdup(path);
+	}
+	return expanded_path;
+}
+
+char *
+replace_tilde(char path[])
+{
+	char *const expanded_path = try_replace_tilde(path);
+	if(expanded_path != path)
+	{
+		free(path);
+	}
+	return expanded_path;
+}
+
+/* Tries to expands tilde in the front of the path.  Returns the path or newly
+ * allocated string without tilde. */
+static char *
+try_replace_tilde(const char path[])
 {
 #ifndef _WIN32
 	char name[NAME_MAX];
-	char *p, *result;
+	const char *p;
+	char *result;
 	struct passwd *pw;
 #endif
 
 	if(path[0] != '~')
-		return path;
+	{
+		return (char *)path;
+	}
 
 	if(path[1] == '\0' || path[1] == '/')
 	{
 		char *const result = format_str("%s%s", cfg.home_dir,
 				(path[1] == '/') ? (path + 2) : "");
-		free(path);
 		return result;
 	}
 
@@ -438,15 +473,16 @@ expand_tilde(char path[])
 	}
 
 	if((pw = getpwnam(name)) == NULL)
-		return path;
+	{
+		return (char *)path;
+	}
 
 	chosp(pw->pw_dir);
 	result = format_str("%s/%s", pw->pw_dir, p);
-	free(path);
 
 	return result;
 #else
-	return path;
+	return (char *)path;
 #endif
 }
 
@@ -599,34 +635,51 @@ is_builtin_dir(const char name[])
 	    && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'));
 }
 
+int
+find_cmd_in_path(const char cmd[], size_t path_len, char path[])
+{
+	size_t i;
+	size_t paths_count;
+	char **paths;
+
+	paths = get_paths(&paths_count);
+	for(i = 0; i < paths_count; i++)
+	{
+		char tmp_path[PATH_MAX];
+		snprintf(tmp_path, sizeof(tmp_path), "%s/%s", paths[i], cmd);
+
+		/* Need to check for executable, not just a file, as this additionally
+		 * checks for path with different executable extensions on Windows. */
+		if(executable_exists(tmp_path))
+		{
+			if(path != NULL)
+			{
+				copy_str(path, path_len, tmp_path);
+			}
+			return 0;
+		}
+	}
+	return 1;
+}
+
 #ifdef _WIN32
 
 int
-is_unc_path(const char *path)
+is_unc_path(const char path[])
 {
 	return (path[0] == '/' && path[1] == '/' && path[2] != '/');
 }
 
 void
-to_forward_slash(char *path)
+to_forward_slash(char path[])
 {
-	int i;
-	for(i = 0; path[i] != '\0'; i++)
-	{
-		if(path[i] == '\\')
-			path[i] = '/';
-	}
+	replace_char(path, '\\', '/');
 }
 
 void
-to_back_slash(char *path)
+to_back_slash(char path[])
 {
-	int i;
-	for(i = 0; path[i] != '\0'; i++)
-	{
-		if(path[i] == '/')
-			path[i] = '\\';
-	}
+	replace_char(path, '/', '\\');
 }
 
 #endif

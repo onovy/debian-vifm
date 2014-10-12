@@ -19,15 +19,14 @@
 
 #include "colorscheme_menu.h"
 
-#include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* free() qsort() */
 #include <string.h> /* strdup() strcmp() */
 
 #include "../cfg/config.h"
-#include "../modes/menu.h"
 #include "../utils/fs_limits.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
+#include "../color_scheme.h"
 #include "../ui.h"
 #include "menus.h"
 
@@ -71,7 +70,7 @@ sorter(const void *first, const void *second)
 static int
 execute_colorscheme_cb(FileView *view, menu_info *m)
 {
-	load_color_scheme(m->items[m->pos]);
+	load_primary_color_scheme(m->items[m->pos]);
 	return 0;
 }
 

@@ -19,8 +19,9 @@
 #include "completion.h"
 
 #include <assert.h> /* assert() */
+#include <stddef.h> /* NULL size_t */
 #include <stdlib.h> /* qsort() */
-#include <string.h>
+#include <string.h> /* strdup() */
 
 #include "../utils/macros.h"
 #include "../utils/str.h"
@@ -31,7 +32,8 @@ static enum
 	NOT_STARTED,
 	FILLING_LIST,
 	COMPLETING
-}state = NOT_STARTED;
+}
+state = NOT_STARTED;
 
 static char **lines;
 static int count;
@@ -39,12 +41,16 @@ static int curr = -1;
 static int group_begin;
 static int order;
 
+/* Function called . */
+static vle_compl_add_path_hook_f add_path_hook = &strdup;
+
+static int add_match(char match[]);
 static void group_unique_sort(size_t start_index, size_t len);
 static int sorter(const void *first, const void *second);
 static size_t remove_duplicates(char **arr, size_t count);
 
 void
-reset_completion(void)
+vle_compl_reset(void)
 {
 	free_string_array(lines, count);
 	lines = NULL;
@@ -57,33 +63,67 @@ reset_completion(void)
 }
 
 int
-add_completion(const char *completion)
+vle_compl_add_match(const char match[])
+{
+	return add_match(strdup(match));
+}
+
+int
+vle_compl_add_path_match(const char path[])
+{
+	char *const match = add_path_hook(path);
+	return add_match(match);
+}
+
+/* Adds new match to the list of matches.  Becomes an owner of memory pointed to
+ * by the match.  Errors if match is NULL.  Returns zero on success, otherwise
+ * non-zero is returned. */
+static int
+add_match(char match[])
 {
 	char **p;
 	assert(state != COMPLETING);
 
-	/* add new line */
-	if((p = realloc(lines, sizeof(*lines)*(count + 1))) == NULL)
+	if(match == NULL)
+	{
 		return -1;
+	}
+
+	if((p = realloc(lines, sizeof(*lines)*(count + 1))) == NULL)
+	{
+		free(match);
+		return -1;
+	}
 	lines = p;
 
-	if((lines[count] = strdup(completion)) == NULL)
-		return -1;
-
+	lines[count] = match;
 	count++;
+
 	state = FILLING_LIST;
 	return 0;
 }
 
+int
+vle_compl_add_last_match(const char origin[])
+{
+	return vle_compl_add_match(origin);
+}
+
+int
+vle_compl_add_last_path_match(const char origin[])
+{
+	return vle_compl_add_path_match(origin);
+}
+
 void
-completion_group_end(void)
+vle_compl_finish_group(void)
 {
 	const size_t n_group_items = count - group_begin;
 	group_unique_sort(group_begin, n_group_items);
 }
 
 void
-completion_groups_unite(void)
+vle_compl_unite_groups(void)
 {
 	group_unique_sort(0, count);
 }
@@ -125,7 +165,7 @@ sorter(const void *first, const void *second)
 }
 
 char *
-next_completion(void)
+vle_compl_next(void)
 {
 	assert(state != NOT_STARTED);
 	state = COMPLETING;
@@ -180,31 +220,31 @@ remove_duplicates(char **arr, size_t count)
 }
 
 int
-get_completion_count(void)
+vle_compl_get_count(void)
 {
 	return count;
 }
 
 void
-set_completion_order(int reversed)
+vle_compl_set_order(int reversed)
 {
 	order = reversed;
 }
 
 const char **
-get_completion_list(void)
+vle_compl_get_list(void)
 {
 	return (const char **)lines;
 }
 
 int
-get_completion_pos(void)
+vle_compl_get_pos(void)
 {
 	return curr;
 }
 
 void
-rewind_completion(void)
+vle_compl_rewind(void)
 {
 	assert(state == COMPLETING);
 
@@ -212,6 +252,12 @@ rewind_completion(void)
 		curr = 1;
 	else if(count > 2)
 		curr = count - 2;
+}
+
+void
+vle_compl_set_add_path_hook(vle_compl_add_path_hook_f hook)
+{
+	add_path_hook = (hook == NULL) ? &strdup : hook;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */

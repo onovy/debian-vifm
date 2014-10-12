@@ -20,10 +20,6 @@
 #ifndef VIFM__STATUS_H__
 #define VIFM__STATUS_H__
 
-#include <sys/stat.h>
-
-#include <inttypes.h>
-
 #include "utils/tree.h"
 #include "utils/fs_limits.h"
 
@@ -49,11 +45,11 @@ SourcingState;
 /* Type of execution environment. */
 typedef enum
 {
-	ENVTYPE_LINUX_NATIVE, /* Running in linux native console. */
-	ENVTYPE_EMULATOR, /* Running in terminal emulator with no DISPLAY defined. */
-	ENVTYPE_EMULATOR_WITH_X, /* Running in emulator within accessible X. */
+	EET_LINUX_NATIVE,    /* Linux native console. */
+	EET_EMULATOR,        /* Terminal emulator with no DISPLAY defined. */
+	EET_EMULATOR_WITH_X, /* Terminal emulator within accessible X. */
 }
-EnvType;
+ExecEnvType;
 
 /* List of terminal multiplexers. */
 typedef enum
@@ -100,7 +96,7 @@ typedef struct
 	int too_small_term;
 
 	tree_t dirsize_cache; /* ga command results */
-	
+
 	int last_search_backward;
 
 	int ch_pos; /* for :cd, :pushd and 'letter */
@@ -128,7 +124,7 @@ typedef struct
 	/* Set while executing :restart command to prevent excess screen updates. */
 	int restart_in_progress;
 
-	EnvType env_type; /* Specifies execution environment type. */
+	ExecEnvType exec_env_type; /* Specifies execution environment type. */
 
 	/* Shows which of supported terminal multiplexers is currently in use, if
 	 * any. */
@@ -142,6 +138,8 @@ typedef struct
 	int initial_columns; /* Initial terminal width in characters. */
 
 	ShellType shell_type; /* Specifies type of shell. */
+
+	int file_picker_mode; /* Whether vifm was started in file picking mode. */
 
 #ifdef HAVE_LIBGTK
 	int gtk_available; /* for mimetype detection */
@@ -160,7 +158,7 @@ int init_status(struct config_t *config);
 
 /* Resets some part of runtime status information to its initial values.
  * Returns non-zero on error. */
-int reset_status(void);
+int reset_status(const struct config_t *config);
 
 /* Sets internal flag to schedule postponed redraw operation. */
 void schedule_redraw(void);

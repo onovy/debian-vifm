@@ -1,3 +1,4 @@
+#include <stddef.h> /* NULL */
 #include <string.h>
 
 #include "seatest.h"
@@ -13,8 +14,8 @@ vim_like_completion(void)
 {
 	init_commands();
 
-	reset_completion();
-	assert_int_equal(0, complete_cmd("e"));
+	vle_compl_reset();
+	assert_int_equal(0, complete_cmd("e", NULL));
 	ASSERT_NEXT_MATCH("echo");
 	ASSERT_NEXT_MATCH("edit");
 	ASSERT_NEXT_MATCH("else");
@@ -24,13 +25,13 @@ vim_like_completion(void)
 	ASSERT_NEXT_MATCH("exit");
 	ASSERT_NEXT_MATCH("e");
 
-	reset_completion();
-	assert_int_equal(0, complete_cmd("vm"));
+	vle_compl_reset();
+	assert_int_equal(0, complete_cmd("vm", NULL));
 	ASSERT_NEXT_MATCH("vmap");
 	ASSERT_NEXT_MATCH("vmap");
 
-	reset_completion();
-	assert_int_equal(0, complete_cmd("j"));
+	vle_compl_reset();
+	assert_int_equal(0, complete_cmd("j", NULL));
 	ASSERT_NEXT_MATCH("jobs");
 	ASSERT_NEXT_MATCH("jobs");
 

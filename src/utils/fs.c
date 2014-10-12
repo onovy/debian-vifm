@@ -27,63 +27,76 @@
 #include <winioctl.h>
 #endif
 
-#include <sys/stat.h> /* statbuf stat() lstat() mkdir() */
+#include <sys/stat.h> /* S_* statbuf stat() lstat() mkdir() */
 #include <sys/types.h> /* size_t mode_t */
 #include <dirent.h> /* DIR dirent opendir() readdir() closedir() */
-#include <unistd.h> /* access() */
+#include <unistd.h> /* F_OK access() getcwd() readlink() */
 
-#include <assert.h> /* assert() */
-#include <ctype.h> /* touuper() */
 #include <errno.h> /* errno */
 #include <stddef.h> /* NULL */
 #include <stdio.h> /* snprintf() remove() rename() */
-#include <stdlib.h> /* realpath() */
-#include <string.h> /* strdup() strncmp() strncpy() */
+#include <stdlib.h> /* free() realpath() */
+#include <string.h> /* strcpy() strdup() strlen() strncmp() strncpy() */
 
 #include "fs_limits.h"
 #include "log.h"
 #include "path.h"
-#ifdef _WIN32
 #include "str.h"
-#endif
 #include "string_array.h"
 #include "utils.h"
 
+static int is_dir_fast(const char path[]);
 static int path_exists_internal(const char *path, const char *filename);
 
-int
-is_dir(const char *path)
-{
 #ifndef _WIN32
-	struct stat statbuf;
-	if(stat(path, &statbuf) != 0)
-	{
-		LOG_SERROR_MSG(errno, "Can't stat \"%s\"", path);
-		log_cwd();
-		return 0;
-	}
-
-	return S_ISDIR(statbuf.st_mode);
+static int is_directory(const char path[], int dereference_links);
 #else
-	DWORD attr;
+static DWORD win_get_file_attrs(const char path[]);
+#endif
 
-	if(is_path_absolute(path) && !is_unc_path(path))
+int
+is_dir(const char path[])
+{
+	if(is_dir_fast(path))
 	{
-		char buf[] = {path[0], ':', '\\', '\0'};
-		UINT type = GetDriveTypeA(buf);
-		if(type == DRIVE_UNKNOWN || type == DRIVE_NO_ROOT_DIR)
-			return 0;
+		return 1;
 	}
 
-	attr = GetFileAttributesA(path);
-	if(attr == INVALID_FILE_ATTRIBUTES)
-	{
-		LOG_SERROR_MSG(errno, "Can't get attributes of \"%s\"", path);
-		log_cwd();
-		return 0;
-	}
+#ifndef _WIN32
+	return is_directory(path, 1);
+#else
+	return win_get_file_attrs(path) & FILE_ATTRIBUTE_DIRECTORY;
+#endif
+}
 
-	return (attr & FILE_ATTRIBUTE_DIRECTORY);
+/* Checks if path is an existing directory faster than is_dir() does this at the
+ * cost of less accurate results (fails on non-sufficient rights).
+ * Automatically deferences symbolic links.  Returns non-zero if path points to
+ * a directory, otherwise zero is returned. */
+static int
+is_dir_fast(const char path[])
+{
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(BSD)
+	/* Optimization idea: is_dir() ends up using stat() call, which in turn has
+	 * to:
+	 *  1) resolve path to an inode number;
+	 *  2) find and load inode for the directory.
+	 * Checking "path/." for existence is a "hack" to omit 2).
+	 * Negative answer of this method doesn't guarantee directory absence, but
+	 * positive answer provides correct answer faster than is_dir() would. */
+
+	const size_t len = strlen(path);
+	char path_to_selfref[len + 1 + 1 + 1];
+
+	strcpy(path_to_selfref, path);
+	path_to_selfref[len] = '/';
+	path_to_selfref[len + 1] = '.';
+	path_to_selfref[len + 2] = '\0';
+
+	return access(path_to_selfref, F_OK) == 0;
+#else
+	/* Some systems report that "/path/to/file/." is directory... */
+	return 0;
 #endif
 }
 
@@ -165,32 +178,92 @@ path_exists_internal(const char *path, const char *filename)
 }
 
 int
-check_link_is_dir(const char *filename)
+is_symlink(const char path[])
 {
+#ifndef _WIN32
+	struct stat st;
+	return lstat(path, &st) == 0 && S_ISLNK(st.st_mode);
+#else
+	char filename[PATH_MAX];
+	DWORD attr;
+	HANDLE hfind;
+	WIN32_FIND_DATAA ffd;
+
+	attr = GetFileAttributes(path);
+	if(attr == INVALID_FILE_ATTRIBUTES)
+	{
+		LOG_WERROR(GetLastError());
+		return 0;
+	}
+
+	if(!(attr & FILE_ATTRIBUTE_REPARSE_POINT))
+	{
+		return 0;
+	}
+
+	copy_str(filename, sizeof(filename), path);
+	chosp(filename);
+	hfind = FindFirstFileA(filename, &ffd);
+	if(hfind == INVALID_HANDLE_VALUE)
+	{
+		LOG_WERROR(GetLastError());
+		return 0;
+	}
+
+	if(!FindClose(hfind))
+	{
+		LOG_WERROR(GetLastError());
+	}
+
+	return ffd.dwReserved0 == IO_REPARSE_TAG_SYMLINK;
+#endif
+}
+
+SymLinkType
+get_symlink_type(const char path[])
+{
+	char cwd[PATH_MAX];
 	char linkto[PATH_MAX + NAME_MAX];
 	int saved_errno;
 	char *filename_copy;
 	char *p;
 
-	filename_copy = strdup(filename);
+	if(getcwd(cwd, sizeof(cwd)) == NULL)
+	{
+		/* getcwd() failed, just use "." rather than fail. */
+		strcpy(cwd, ".");
+	}
+
+	/* Use readlink() (in get_link_target_abs) before realpath() to check for
+	 * target at slow file system.  realpath() doesn't fit in this case as it
+	 * resolves chains of symbolic links and we want to try only the first one. */
+	if(get_link_target_abs(path, cwd, linkto, sizeof(linkto)) != 0)
+	{
+		LOG_SERROR_MSG(errno, "Can't readlink \"%s\"", path);
+		log_cwd();
+		return SLT_UNKNOWN;
+	}
+	if(refers_to_slower_fs(path, linkto))
+	{
+		return SLT_SLOW;
+	}
+
+	filename_copy = strdup(path);
 	chosp(filename_copy);
 
-	p = realpath(filename, linkto);
+	p = realpath(filename_copy, linkto);
 	saved_errno = errno;
 
 	free(filename_copy);
 
 	if(p == linkto)
 	{
-		return is_dir(linkto);
-	}
-	else
-	{
-		LOG_SERROR_MSG(saved_errno, "Can't readlink \"%s\"", filename);
-		log_cwd();
+		return is_dir(linkto) ? SLT_DIR : SLT_UNKNOWN;
 	}
 
-	return 0;
+	LOG_SERROR_MSG(saved_errno, "Can't realpath \"%s\"", path);
+	log_cwd();
+	return SLT_UNKNOWN;
 }
 
 int
@@ -238,41 +311,19 @@ get_link_target(const char *link, char *buf, size_t buf_len)
 #else
 	char filename[PATH_MAX];
 	DWORD attr;
-	HANDLE hfind;
-	WIN32_FIND_DATAA ffd;
 	HANDLE hfile;
 	char rdb[2048];
 	char *t;
 	REPARSE_DATA_BUFFER *sbuf;
 	WCHAR *path;
 
-	attr = GetFileAttributes(link);
-	if(attr == INVALID_FILE_ATTRIBUTES)
+	if(!is_symlink(link))
 	{
-		LOG_WERROR(GetLastError());
 		return -1;
 	}
 
-	if(!(attr & FILE_ATTRIBUTE_REPARSE_POINT))
-		return -1;
-
-	snprintf(filename, sizeof(filename), "%s", link);
+	copy_str(filename, sizeof(filename), link);
 	chosp(filename);
-	hfind = FindFirstFileA(filename, &ffd);
-	if(hfind == INVALID_HANDLE_VALUE)
-	{
-		LOG_WERROR(GetLastError());
-		return -1;
-	}
-
-	if(!FindClose(hfind))
-	{
-		LOG_WERROR(GetLastError());
-	}
-
-	if(ffd.dwReserved0 != IO_REPARSE_TAG_SYMLINK)
-		return -1;
-
 	hfile = CreateFileA(filename, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
 			OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
 			NULL);
@@ -367,7 +418,7 @@ get_file_size(const char *path)
 	struct stat st;
 	if(lstat(path, &st) == 0)
 	{
-		return (size_t)st.st_size;
+		return (uint64_t)st.st_size;
 	}
 	return 0;
 #else
@@ -448,7 +499,157 @@ rename_file(const char src[], const char dst[])
 	return error != 0;
 }
 
+void
+remove_dir_content(const char path[])
+{
+	DIR *dir;
+	struct dirent *d;
+
+	dir = opendir(path);
+	if(dir == NULL)
+	{
+		return;
+	}
+
+	while((d = readdir(dir)) != NULL)
+	{
+		if(!is_builtin_dir(d->d_name))
+		{
+			char *const full_path = format_str("%s/%s", path, d->d_name);
+			if(entry_is_dir(full_path, d))
+			{
+				remove_dir_content(full_path);
+			}
+			(void)remove(full_path);
+			free(full_path);
+		}
+	}
+	closedir(dir);
+}
+
+int
+entry_is_link(const char path[], const struct dirent* dentry)
+{
+#ifndef _WIN32
+	if(dentry->d_type == DT_LNK)
+	{
+		return 1;
+	}
+#endif
+	return is_symlink(path);
+}
+
+int
+entry_is_dir(const char full_path[], const struct dirent* dentry)
+{
+#ifndef _WIN32
+	return (dentry->d_type == DT_UNKNOWN)
+	     ? is_directory(full_path, 0)
+	     : dentry->d_type == DT_DIR;
+#else
+	const DWORD MASK = FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY;
+	return (win_get_file_attrs(full_path) & MASK) == FILE_ATTRIBUTE_DIRECTORY;
+#endif
+}
+
+int
+is_dirent_targets_dir(const struct dirent *d)
+{
 #ifdef _WIN32
+	return is_dir(d->d_name);
+#else
+	if(d->d_type == DT_UNKNOWN)
+	{
+		return is_dir(d->d_name);
+	}
+
+	return  d->d_type == DT_DIR
+	    || (d->d_type == DT_LNK && get_symlink_type(d->d_name) != SLT_UNKNOWN);
+#endif
+}
+
+int
+is_in_subtree(const char path[], const char root[])
+{
+	char path_copy[PATH_MAX];
+	char path_real[PATH_MAX];
+	char root_real[PATH_MAX];
+
+	copy_str(path_copy, sizeof(path_copy), path);
+	remove_last_path_component(path_copy);
+
+	if(realpath(path_copy, path_real) != path_real)
+	{
+		return 0;
+	}
+
+	if(realpath(root, root_real) != root_real)
+	{
+		return 0;
+	}
+
+	return path_starts_with(path_real, root_real);
+}
+
+int
+are_on_the_same_fs(const char s[], const char t[])
+{
+	struct stat s_stat, t_stat;
+	if(lstat(s, &s_stat) != 0 || lstat(t, &t_stat) != 0)
+	{
+		return 0;
+	}
+
+	return s_stat.st_dev == t_stat.st_dev;
+}
+
+#ifndef _WIN32
+
+/* Checks if path (dereferencer or not symbolic link) is an existing directory.
+ * Automatically deferences symbolic links. */
+static int
+is_directory(const char path[], int dereference_links)
+{
+	struct stat statbuf;
+	if((dereference_links ? &stat : &lstat)(path, &statbuf) != 0)
+	{
+		LOG_SERROR_MSG(errno, "Can't stat \"%s\"", path);
+		log_cwd();
+		return 0;
+	}
+
+	return S_ISDIR(statbuf.st_mode);
+}
+
+#else
+
+/* Obtains attributes of a file.  Skips check for unmounted disks.  Returns the
+ * attributes. */
+static DWORD
+win_get_file_attrs(const char path[])
+{
+	DWORD attr;
+
+	if(is_path_absolute(path) && !is_unc_path(path))
+	{
+		char buf[] = {path[0], ':', '\\', '\0'};
+		UINT type = GetDriveTypeA(buf);
+		if(type == DRIVE_UNKNOWN || type == DRIVE_NO_ROOT_DIR)
+		{
+			return 0;
+		}
+	}
+
+	attr = GetFileAttributesA(path);
+	if(attr == INVALID_FILE_ATTRIBUTES)
+	{
+		LOG_SERROR_MSG(errno, "Can't get attributes of \"%s\"", path);
+		log_cwd();
+		return 0;
+	}
+
+	return attr;
+}
 
 char *
 realpath(const char *path, char *buf)
@@ -529,6 +730,13 @@ drive_exists(char letter)
 		default:
 			return 0;
 	}
+}
+
+int
+is_win_symlink(uint32_t attr, uint32_t tag)
+{
+	return (attr & FILE_ATTRIBUTE_REPARSE_POINT)
+	    && (tag == IO_REPARSE_TAG_SYMLINK);
 }
 
 #endif
