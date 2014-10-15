@@ -1,6 +1,6 @@
 data/vim/syntax/vifm.vim usr/share/vim/syntax
 data/vim/ftplugin/vifm.vim usr/share/vim/addons/ftplugin
-data/vim/doc/vifm.txt usr/share/vim/addons/doc
+data/vim/doc/app/vifm-app.txt usr/share/vim/addons/doc
 data/vim/ftdetect/vifm.vim usr/share/vim/addons/ftdetect
 data/vim/plugin/vifm.vim usr/share/vim/addons/plugin
 debian/vim-vifm.yaml usr/share/vim/registry
