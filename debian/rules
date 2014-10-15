@@ -8,7 +8,7 @@
 	dh $@
 
 override_dh_auto_configure:
-	dh_auto_configure -- --with-X11 --with-dyn-X11
+	dh_auto_configure -- --with-X11 --with-dyn-X11 --without-gtk
 
 override_dh_auto_test:
 	script -c 'make -j1 check' /dev/null
