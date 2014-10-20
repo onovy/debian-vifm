@@ -5,7 +5,8 @@ Maintainer: Hendrik Jaeger <deb@henk.geekmail.org>
 Build-Depends: debhelper (>= 9),
     libncursesw5-dev,
     libmagic-dev,
-    libx11-dev
+    libx11-dev,
+    vim
 Standards-Version: 3.9.6
 Homepage: http://vifm.sourceforge.net/
 
