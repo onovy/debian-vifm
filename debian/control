@@ -9,7 +9,7 @@ Build-Depends: debhelper (>= 9),
     libx11-dev,
     vim
 Standards-Version: 3.9.6
-Homepage: http://vifm.sourceforge.net/
+Homepage: http://vifm.info/
 
 Package: vifm
 Architecture: any
