@@ -3,6 +3,7 @@ Section: utils
 Priority: optional
 Maintainer: Hendrik Jaeger <deb@henk.geekmail.org>
 Build-Depends: debhelper (>= 9),
+    dh-autoreconf,
     libncursesw5-dev,
     libmagic-dev,
     libx11-dev,
