@@ -1,7 +1,49 @@
+0.7.8-beta to 0.7.8
+
+	Added ga and gA keys to visual mode.  Thanks to geo909.
+
+	Added "[S]kip all" conflict resolution option.  Thanks to Miodrag
+	Tokić (a.k.a. loonies).
+
+	Highlight "highlight clear".
+
+	Returned accidentally lost "Merge all" (from message only) conflict
+	resolution message.
+
+	Made "make clean" remove "tags" files for Vim documentation generated
+	during build.  Thanks to Hendrik Jaeger (a.k.a. henk).
+
+	Taught ga/gA commands to handle selection.  Thanks to geo909.
+
+	More accurate scheduling of view updates.
+
+	Updated how tags are generated on build.  Thanks to Hendrik
+	Jaeger (a.k.a. henk).
+
+	Updated sample vifmrc file.
+
+	Fixed extension extraction for column view (wasn't consistent with
+	filename modifiers).  Thanks to ranousse.
+
+	Fixed navigation to filtered-out files (e.g. from menus).  Cursor wasn't
+	moved to the file.
+
+	Fixed parsing of ":cmd &|cmd" pattern on the command-line.
+
+	Fixed error handling regarding vifmrc-converter.  Thanks to Hendrik
+	Jaeger (a.k.a. henk).
+
+	Fixed dumping Default colorscheme with regard to OtherLine highlight
+	group.
+
+	Fixed ignoring just installed sample vifmrc on first run.
+
+	Fixed cursor update in inactive view (say, after ga/gA finished).
+
 0.7.7 to 0.7.8-beta
 
 	Removed ltmain.sh script, which is part of libtool, which is not used
-	anymore.  Thanks to Hendrik Jaeger (a.k.a.  henk).
+	anymore.  Thanks to Hendrik Jaeger (a.k.a. henk).
 
 	Added executable() builtin function that checks whether executable exists
 	at given path or in one of directories listed in $PATH.

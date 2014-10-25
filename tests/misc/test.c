@@ -49,6 +49,8 @@ void functional_tests(void);
 void cmdline_emark_tests(void);
 void is_dir_tests(void);
 void builtin_functions_tests(void);
+void get_ext_tests(void);
+void commands_tests(void);
 
 void
 all_tests(void)
@@ -102,6 +104,8 @@ all_tests(void)
 	cmdline_emark_tests();
 	is_dir_tests();
 	builtin_functions_tests();
+	get_ext_tests();
+	commands_tests();
 }
 
 int

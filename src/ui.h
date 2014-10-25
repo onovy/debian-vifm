@@ -107,12 +107,23 @@ typedef enum
 }
 NumberingType;
 
+/* Type of scheduled view update event. */
+typedef enum
+{
+	UUE_NONE,        /* No even scheduled at the time of request. */
+	UUE_REDRAW,      /* View redraw. */
+	UUE_RELOAD,      /* View reload with saving selection and cursor. */
+	UUE_FULL_RELOAD, /* Full view reload. */
+}
+UiUpdateEvent;
+
 typedef struct
 {
 	int rel_pos;
 	char *dir;
 	char *file;
-}history_t;
+}
+history_t;
 
 typedef struct
 {
@@ -177,7 +188,12 @@ typedef struct
 	char ** selected_filelist;
 	int nsaved_selection;
 	char ** saved_selection;
+
+	/* Whether files are selected by user or via range on the command-line.  Say
+	 * some commands (e.g. ga/gA) implement "smart selection", but it shouldn't
+	 * be applied for selected produced by a range. */
 	int user_selection;
+
 	int explore_mode; /* shows whether this view is used for file exploring */
 
 	/* Filter which is controlled by user. */
@@ -237,9 +253,16 @@ typedef struct
 	int num_width; /* Min number of characters reserved for number field. */
 	int real_num_width; /* Real character count reserved for number field. */
 
-	int postponed_redraw; /* Number of scheduled redraw requests. */
-	int postponed_reload; /* Number of scheduled reload requests, negative if
-	                         there was at least one full reload request. */
+	/* Timestamps for controlling of scheduling update requests.  They are in
+	 * microseconds.  Real resolution is bigger than microsecond, but it's not
+	 * critical. */
+
+	uint64_t postponed_redraw;      /* Time of last redraw request. */
+	uint64_t postponed_reload;      /* Time of last redraw request. */
+	uint64_t postponed_full_reload; /* Time of last full redraw request. */
+
+	uint64_t last_redraw; /* Time of last redraw. */
+	uint64_t last_reload; /* Time of last [full] reload. */
 }
 FileView;
 
@@ -374,24 +397,12 @@ void ui_view_schedule_reload(FileView *view);
  * work. */
 void ui_view_schedule_full_reload(FileView *view);
 
-/* Checks whether redraw of the view is scheduled.  Return non-zero if so,
- * otherwise zero is returned. */
-int ui_view_is_redraw_scheduled(const FileView *view);
-
-/* Checks whether reload of the view is scheduled.  Return non-zero if so,
- * otherwise zero is returned. */
-int ui_view_is_reload_scheduled(const FileView *view);
-
-/* Checks whether full reload of the view is scheduled.  Return non-zero if so,
- * otherwise zero is returned. */
-int ui_view_is_full_reload_scheduled(const FileView *view);
-
 /* Clears previously scheduled redraw request of the view, if any. */
 void ui_view_redrawn(FileView *view);
 
-/* Clears previously scheduled reload request of the view, if any.  Also clears
- * redraw request. */
-void ui_view_reloaded(FileView *view);
+/* Checks for scheduled update and marks it as fulfilled.  Returns kind of
+ * scheduled event. */
+UiUpdateEvent ui_view_query_scheduled_event(FileView *view);
 
 /* Operation cancellation. */
 

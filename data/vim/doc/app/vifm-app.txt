@@ -1,4 +1,4 @@
-*vifm-app.txt*    For Vifm version 0.7.8-beta  Last change: 2014 Oct 11
+*vifm-app.txt*    For Vifm version 0.7.8  Last change: 2014 Oct 25
 
  Email for bugs and suggestions: <xaizek@openmailbox.org>
 
@@ -216,7 +216,7 @@ Ctrl-W + - increase size of the view by count. *vifm-CTRL-W_+*
 Ctrl-W - - decrease size of the view by count. *vifm-CTRL-W_-*
 Ctrl-W < - increase size of the view by count. *vifm-CTRL-W_<*
 Ctrl-W > - decrease size of the view by count. *vifm-CTRL-W_>*
-Ctrl-W | - maximize current view.              *vifm-CTRL-W_|*
+Ctrl-W | - maximize current view.              *vifm-CTRL-W_bar*
 Ctrl-W _ - maximize current view.              *vifm-CTRL-W__*
 Ctrl-W = - make size of two views equal.       *vifm-CTRL-W_=*
 
@@ -391,15 +391,22 @@ Ctrl-I - if |vifm-'cpoptions'| contains "t" flag (|vifm-cpo-t|), <tab> and
     directories are automatically skipped.
 
                                                *vifm-CTRL-G*
-Ctrl-G - creates a window showing detailed information about the current
-    file.
+Ctrl-G - creates a window showing detailed information about current file.
 
                                                *vifm-SHIFT-Tab*
-Shift-Tab - enters view mode (|vifm-view|, works only after activating view pane with
-    :view command).
+Shift-Tab - enters view mode (|vifm-view|, works only after activating view
+    pane with :view command).
 
-ga - calculate size of directory.              *vifm-ga*
-gA - like ga, but force update.                *vifm-gA*
+
+                                               *vifm-ga*
+ga - calculate directory size.  Uses cached directory sizes when possible
+    for better performance.
+                                               *vifm-gA*
+gA - like ga, but force update.  Ignores old values of directory sizes.
+
+If file under cursor is selected, each selected item is processed,
+otherwise only current file is updated.
+
 
                                                *vifm-gf*
 gf - find link destination (like l with |vifm-'followlinks'| off, but also
@@ -795,7 +802,7 @@ Ctrl-W + - increase size of the view.          *vifm-q_CTRL-W_+*
 Ctrl-W - - decrease size of the view.          *vifm-q_CTRL-W_-*
 Ctrl-W < - increase size of the view.          *vifm-q_CTRL-W_<*
 Ctrl-W > - decrease size of the view.          *vifm-q_CTRL-W_>*
-Ctrl-W | - maximize current view.              *vifm-q_CTRL-W_|*
+Ctrl-W | - maximize current view.              *vifm-q_CTRL-W_bar*
 Ctrl-W _ - maximize current view.              *vifm-q_CTRL-W__*
 Ctrl-W = - make size of two views equal.       *vifm-q_CTRL-W_=*
 
