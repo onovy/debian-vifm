@@ -1,1 +1,2 @@
 0001-fix-building-without-terminal.patch
+0002-Fix-buffer-overflow-in-tests-to-fix-building-on-arm.patch
