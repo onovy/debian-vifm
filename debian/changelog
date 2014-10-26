@@ -1,3 +1,11 @@
+vifm (0.7.8-2) unstable; urgency=medium
+
+  * Removed non-functional 'make tests' fixup in debian/rules
+  * Added patch to fix building without terminal
+    Thanks to xaizek for providing the patch so quickly
+
+ -- Hendrik Jaeger <deb@henk.geekmail.org>  Sun, 26 Oct 2014 01:42:39 +0200
+
 vifm (0.7.8-1) unstable; urgency=medium
 
   * [54b44c8] New Upstream version 0.7.8 (Upload to unstable)
