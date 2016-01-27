@@ -1,21 +1,35 @@
+#include <stic.h>
+
 #include <stdlib.h>
 
-#include "seatest.h"
-
+#include "../../src/engine/functions.h"
 #include "../../src/engine/variables.h"
 #include "../../src/utils/env.h"
 #include "../../src/utils/utils.h"
 
 #define VAR_NAME "VAR"
 
-static void
-setup(void)
+static var_t dummy(const call_info_t *call_info);
+
+SETUP_ONCE()
+{
+	static const function_t function_a = { "a", 1, &dummy };
+	assert_int_equal(0, function_register(&function_a));
+}
+
+SETUP()
 {
 	env_remove(VAR_NAME);
 }
 
-static void
-test_env_variable_creation_success(void)
+static var_t
+dummy(const call_info_t *call_info)
+{
+	static const var_val_t var_val = { .string = "" };
+	return var_new(VTYPE_STRING, var_val);
+}
+
+TEST(env_variable_creation_success)
 {
 	assert_true(getenv(VAR_NAME) == NULL);
 	assert_int_equal(0, let_variables("$" VAR_NAME "='VAL'"));
@@ -26,10 +40,15 @@ test_env_variable_creation_success(void)
 	}
 }
 
-static void
-test_env_variable_changing(void)
+TEST(env_variable_changing)
 {
-	test_env_variable_creation_success();
+	assert_true(getenv(VAR_NAME) == NULL);
+	assert_int_equal(0, let_variables("$" VAR_NAME "='VAL'"));
+	assert_true(getenv(VAR_NAME) != NULL);
+	if(getenv(VAR_NAME) != NULL)
+	{
+		assert_string_equal("VAL", getenv(VAR_NAME));
+	}
 
 	assert_int_equal(0, let_variables("$" VAR_NAME "='VAL2'"));
 	assert_true(getenv(VAR_NAME) != NULL);
@@ -39,8 +58,7 @@ test_env_variable_changing(void)
 	}
 }
 
-static void
-test_env_variable_addition_to_empty(void)
+TEST(env_variable_addition_to_empty)
 {
 	assert_true(getenv(VAR_NAME) == NULL);
 	assert_int_equal(0, let_variables("$" VAR_NAME ".='VAL2'"));
@@ -51,10 +69,15 @@ test_env_variable_addition_to_empty(void)
 	}
 }
 
-static void
-test_env_variable_addition(void)
+TEST(env_variable_addition)
 {
-	test_env_variable_addition_to_empty();
+	assert_true(getenv(VAR_NAME) == NULL);
+	assert_int_equal(0, let_variables("$" VAR_NAME ".='VAL2'"));
+	assert_true(getenv(VAR_NAME) != NULL);
+	if(getenv(VAR_NAME) != NULL)
+	{
+		assert_string_equal("VAL2", getenv(VAR_NAME));
+	}
 
 	assert_int_equal(0, let_variables("$" VAR_NAME ".='VAL2'"));
 	if(getenv(VAR_NAME) != NULL)
@@ -63,16 +86,14 @@ test_env_variable_addition(void)
 	}
 }
 
-static void
-test_env_variable_removal(void)
+TEST(env_variable_removal)
 {
 	assert_true(getenv("VAR_B") != NULL);
 	assert_int_equal(0, unlet_variables("$VAR_B"));
 	assert_true(getenv("VAR_B") == NULL);
 }
 
-static void
-test_env_variable_multiple_removal(void)
+TEST(env_variable_multiple_removal)
 {
 	assert_true(getenv("VAR_B") != NULL);
 	assert_true(getenv("VAR_C") != NULL);
@@ -81,30 +102,29 @@ test_env_variable_multiple_removal(void)
 	assert_true(getenv("VAR_C") == NULL);
 }
 
-static void
-test_unlet_with_equal_sign(void)
+TEST(unlet_with_equal_sign)
 {
 	assert_true(getenv("VAR_B") != NULL);
 	assert_false(unlet_variables("$VAR_B=") == 0);
 	assert_true(getenv("VAR_B") != NULL);
 }
 
-void
-envvars_tests(void)
+TEST(let_survives_wrong_argument_list_in_rhs)
 {
-	test_fixture_start();
-
-	fixture_setup(setup);
-
-	run_test(test_env_variable_creation_success);
-	run_test(test_env_variable_changing);
-	run_test(test_env_variable_addition_to_empty);
-	run_test(test_env_variable_addition);
-	run_test(test_env_variable_removal);
-	run_test(test_env_variable_multiple_removal);
-	run_test(test_unlet_with_equal_sign);
-
-	test_fixture_end();
+	assert_failure(let_variables("$" VAR_NAME " = a(b)"));
 }
 
-/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
+TEST(variable_is_not_set_on_error)
+{
+	assert_null(getenv(VAR_NAME));
+	assert_failure(let_variables("$" VAR_NAME " = a(b)"));
+	assert_null(getenv(VAR_NAME));
+}
+
+TEST(increment_does_not_work_for_envvars)
+{
+	assert_failure(let_variables("$" VAR_NAME " += 3"));
+}
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

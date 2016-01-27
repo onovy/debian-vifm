@@ -21,31 +21,32 @@
 
 /* This unit provides all necessary to work with variables. */
 
-
 /* Enumeration of variable types. */
 typedef enum
 {
+	VTYPE_ERROR,  /* Signals about failure or uninitialized variable. */
 	VTYPE_STRING, /* Regular string value. */
-	VTYPE_INT, /* Integer, which is also used for boolean. */
-	VTYPE_ERROR, /* Signals about fail. */
-}VarType;
+	VTYPE_INT,    /* Integer, which is also used for boolean. */
+}
+VarType;
 
 /* Union of possible variable contents. */
 typedef union
 {
 	char *string; /* String value for VTYPE_STRING, should be copied to use it. */
-	int integer; /* VTYPE_INT value. */
+	int integer;  /* VTYPE_INT value. */
 
 	const char *const_string; /* Convenience field handy to create variables. */
-}var_val_t;
+}
+var_val_t;
 
 /* Structure for script variable. */
 typedef struct
 {
-	VarType type; /* Variable type. */
+	VarType type;    /* Variable type. */
 	var_val_t value; /* Value depending on type. */
-}var_t;
-
+}
+var_t;
 
 /* Gets variable, which evaluates to true.  Returns the variable. */
 var_t var_true(void);
@@ -83,4 +84,4 @@ void var_free(const var_t var);
 #endif /* VIFM__ENGINE__VAR_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

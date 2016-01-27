@@ -27,6 +27,7 @@
 #include <wctype.h> /* iswdigit() */
 #include <wchar.h> /* wcscat() wcslen() */
 
+#include "../compat/reallocarray.h"
 #include "../utils/macros.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
@@ -38,8 +39,8 @@ typedef struct key_chunk_t
 	wchar_t key;
 	int no_remap;
 	size_t children_count;
-	int enters; /* to prevent stack overflow */
-	int deleted; /* postpone free() call for proper lazy deletion */
+	int enters;            /* To prevent stack overflow and manager lifetime. */
+	int deleted;           /* Postpone free() call for proper lazy deletion. */
 	key_conf_t conf;
 	struct key_chunk_t *child;
 	struct key_chunk_t *parent;
@@ -76,6 +77,8 @@ static int execute_next_keys(key_chunk_t *curr, const wchar_t keys[],
 		int no_remap);
 static int dispatch_key(key_info_t key_info, keys_info_t *keys_info,
 		key_chunk_t *curr, const wchar_t keys[]);
+static int has_def_handler(void);
+static default_handler def_handler(void);
 static int execute_after_remapping(const wchar_t rhs[],
 		const wchar_t left_keys[], keys_info_t keys_info, key_info_t key_info,
 		key_chunk_t *curr);
@@ -278,7 +281,7 @@ dispatch_keys(const wchar_t keys[], keys_info_t *keys_info, int no_remap,
 	key_info.count = combine_counts(key_info.count, prev_count);
 	key_info.multi = L'\0';
 
-	if(!no_remap)
+	if(!no_remap || keys_info->selector)
 	{
 		key_chunk_t *const root = keys_info->selector
 		                        ? &selectors_root[vle_mode_get()]
@@ -513,18 +516,19 @@ dispatch_key(key_info_t key_info, keys_info_t *keys_info, key_chunk_t *curr,
 	}
 	else
 	{
-		const default_handler def_handler = def_handlers[vle_mode_get()];
+		int result = has_def_handler() ? 0 : KEYS_UNKNOWN;
 
-		int result = (def_handler == NULL) ? KEYS_UNKNOWN : 0;
+		/* Protect chunk from deletion while it's in use. */
+		enter_chunk(curr);
 
-		if(curr->enters == 0)
+		if(curr->enters == 1)
 		{
 			result = execute_after_remapping(conf->data.cmd, keys, *keys_info,
 					key_info, curr);
 		}
-		else if(def_handler != NULL)
+		else if(has_def_handler())
 		{
-			result = def_handler(curr->key);
+			result = def_handler()(curr->key);
 
 			if(result == 0)
 			{
@@ -533,12 +537,11 @@ dispatch_key(key_info_t key_info, keys_info_t *keys_info, key_chunk_t *curr,
 			}
 		}
 
-		if(result == KEYS_UNKNOWN && def_handler != NULL)
+		if(result == KEYS_UNKNOWN && has_def_handler())
 		{
-			/* curr shouldn't be freed here as if it was result would be 0. */
-			if(curr->enters == 0)
+			if(curr->enters == 1)
 			{
-				result = def_handler(conf->data.cmd[0]);
+				result = def_handler()(conf->data.cmd[0]);
 				enter_chunk(curr);
 				execute_keys_general(conf->data.cmd + 1, 0, 1, curr->no_remap);
 				leave_chunk(curr);
@@ -548,13 +551,32 @@ dispatch_key(key_info_t key_info, keys_info_t *keys_info, key_chunk_t *curr,
 				int i;
 				for(i = 0; conf->data.cmd[i] != '\0'; i++)
 				{
-					result = def_handler(conf->data.cmd[i]);
+					result = def_handler()(conf->data.cmd[i]);
 				}
 			}
 		}
 
+		/* Release the chunk, this will free it if deletion was attempted. */
+		leave_chunk(curr);
+
 		return result;
 	}
+}
+
+/* Checks that default handler exists for active mode.  Returns non-zero if so,
+ * otherwise zero is returned. */
+static int
+has_def_handler(void)
+{
+	return (def_handler() != NULL);
+}
+
+/* Gets default handler of active mode.  Returns the handler, which is NULL when
+ * not set for active mode. */
+static default_handler
+def_handler(void)
+{
+	return def_handlers[vle_mode_get()];
 }
 
 /* Processes remapping of a key.  Returns error code. */
@@ -565,7 +587,7 @@ execute_after_remapping(const wchar_t rhs[], const wchar_t left_keys[],
 	int result;
 	if(rhs[0] == L'\0' && left_keys[0] == L'\0')
 	{
-		/* Nop command executed correctly. */
+		/* Nop command "executed" correctly. */
 		result = 0;
 	}
 	else if(rhs[0] == L'\0')
@@ -610,7 +632,7 @@ execute_after_remapping(const wchar_t rhs[], const wchar_t left_keys[],
 static void
 enter_chunk(key_chunk_t *chunk)
 {
-	chunk->enters = 1;
+	++chunk->enters;
 }
 
 /* Handles leaving a chunk performing postponed chunk removal if needed.
@@ -618,15 +640,14 @@ enter_chunk(key_chunk_t *chunk)
 static void
 leave_chunk(key_chunk_t *chunk)
 {
-	if(chunk->deleted)
+	--chunk->enters;
+
+	if(chunk->enters == 0 && chunk->deleted)
 	{
 		/* Removal of the chunk was postponed because it was in use, proceed with
 		 * this now. */
 		free(chunk);
-		return;
 	}
-
-	chunk->enters = 0;
 }
 
 static void
@@ -981,7 +1002,7 @@ fill_list(const key_chunk_t *curr, size_t len, wchar_t **list)
 	{
 		wchar_t *t;
 
-		t = realloc(list[i], sizeof(wchar_t)*(len + 1));
+		t = reallocarray(list[i], len + 1, sizeof(wchar_t));
 		if(t == NULL)
 			return -1;
 
@@ -998,7 +1019,7 @@ fill_list(const key_chunk_t *curr, size_t len, wchar_t **list)
 		wchar_t *t;
 
 		s = (curr->conf.type == USER_CMD) ? curr->conf.data.cmd : L"<built in>";
-		t = realloc(list[0], sizeof(wchar_t)*(len + 1 + wcslen(s) + 1));
+		t = reallocarray(list[0], len + 1 + wcslen(s) + 1, sizeof(wchar_t));
 		if(t == NULL)
 			return -1;
 
@@ -1099,4 +1120,4 @@ post_execute_mapping_handler(const keys_info_t *const keys_info)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0: */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

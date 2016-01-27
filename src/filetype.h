@@ -20,13 +20,15 @@
 #ifndef VIFM__FILETYPE_H__
 #define VIFM__FILETYPE_H__
 
-#include "utils/test_helpers.h"
+#define VIFM_PSEUDO_CMD "vifm"
+
+struct matcher_t;
 
 /* Type of file association by it's source. */
 typedef enum
 {
-	ART_BUILTIN, /* builtin type of file association, set automatically by vifm */
-	ART_CUSTOM, /* custom type of file association, which is set by user */
+	ART_BUILTIN, /* Builtin type of association, set automatically by vifm. */
+	ART_CUSTOM,  /* Custom type of association, which is set by user. */
 }
 assoc_record_type_t;
 
@@ -49,7 +51,7 @@ assoc_records_t;
 
 typedef struct
 {
-	char *pattern;
+	struct matcher_t *matcher;
 	assoc_records_t records;
 }
 assoc_t;
@@ -61,8 +63,6 @@ typedef struct
 }
 assoc_list_t;
 
-#define VIFM_PSEUDO_CMD "vifm"
-
 /* Prototype for external command existence check function. */
 typedef int (*external_command_exists_t)(const char *name);
 
@@ -72,38 +72,58 @@ assoc_list_t filetypes;
 assoc_list_t xfiletypes;
 assoc_list_t fileviewers;
 
+/* Unit setup. */
+
 /* Configures external functions for filetype unit.  If ece_func is NULL or this
  * function is not called, the module acts like all commands exist. */
-void config_filetypes(external_command_exists_t ece_func);
-/* Returns non-zero on success. */
-int get_default_program_for_file(const char *file, assoc_record_t *result);
-char * get_viewer_for_file(const char file[]);
-/* Associates list of comma separated patters with list of comma separated
- * programs either for X or non-X associations and depending on current
- * execution environment. */
-void set_programs(const char patterns[], const char programs[], int for_x,
-		int in_x);
-void set_fileviewer(const char *patterns, const char *viewer);
-/* Caller should free only the array, but not its elements. */
-assoc_records_t get_all_programs_for_file(const char *file);
+void ft_init(external_command_exists_t ece_func);
+
 /* Resets associations set by :filetype, :filextype and :fileviewer commands.
  * Also registers default file associations. */
-void reset_all_file_associations(int in_x);
-/* After this call structure contains NULL values */
-void free_assoc_records(assoc_records_t *records);
-/* After this call structure contains NULL values */
-void free_assoc_record(assoc_record_t *record);
-void add_assoc_record(assoc_records_t *assocs, const char *command,
-		const char *description);
-void add_assoc_records(assoc_records_t *assocs, const assoc_records_t *src);
-/* Returns non-zero for an empty assoc_record_t structure. */
-int assoc_prog_is_empty(const assoc_record_t *record);
+void ft_reset(int in_x);
 
-TSTATIC_DEFS(
-	void replace_double_comma(char cmd[], int put_null);
-)
+/* Programs. */
+
+/* Gets default program that can be used to handle the file.  Returns command
+ * on success, otherwise NULL is returned. */
+const char * ft_get_program(const char file[]);
+
+/* Gets list of programs associated with specified file name.  Returns the list.
+ * Caller should free the result by calling ft_assoc_records_free() on it. */
+assoc_records_t ft_get_all_programs(const char file[]);
+
+/* Associates list of comma separated patterns with each item in the list of
+ * comma separated programs either for X or non-X associations and depending on
+ * current execution environment. */
+void ft_set_programs(struct matcher_t *matcher, const char programs[],
+		int for_x, int in_x);
+
+/* Viewers. */
+
+/* Gets viewer for file.  Returns NULL if no suitable viewer available,
+ * otherwise returns pointer to string stored internally. */
+const char * ft_get_viewer(const char file[]);
+
+/* Gets list of programs associated with specified file name.  Returns the list.
+ * Caller should free the result by calling ft_assoc_records_free() on it. */
+assoc_records_t ft_get_all_viewers(const char file[]);
+
+/* Associates list of comma separated patterns with each item in the list of
+ * comma separated viewers. */
+void ft_set_viewers(struct matcher_t *matcher, const char viewers[]);
+
+/* Records managing. */
+
+void ft_assoc_record_add(assoc_records_t *assocs, const char *command,
+		const char *description);
+
+void ft_assoc_record_add_all(assoc_records_t *assocs,
+		const assoc_records_t *src);
+
+/* After this call the structure contains NULL values. */
+void ft_assoc_records_free(assoc_records_t *records);
 
 #endif /* VIFM__FILETYPE_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

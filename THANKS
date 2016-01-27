@@ -4,62 +4,97 @@ by providing their ideas, suggestions, bug reports and pieces of code.
 Names (or nicks) are in alphabetical order.
 
 Alejandro Pulver (alepulver)
+aleksejrs
 Allan Neal (akneal)
+Andrew Lannan
+astrell
+Aurelio Sanabria (Sufrostico)
+Bernhard Grotz
+Brian Callahan (ibara)
 Bruce Hunsaker (hunsakerbn)
+bsdmp
 Carl Mueller (carlmuller)
 Carlos Pita
 Charles Kauffman
+Christian Fillion (a.k.a. cfillion)
 Christian Herdtweck
 Christoph (informationen)
 ckester
+Cosmin Popescu (cosminadrianpopescu)
+Damian Ariel Perticone
 Daniel R. (r1chelt)
 Daniel Dettlaff (dmilith)
 Daniel Polanco (dlpolanco)
 Denis Protivenskiy
+Dennis Hamester
+Egor Gumenyuk (boo1ean)
 Factorial Prime
+filterfalse
 Flaviu Tamas (flaviut)
 Florian Baumann (derflob)
-greye
-Egor Gumenyuk (boo1ean)
-filterfalse
+fogine
 geo909
+greye
 Hans Kristian Otnes Berge
 Hendrik Jaeger (henk)
+hofheinz
 Ink (inknoir)
 Jason W. Ryan
+Jeet Sukumaran (jeetsukumaran)
 Jeffrey C. Albro (jalbro)
 Jing Liu
 Jiri Wiesner (jiriwiesner)
+Johannes (johannesmeng)
 John Magolske
+Joseph LP (ootput)
+Josh Wainwright (joshaw)
 jsmith51 (metal.lunchbox)
+Karol M. Langner (langner)
 Ken Allen (cardboard42)
 ksandr1v
+kazufukurou
 landhar
+Larry Hynes (larryhynes)
 lcj
 Lomov Vladimir (lomov_vl)
+loongw
 lyuts
 MadMaverick9
+Marcin Juszkiewicz (hrw)
+Marius Schmidl
+Martin Fischer
 Marton Balazs (balmar)
 Merovius
 Michael Kopp
 Michael Maddern (madders)
 Michael Vetter (jubalh)
+Michal Belica (beli-sk)
+Michel Normand
 Michelle Bonk (unixtechie)
 Milan Svoboda (tex)
 Miles (pkordy)
 Miodrag Tokić (loonies)
+mvucBmM0
+obtroston
+octos
 Oleg Gordienko (gordio)
+Ondrej Novy (onovy)
 Pavel (neoascetic)
 Pavel Platto (hinidu)
 Pavneet Arora
 Peter Barnes
+phijor
 Pierre Dorbais (chdorb)
 Rainer Suhm
+Regis
 RetekBacsi
 Richard Benson
 Robert Sarkozi
 Roger Bongers
+Ross Hadden (rosshadden)
 Russell Urquhart
+SanLe
+Schmalzhaf Stefan
 Sebastian Cyprych
 Sergei Shilovsky
 Seth VanHeulen (svanheulen)
@@ -67,20 +102,28 @@ Shawn Young (drphys)
 sirex (sirexas)
 smpolymen
 Stas Malavin
+Stas Panteleev
+Stephano (cao)
 Stephen L. Holtz (stephenholtz)
 Stéphane (istib)
 Svenn Are Bjerkem (svenn)
 Svyatoslav Mishyn (juef)
-TobiSGD
+th1rdey3
 Thomas Nemeth
+TobiSGD
+Tomek K. (TomiCode)
+tYGjQCsvVI
 Vlad Glagolev (Stealth)
 willemw12
 y2kbugger
 Yang Zou
 Zsolt Udvari (uzsolt)
 Евгений Жаров (ezharov)
+Сергей Соловьёв (Sergej Soloviov)
 
 Special thanks to Colin Cartade for a lot of useful ideas, alpha testing on
 Linux and his will to make vifm better.  Another big thanks to Alexandre Viau
 for alpha testing on Windows and useful suggestions.  Acknowledgments also to
-filterfalse for his valuable suggestions and feedback in general.
+filterfalse for his valuable suggestions, plugin/documentation patches and
+constant feedback.  Another great user is Svyatoslav Mishyn (a.k.a. juef),
+who performs alpha testing and provides valuable feedback.

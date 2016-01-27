@@ -26,37 +26,63 @@
 #undef MIN
 #endif
 
+#include <pthread.h> /* PTHREAD_* pthread_* */
+
 #include <assert.h> /* assert() */
 #include <limits.h> /* INT_MIN */
+#include <stddef.h> /* NULL */
 #include <string.h>
+#include <time.h> /* time_t time() */
 
 #include "cfg/config.h"
+#include "compat/fs_limits.h"
+#include "ui/colors.h"
+#include "ui/ui.h"
 #include "utils/env.h"
-#include "utils/fs_limits.h"
+#include "utils/fsdata.h"
 #include "utils/log.h"
 #include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
-#include "utils/tree.h"
-#include "colors.h"
+#include "utils/utils.h"
+#include "cmd_completion.h"
+#include "filelist.h"
 
 /* Environment variables by which application hosted by terminal multiplexer can
  * identify the host. */
 #define SCREEN_ENVVAR "STY"
 #define TMUX_ENVVAR "TMUX"
 
+/* dcache entry. */
+typedef struct
+{
+	uint64_t value;   /* Stored value. */
+	time_t timestamp; /* When the value was set. */
+}
+dcache_data_t;
+
 static void load_def_values(status_t *stats, config_t *config);
+static void determine_fuse_umount_cmd(status_t *stats);
 static void set_gtk_available(status_t *stats);
-static void set_number_of_windows(status_t *stats, config_t *config);
-static void set_env_type(status_t *stats);
-static int reset_dircache(status_t *stats);
+static int reset_dircache(void);
 static void set_last_cmdline_command(const char cmd[]);
+static void dcache_get(const char path[], uint64_t *size, uint64_t *nitems,
+		time_t ts);
 
 status_t curr_stats;
 
 static int pending_redraw;
 static int inside_screen;
 static int inside_tmux;
+
+/* Thread-safety guard for dcache_size variable. */
+static pthread_mutex_t dcache_size_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Thread-safety guard for dcache_nitems variable. */
+static pthread_mutex_t dcache_nitems_mutex = PTHREAD_MUTEX_INITIALIZER;
+/* Cache for directory sizes. */
+static fsdata_t *dcache_size;
+/* Cache for directory item count. */
+static fsdata_t *dcache_nitems;
 
 int
 init_status(config_t *config)
@@ -65,9 +91,9 @@ init_status(config_t *config)
 	inside_tmux = !is_null_or_empty(env_get(TMUX_ENVVAR));
 
 	load_def_values(&curr_stats, config);
+	determine_fuse_umount_cmd(&curr_stats);
 	set_gtk_available(&curr_stats);
-	set_number_of_windows(&curr_stats, config);
-	set_env_type(&curr_stats);
+	curr_stats.exec_env_type = get_exec_env_type();
 	stats_update_shell_type(config->shell);
 
 	return reset_status(config);
@@ -86,18 +112,21 @@ load_def_values(status_t *stats, config_t *config)
 	stats->use_register = 0;
 	stats->curr_register = -1;
 	stats->register_saved = 0;
-	stats->view = 0;
+	stats->number_of_windows = 2;
 	stats->use_input_bar = 1;
-	stats->errmsg_shown = 0;
+	stats->drop_new_dir_hist = 0;
 	stats->load_stage = 0;
-	stats->too_small_term = 0;
-	stats->dirsize_cache = NULL_TREE;
+	stats->term_state = TS_NORMAL;
 	stats->ch_pos = 1;
 	stats->confirmed = 0;
 	stats->skip_shellout_redraw = 0;
-	stats->cs_base = DCOLOR_BASE;
 	stats->cs = &config->cs;
 	strcpy(stats->color_scheme, "");
+
+	stats->view = 0;
+	stats->graphics_preview = 0;
+	stats->preview_cleanup = NULL;
+	stats->clear_preview = 0;
 
 	stats->msg_head = 0;
 	stats->msg_tail = 0;
@@ -106,7 +135,7 @@ load_def_values(status_t *stats, config_t *config)
 
 	stats->scroll_bind_off = 0;
 	stats->split = VSPLIT;
-	stats->splitter_pos = -1.0;
+	stats->splitter_pos = -1;
 
 	stats->sourcing_state = SOURCING_NONE;
 
@@ -121,15 +150,42 @@ load_def_values(status_t *stats, config_t *config)
 
 	stats->shell_type = ST_NORMAL;
 
-	stats->file_picker_mode = 0;
+	stats->fuse_umount_cmd = "";
+
+	stats->original_stdout = NULL;
+
+	stats->chosen_files_out = NULL;
+	stats->chosen_dir_out = NULL;
+	(void)replace_string(&stats->output_delimiter, "\n");
+
+	stats->on_choose = NULL;
+
+	stats->preview_hint = NULL;
+
+	stats->global_local_settings = 0;
 
 #ifdef HAVE_LIBGTK
 	stats->gtk_available = 0;
 #endif
+}
 
-#ifdef _WIN32
-	stats->as_admin = 0;
-#endif
+/* Initializes stats->fuse_umount_cmd field of the stats. */
+static void
+determine_fuse_umount_cmd(status_t *stats)
+{
+	if(external_command_exists("fusermount"))
+	{
+		stats->fuse_umount_cmd = "fusermount -u";
+	}
+	else if(external_command_exists("umount"))
+	{
+		/* Some systems use regular umount command for FUSE. */
+		stats->fuse_umount_cmd = "umount";
+	}
+	else
+	{
+		/* Leave default value. */
+	}
 }
 
 static void
@@ -139,38 +195,7 @@ set_gtk_available(status_t *stats)
 	char *argv[] = { "vifm", NULL };
 	int argc = ARRAY_LEN(argv) - 1;
 	char **ptr = argv;
-	curr_stats.gtk_available = gtk_init_check(&argc, &ptr);
-#endif
-}
-
-static void
-set_number_of_windows(status_t *stats, config_t *config)
-{
-	if(config->show_one_window)
-		curr_stats.number_of_windows = 1;
-	else
-		curr_stats.number_of_windows = 2;
-}
-
-/* Checks if running in X, terminal emulator or linux native console. */
-static void
-set_env_type(status_t *stats)
-{
-#ifndef _WIN32
-	const char *term = env_get("TERM");
-	if(term != NULL && ends_with(term, "linux"))
-	{
-		curr_stats.exec_env_type = EET_LINUX_NATIVE;
-	}
-	else
-	{
-		const char *display = env_get("DISPLAY");
-		curr_stats.exec_env_type = is_null_or_empty(display)
-		                         ? EET_EMULATOR
-		                         : EET_EMULATOR_WITH_X;
-	}
-#else
-	curr_stats.exec_env_type = EET_EMULATOR_WITH_X;
+	stats->gtk_available = gtk_init_check(&argc, &ptr);
 #endif
 }
 
@@ -182,16 +207,20 @@ reset_status(const config_t *config)
 	curr_stats.initial_lines = config->lines;
 	curr_stats.initial_columns = config->columns;
 
-	return reset_dircache(&curr_stats);
+	return reset_dircache();
 }
 
 /* Returns non-zero on error. */
 static int
-reset_dircache(status_t *stats)
+reset_dircache(void)
 {
-	tree_free(stats->dirsize_cache);
-	stats->dirsize_cache = tree_create(0, 0);
-	return stats->dirsize_cache == NULL_TREE;
+	fsdata_free(dcache_size);
+	dcache_size = fsdata_create(0);
+
+	fsdata_free(dcache_nitems);
+	dcache_nitems = fsdata_create(0);
+
+	return (dcache_size == NULL || dcache_nitems == NULL);
 }
 
 void
@@ -201,7 +230,7 @@ schedule_redraw(void)
 }
 
 int
-is_redraw_scheduled(void)
+fetch_redraw_scheduled(void)
 {
 	if(pending_redraw)
 	{
@@ -257,23 +286,136 @@ set_last_cmdline_command(const char cmd[])
 void
 stats_update_shell_type(const char shell_cmd[])
 {
-#ifdef _WIN32
-	char shell[NAME_MAX];
-	const char *shell_name;
+	curr_stats.shell_type = get_shell_type(shell_cmd);
+}
 
-	(void)extract_cmd_name(shell_cmd, 0, sizeof(shell), shell);
-	shell_name = get_last_path_component(shell);
-
-	if(stroscmp(shell_name, "cmd") == 0 || stroscmp(shell_name, "cmd.exe") == 0)
+TermState
+stats_update_term_state(int screen_x, int screen_y)
+{
+	if(screen_x < MIN_TERM_WIDTH || screen_y < MIN_TERM_HEIGHT)
 	{
-		curr_stats.shell_type = ST_CMD;
+		curr_stats.term_state = TS_TOO_SMALL;
 	}
-	else
-#endif
+	else if(curr_stats.term_state != TS_NORMAL)
 	{
-		curr_stats.shell_type = ST_NORMAL;
+		curr_stats.term_state = TS_BACK_TO_NORMAL;
+	}
+
+	return curr_stats.term_state;
+}
+
+void
+stats_set_chosen_files_out(const char output[])
+{
+	(void)replace_string(&curr_stats.chosen_files_out, output);
+}
+
+void
+stats_set_chosen_dir_out(const char output[])
+{
+	(void)replace_string(&curr_stats.chosen_dir_out, output);
+}
+
+void
+stats_set_output_delimiter(const char delimiter[])
+{
+	(void)replace_string(&curr_stats.output_delimiter, delimiter);
+}
+
+void
+stats_set_on_choose(const char command[])
+{
+	(void)replace_string(&curr_stats.on_choose, command);
+}
+
+int
+stats_file_choose_action_set(void)
+{
+	return !is_null_or_empty(curr_stats.chosen_files_out)
+	    || !is_null_or_empty(curr_stats.on_choose);
+}
+
+void
+dcache_get_at(const char path[], uint64_t *size, uint64_t *nitems)
+{
+	dcache_get(path, size, nitems, 0);
+}
+
+void
+dcache_get_of(const dir_entry_t *entry, uint64_t *size, uint64_t *nitems)
+{
+	char full_path[PATH_MAX];
+	get_full_path_of(entry, sizeof(full_path), full_path);
+	dcache_get(full_path, size, nitems, entry->mtime);
+}
+
+/* Retrieves information about the path if data is newer than ts (0 requests to
+ * skip the check).  size and/or nitems can be NULL.  On unknown values
+ * variables are set to DCACHE_UNKNOWN. */
+static void
+dcache_get(const char path[], uint64_t *size, uint64_t *nitems, time_t ts)
+{
+	/* Initialization to make condition false by default. */
+	dcache_data_t size_data = { .timestamp = ts };
+	dcache_data_t nitems_data;
+
+	pthread_mutex_lock(&dcache_size_mutex);
+	if(fsdata_get(dcache_size, path, &size_data, sizeof(size_data)) != 0 ||
+			(ts != 0 && ts > size_data.timestamp))
+	{
+		size_data.value = DCACHE_UNKNOWN;
+
+		if(ts != 0 && ts > size_data.timestamp)
+		{
+			fsdata_invalidate(dcache_size, path);
+		}
+	}
+	pthread_mutex_unlock(&dcache_size_mutex);
+
+	pthread_mutex_lock(&dcache_nitems_mutex);
+	if(fsdata_get(dcache_nitems, path, &nitems_data, sizeof(nitems_data)) != 0 ||
+			(ts != 0 && ts > nitems_data.timestamp))
+	{
+		nitems_data.value = DCACHE_UNKNOWN;
+	}
+	pthread_mutex_unlock(&dcache_nitems_mutex);
+
+	if(size != NULL)
+	{
+		*size = size_data.value;
+	}
+	if(nitems != NULL)
+	{
+		*nitems = nitems_data.value;
 	}
 }
 
+int
+dcache_set_at(const char path[], uint64_t size, uint64_t nitems)
+{
+	int ret = 0;
+	const time_t ts = time(NULL);
+
+	if(size != DCACHE_UNKNOWN)
+	{
+		const dcache_data_t data = { .value = size, .timestamp = ts };
+
+		pthread_mutex_lock(&dcache_size_mutex);
+		ret |= fsdata_set(dcache_size, path, &data, sizeof(data));
+		pthread_mutex_unlock(&dcache_size_mutex);
+	}
+
+	if(nitems != DCACHE_UNKNOWN)
+	{
+		const dcache_data_t data = { .value = nitems, .timestamp = ts };
+
+		pthread_mutex_lock(&dcache_nitems_mutex);
+		ret |= fsdata_set(dcache_nitems, path, &data, sizeof(data));
+		pthread_mutex_unlock(&dcache_nitems_mutex);
+	}
+
+	return ret;
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

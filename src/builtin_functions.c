@@ -27,35 +27,47 @@
 
 #include "engine/functions.h"
 #include "engine/var.h"
+#include "ui/cancellation.h"
+#include "ui/ui.h"
 #include "utils/macros.h"
 #include "utils/path.h"
+#include "utils/string_array.h"
 #include "utils/utils.h"
+#include "filelist.h"
 #include "macros.h"
 #include "types.h"
-#include "ui.h"
 
 static var_t executable_builtin(const call_info_t *call_info);
 static var_t expand_builtin(const call_info_t *call_info);
 static var_t filetype_builtin(const call_info_t *call_info);
 static int get_fnum(const char position[]);
+static var_t getpanetype_builtin(const call_info_t *call_info);
 static var_t has_builtin(const call_info_t *call_info);
+static var_t layoutis_builtin(const call_info_t *call_info);
+static var_t paneisat_builtin(const call_info_t *call_info);
+static var_t system_builtin(const call_info_t *call_info);
 
-static const function_t functions[] =
-{
-	{ "executable", 1, &executable_builtin },
-	{ "expand",     1, &expand_builtin },
-	{ "filetype",   1, &filetype_builtin },
-	{ "has",        1, &has_builtin },
+static const function_t functions[] = {
+	/* Name        Argc  Handler  */
+	{ "executable",  1, &executable_builtin },
+	{ "expand",      1, &expand_builtin },
+	{ "filetype",    1, &filetype_builtin },
+	{ "getpanetype", 0, &getpanetype_builtin},
+	{ "has",         1, &has_builtin },
+	{ "layoutis",    1, &layoutis_builtin },
+	{ "paneisat",    1, &paneisat_builtin },
+	{ "system",      1, &system_builtin },
 };
 
 void
 init_builtin_functions(void)
 {
 	size_t i;
-	for(i = 0; i < ARRAY_LEN(functions); i++)
+	for(i = 0; i < ARRAY_LEN(functions); ++i)
 	{
 		int result = function_register(&functions[i]);
 		assert(result == 0 && "Builtin function registration error");
+		(void)result;
 	}
 }
 
@@ -130,10 +142,60 @@ get_fnum(const char position[])
 	{
 		return curr_view->list_pos;
 	}
+	return -1;
+}
+
+/* Retrieves type of current pane as a string. */
+static var_t
+getpanetype_builtin(const call_info_t *call_info)
+{
+	FileView *const view = curr_view;
+	var_val_t var_val;
+
+	if(flist_custom_active(view))
+	{
+		var_val.string = (view->custom.unsorted ? "very-custom" : "custom");
+	}
 	else
 	{
-		return -1;
+		var_val.string = "regular";
 	}
+
+	return var_new(VTYPE_STRING, var_val);
+}
+
+/* Checks current layout configuration.  Returns boolean value that reflects
+ * state of specified layout type. */
+static var_t
+layoutis_builtin(const call_info_t *call_info)
+{
+	char *type;
+	int result;
+
+	type = var_to_string(call_info->argv[0]);
+	if(strcmp(type, "only") == 0)
+	{
+		result = (curr_stats.number_of_windows == 1);
+	}
+	else if(strcmp(type, "split") == 0)
+	{
+		result = (curr_stats.number_of_windows == 2);
+	}
+	else if(strcmp(type, "vsplit") == 0)
+	{
+		result = (curr_stats.number_of_windows == 2 && curr_stats.split == VSPLIT);
+	}
+	else if(strcmp(type, "hsplit") == 0)
+	{
+		result = (curr_stats.number_of_windows == 2 && curr_stats.split == HSPLIT);
+	}
+	else
+	{
+		result = 0;
+	}
+	free(type);
+
+	return var_from_bool(result);
 }
 
 /* Allows examining internal parameters from scripts to e.g. figure out
@@ -163,5 +225,82 @@ has_builtin(const call_info_t *call_info)
 	return result;
 }
 
+/* Checks for relative position of current pane.  Returns boolean value that
+ * reflects state of specified location. */
+static var_t
+paneisat_builtin(const call_info_t *call_info)
+{
+	char *loc;
+	int result;
+
+	const int only = (curr_stats.number_of_windows == 1);
+	const int vsplit = (curr_stats.split == VSPLIT);
+	const int first = (curr_view == &lwin);
+
+	loc = var_to_string(call_info->argv[0]);
+	if(strcmp(loc, "top") == 0)
+	{
+		result = (only || vsplit || first);
+	}
+	else if(strcmp(loc, "bottom") == 0)
+	{
+		result = (only || vsplit || !first);
+	}
+	else if(strcmp(loc, "left") == 0)
+	{
+		result = (only || !vsplit || first);
+	}
+	else if(strcmp(loc, "right") == 0)
+	{
+		result = (only || !vsplit || !first);
+	}
+	else
+	{
+		result = 0;
+	}
+	free(loc);
+
+	return var_from_bool(result);
+}
+
+/* Runs the command in shell and returns its output (joined standard output and
+ * standard error streams).  All trailing newline characters are stripped to
+ * allow easy appending to command output.  Returns the output. */
+static var_t
+system_builtin(const call_info_t *call_info)
+{
+	var_t result;
+	char *cmd;
+	FILE *cmd_stream;
+	size_t cmd_out_len;
+	var_val_t var_val;
+
+	cmd = var_to_string(call_info->argv[0]);
+	cmd_stream = read_cmd_output(cmd);
+	free(cmd);
+
+	ui_cancellation_enable();
+	var_val.string = read_nonseekable_stream(cmd_stream, &cmd_out_len);
+	ui_cancellation_disable();
+	fclose(cmd_stream);
+
+	if(var_val.string == NULL)
+	{
+		var_val.string = "";
+		return var_new(VTYPE_STRING, var_val);
+	}
+
+	/* Remove trailing new line characters. */
+	while(cmd_out_len != 0U && var_val.string[cmd_out_len - 1] == '\n')
+	{
+		var_val.string[cmd_out_len - 1] = '\0';
+		--cmd_out_len;
+	}
+
+	result = var_new(VTYPE_STRING, var_val);
+	free(var_val.string);
+	return result;
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

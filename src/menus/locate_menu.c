@@ -23,11 +23,13 @@
 #include <string.h> /* strdup() */
 
 #include "../cfg/config.h"
+#include "../ui/statusbar.h"
+#include "../ui/ui.h"
 #include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
 #include "../macros.h"
-#include "../ui.h"
+#include "../running.h"
 #include "menus.h"
 
 static int execute_locate_cb(FileView *view, menu_info *m);
@@ -35,24 +37,30 @@ static int execute_locate_cb(FileView *view, menu_info *m);
 int
 show_locate_menu(FileView *view, const char args[])
 {
+	enum { M_a, M_u, M_U, };
+
 	char *cmd;
+	char *margs;
 	int save_msg;
-	custom_macro_t macros[] =
-	{
-		{ .letter = 'a', .value = args, .uses_left = 1, .group = -1 },
+	custom_macro_t macros[] = {
+		[M_a] = { .letter = 'a', .value = args, .uses_left = 1, .group = -1 },
+
+		[M_u] = { .letter = 'u', .value = "",   .uses_left = 1, .group = -1 },
+		[M_U] = { .letter = 'U', .value = "",   .uses_left = 1, .group = -1 },
 	};
 
 	static menu_info m;
-	init_menu_info(&m, LOCATE_MENU, strdup("No files found"));
-	m.args = (args[0] == '-') ? strdup(args) : escape_filename(args, 0);
-	m.title = format_str(" Locate %s ", m.args);
+	margs = (args[0] == '-') ? strdup(args) : shell_like_escape(args, 0);
+	init_menu_info(&m, format_str("Locate %s", margs), strdup("No files found"));
+	m.args = margs;
 	m.execute_handler = &execute_locate_cb;
 	m.key_handler = &filelist_khandler;
 
-	status_bar_message("locate...");
-
 	cmd = expand_custom_macros(cfg.locate_prg, ARRAY_LEN(macros), macros);
-	save_msg = capture_output_to_menu(view, cmd, &m);
+
+	status_bar_message("locate...");
+	save_msg = capture_output(view, cmd, 0, &m, macros[M_u].explicit_use,
+			macros[M_U].explicit_use);
 	free(cmd);
 
 	return save_msg;
@@ -63,9 +71,9 @@ show_locate_menu(FileView *view, const char args[])
 static int
 execute_locate_cb(FileView *view, menu_info *m)
 {
-	goto_selected_file(view, m->items[m->pos], 0);
+	(void)goto_selected_file(view, m->items[m->pos], 0);
 	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -22,16 +22,17 @@
 #include <assert.h> /* assert() */
 #include <stddef.h> /* NULL size_t wchar_t */
 #include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* malloc() free() */
+#include <stdlib.h> /* free() */
 #include <string.h> /* strdup() strlen() */
 #include <wchar.h> /* wcscmp() */
 
+#include "../compat/reallocarray.h"
 #include "../engine/cmds.h"
 #include "../modes/menu.h"
+#include "../ui/ui.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
-#include "../commands.h"
-#include "../ui.h"
+#include "../cmd_core.h"
 #include "menus.h"
 
 /* Minimal length of command name column. */
@@ -45,14 +46,13 @@ show_commands_menu(FileView *view)
 {
 	char **list;
 	int i;
-	int cmdname_width = CMDNAME_COLUMN_MIN_WIDTH;
+	size_t cmdname_width = CMDNAME_COLUMN_MIN_WIDTH;
 
 	static menu_info m;
-	init_menu_info(&m, COMMANDS_MENU, strdup("No commands set"));
+	init_menu_info(&m, strdup("Command ------ Action"),
+			strdup("No commands set"));
 	m.execute_handler = &execute_commands_cb;
 	m.key_handler = &commands_khandler;
-
-	m.title = strdup(" Command ------ Action ");
 
 	list = list_udf();
 
@@ -65,15 +65,16 @@ show_commands_menu(FileView *view)
 			cmdname_width = cmdname_len;
 		}
 
-		m.len++;
+		++m.len;
 		assert(list[m.len] != NULL && "Broken list of user-defined commands.");
 	}
 	m.len /= 2;
 
-	m.items = (m.len != 0) ? malloc(sizeof(char *)*m.len) : NULL;
+	m.items = (m.len != 0) ? reallocarray(NULL, m.len, sizeof(char *)) : NULL;
 	for(i = 0; i < m.len; i++)
 	{
-		m.items[i] = format_str("%-*s %s", cmdname_width, list[i*2], list[i*2 + 1]);
+		m.items[i] = format_str("%-*s %s", (int)cmdname_width, list[i*2],
+				list[i*2 + 1]);
 	}
 
 	free_string_array(list, m.len*2);
@@ -87,7 +88,7 @@ static int
 execute_commands_cb(FileView *view, menu_info *m)
 {
 	break_at(m->items[m->pos], ' ');
-	exec_command(m->items[m->pos], view, GET_COMMAND);
+	exec_command(m->items[m->pos], view, CIT_COMMAND);
 	return 0;
 }
 
@@ -96,7 +97,7 @@ execute_commands_cb(FileView *view, menu_info *m)
 static KHandlerResponse
 commands_khandler(menu_info *m, const wchar_t keys[])
 {
-	if(wcscmp(keys, L"dd") == 0) /* remove element */
+	if(wcscmp(keys, L"dd") == 0) /* Remove element. */
 	{
 		char cmd_buf[512];
 
@@ -111,4 +112,4 @@ commands_khandler(menu_info *m, const wchar_t keys[])
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

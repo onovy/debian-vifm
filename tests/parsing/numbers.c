@@ -1,4 +1,4 @@
-#include "seatest.h"
+#include <stic.h>
 
 #include <stdlib.h> /* free() */
 
@@ -7,20 +7,12 @@
 
 #include "asserts.h"
 
-static void
-setup(void)
-{
-	init_parser(NULL);
-}
-
-static void
-test_negative_number_ok(void)
+TEST(negative_number_ok)
 {
 	ASSERT_OK("-1", "-1");
 }
 
-static void
-test_multiple_negations_ok(void)
+TEST(multiple_negations_ok)
 {
 	ASSERT_OK("--1", "1");
 	ASSERT_OK("---1", "-1");
@@ -28,32 +20,28 @@ test_multiple_negations_ok(void)
 	ASSERT_OK("-----1", "-1");
 }
 
-static void
-test_spaces_betwen_signs_ok(void)
+TEST(spaces_betwen_signs_ok)
 {
 	ASSERT_OK("--- 1", "-1");
 	ASSERT_OK("- - + 1", "1");
 	ASSERT_OK(" ++ + 1", "1");
 }
 
-static void
-test_zero_ok(void)
+TEST(zero_ok)
 {
 	ASSERT_OK("0", "0");
 	ASSERT_OK("-0", "0");
 	ASSERT_OK("+0", "0");
 }
 
-static void
-test_multiple_zeroes_ok(void)
+TEST(multiple_zeroes_ok)
 {
 	ASSERT_OK("00000", "0");
 	ASSERT_OK("-00000", "0");
 	ASSERT_OK("+00000", "0");
 }
 
-static void
-test_positive_number_ok(void)
+TEST(positive_number_ok)
 {
 	ASSERT_OK("12345", "12345");
 	ASSERT_OK("+12", "12");
@@ -61,14 +49,12 @@ test_positive_number_ok(void)
 	ASSERT_OK("+++12", "12");
 }
 
-static void
-test_leading_zeroes_ok(void)
+TEST(leading_zeroes_ok)
 {
 	ASSERT_OK("0123456", "123456");
 }
 
-static void
-test_single_signs_fail(void)
+TEST(single_signs_fail)
 {
 	ASSERT_FAIL("-", PE_INVALID_EXPRESSION);
 	ASSERT_FAIL("--", PE_INVALID_EXPRESSION);
@@ -78,36 +64,18 @@ test_single_signs_fail(void)
 	ASSERT_FAIL("+ -", PE_INVALID_EXPRESSION);
 }
 
-static void
-test_string_is_converted_for_signs(void)
+TEST(string_is_converted_for_signs)
 {
 	ASSERT_OK("-'a'", "0");
 	ASSERT_OK("+'a'", "0");
 	ASSERT_OK("-'1'", "-1");
+	ASSERT_OK("-'0'", "0");
+	ASSERT_OK("-''", "0");
 	ASSERT_OK("-'-1'", "1");
 	ASSERT_OK("-'--1'", "0");
 	ASSERT_OK("+'10'", "10");
-}
-
-void
-numbers_tests(void)
-{
-	test_fixture_start();
-
-	fixture_setup(&setup);
-
-	run_test(test_negative_number_ok);
-	run_test(test_multiple_negations_ok);
-	run_test(test_spaces_betwen_signs_ok);
-	run_test(test_zero_ok);
-	run_test(test_multiple_zeroes_ok);
-	run_test(test_positive_number_ok);
-	run_test(test_leading_zeroes_ok);
-	run_test(test_single_signs_fail);
-	run_test(test_string_is_converted_for_signs);
-
-	test_fixture_end();
+	ASSERT_OK("+'-100'", "-100");
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

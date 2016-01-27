@@ -40,7 +40,8 @@ read_line(FILE *fp, char buf[])
 		const int eol = (part_len > 0) && (part_buf[part_len - 1] == '\n');
 		const size_t new_len = len + (part_len - eol);
 
-		if((last_allocated_block = realloc(buf, new_len + 1)) == NULL)
+		last_allocated_block = realloc(buf, new_len + 1);
+		if(last_allocated_block == NULL)
 		{
 			break;
 		}
@@ -117,4 +118,4 @@ get_char(FILE *fp)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

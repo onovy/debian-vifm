@@ -21,9 +21,13 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <shellapi.h>
+
+#include "utils/utf8.h"
 #endif
 
-#include <sys/stat.h> /* gid_t uid_t lstat() stat() */
+#include <curses.h> /* noraw() raw() */
+
+#include <sys/stat.h> /* gid_t uid_t */
 
 #include <assert.h> /* assert() */
 #include <stddef.h> /* NULL size_t */
@@ -32,26 +36,38 @@
 #include <string.h> /* strdup() */
 
 #include "cfg/config.h"
+#include "compat/fs_limits.h"
+#include "compat/os.h"
 #include "io/ioeta.h"
 #include "io/iop.h"
 #include "io/ior.h"
-#include "menus/menus.h"
+#include "modes/dialogs/msg_dialog.h"
+#include "ui/cancellation.h"
 #include "utils/fs.h"
-#include "utils/fs_limits.h"
 #include "utils/log.h"
 #include "utils/macros.h"
 #include "utils/path.h"
+#include "utils/str.h"
 #include "utils/utils.h"
 #include "background.h"
+#include "bmarks.h"
 #include "status.h"
 #include "trash.h"
 #include "undo.h"
 
 #ifdef SUPPORT_NO_CLOBBER
 #define NO_CLOBBER "-n"
-#else /* SUPPORT_NO_CLOBBER */
+#else
 #define NO_CLOBBER ""
-#endif /* SUPPORT_NO_CLOBBER */
+#endif
+
+/* Enable O(1) file cloning if it's available in installed version of
+ * coreutils. */
+#ifdef SUPPORT_REFLINK_AUTO
+#define REFLINK_AUTO "--reflink=auto"
+#else
+#define REFLINK_AUTO ""
+#endif
 
 #ifdef GNU_TOOLCHAIN
 #define PRESERVE_FLAGS "--preserve=mode,timestamps"
@@ -67,6 +83,9 @@ typedef enum
 	CA_APPEND,    /* Append the rest of source file to destination file. */
 }
 ConflictAction;
+
+/* Type of function that implements single operation. */
+typedef int (*op_func)(ops_t *ops, void *data, const char *src, const char *dst);
 
 static int op_none(ops_t *ops, void *data, const char *src, const char *dst);
 static int op_remove(ops_t *ops, void *data, const char *src, const char *dst);
@@ -98,48 +117,59 @@ static int op_rmdir(ops_t *ops, void *data, const char *src, const char *dst);
 static int op_mkfile(ops_t *ops, void *data, const char *src, const char *dst);
 static int exec_io_op(ops_t *ops, int (*func)(io_args_t *const),
 		io_args_t *const args);
+static int confirm_overwrite(io_args_t *args, const char src[],
+		const char dst[]);
+static char * pretty_dir_path(const char path[]);
+static IoErrCbResult dispatch_error(io_args_t *args, const ioe_err_t *err);
+static char prompt_user(const io_args_t *args, const char title[],
+		const char msg[], const response_variant variants[]);
 
-typedef int (*op_func)(ops_t *ops, void *data, const char *src, const char *dst);
-
+/* List of functions that implement operations. */
 static op_func op_funcs[] = {
-	op_none,     /* OP_NONE */
-	op_none,     /* OP_USR */
-	op_remove,   /* OP_REMOVE */
-	op_removesl, /* OP_REMOVESL */
-	op_copy,     /* OP_COPY */
-	op_copyf,    /* OP_COPYF */
-	op_copya,    /* OP_COPYA */
-	op_move,     /* OP_MOVE */
-	op_movef,    /* OP_MOVEF */
-	op_movea,    /* OP_MOVEA */
-	op_move,     /* OP_MOVETMP1 */
-	op_move,     /* OP_MOVETMP2 */
-	op_move,     /* OP_MOVETMP3 */
-	op_move,     /* OP_MOVETMP4 */
-	op_chown,    /* OP_CHOWN */
-	op_chgrp,    /* OP_CHGRP */
+	[OP_NONE]     = &op_none,
+	[OP_USR]      = &op_none,
+	[OP_REMOVE]   = &op_remove,
+	[OP_REMOVESL] = &op_removesl,
+	[OP_COPY]     = &op_copy,
+	[OP_COPYF]    = &op_copyf,
+	[OP_COPYA]    = &op_copya,
+	[OP_MOVE]     = &op_move,
+	[OP_MOVEF]    = &op_movef,
+	[OP_MOVEA]    = &op_movea,
+	[OP_MOVETMP1] = &op_move,
+	[OP_MOVETMP2] = &op_move,
+	[OP_MOVETMP3] = &op_move,
+	[OP_MOVETMP4] = &op_move,
+	[OP_CHOWN]    = &op_chown,
+	[OP_CHGRP]    = &op_chgrp,
 #ifndef _WIN32
-	op_chmod,    /* OP_CHMOD */
-	op_chmodr,   /* OP_CHMODR */
+	[OP_CHMOD]    = &op_chmod,
+	[OP_CHMODR]   = &op_chmodr,
 #else
-	op_addattr,  /* OP_ADDATTR */
-	op_subattr,  /* OP_SUBATTR */
+	[OP_ADDATTR]  = &op_addattr,
+	[OP_SUBATTR]  = &op_subattr,
 #endif
-	op_symlink,  /* OP_SYMLINK */
-	op_symlink,  /* OP_SYMLINK2 */
-	op_mkdir,    /* OP_MKDIR */
-	op_rmdir,    /* OP_RMDIR */
-	op_mkfile,   /* OP_MKFILE */
+	[OP_SYMLINK]  = &op_symlink,
+	[OP_SYMLINK2] = &op_symlink,
+	[OP_MKDIR]    = &op_mkdir,
+	[OP_RMDIR]    = &op_rmdir,
+	[OP_MKFILE]   = &op_mkfile,
 };
 ARRAY_GUARD(op_funcs, OP_COUNT);
 
+/* Operation that is processed at the moment. */
+static ops_t *curr_ops;
+
 ops_t *
-ops_alloc(OPS main_op, const char descr[], const char base_dir[])
+ops_alloc(OPS main_op, int bg, const char descr[], const char base_dir[],
+		const char target_dir[])
 {
 	ops_t *const ops = calloc(1, sizeof(*ops));
 	ops->main_op = main_op;
 	ops->descr = descr;
 	ops->base_dir = strdup(base_dir);
+	ops->target_dir = strdup(target_dir);
+	ops->bg = bg;
 	return ops;
 }
 
@@ -196,9 +226,7 @@ ops_enqueue(ops_t *ops, const char src[], const char dst[])
 		}
 	}
 
-	ui_cancellation_enable();
 	ioeta_calculate(ops->estim, src, ops->shallow_eta);
-	ui_cancellation_disable();
 }
 
 void
@@ -222,7 +250,9 @@ ops_free(ops_t *ops)
 	}
 
 	ioeta_free(ops->estim);
+	free(ops->errors);
 	free(ops->base_dir);
+	free(ops->target_dir);
 	free(ops);
 }
 
@@ -242,11 +272,11 @@ op_none(ops_t *ops, void *data, const char *src, const char *dst)
 static int
 op_remove(ops_t *ops, void *data, const char *src, const char *dst)
 {
-	if(cfg.confirm && !curr_stats.confirmed)
+	if(cfg.confirm && !curr_stats.confirmed && (ops == NULL || !ops->bg))
 	{
-		curr_stats.confirmed = query_user_menu("Permanent deletion",
-				"Are you sure? If you undoing a command and want to see file names, "
-				"use :undolist! command");
+		curr_stats.confirmed = prompt_msg("Permanent deletion",
+				"Are you sure?  If you're undoing a command and want to see file "
+				"names, use :undolist! command");
 		if(!curr_stats.confirmed)
 			return SKIP_UNDO_REDO_OPERATION;
 	}
@@ -257,6 +287,33 @@ op_remove(ops_t *ops, void *data, const char *src, const char *dst)
 static int
 op_removesl(ops_t *ops, void *data, const char *src, const char *dst)
 {
+	if(cfg.delete_prg[0] != '\0')
+	{
+#ifndef _WIN32
+		char *escaped;
+		char cmd[2*PATH_MAX + 1];
+		const int cancellable = (data == NULL);
+
+		escaped = shell_like_escape(src, 0);
+		if(escaped == NULL)
+		{
+			return -1;
+		}
+
+		snprintf(cmd, sizeof(cmd), "%s %s", cfg.delete_prg, escaped);
+		free(escaped);
+
+		LOG_INFO_MSG("Running trash command: \"%s\"", cmd);
+		return background_and_wait_for_errors(cmd, cancellable);
+#else
+		char cmd[PATH_MAX*2 + 1];
+		snprintf(cmd, sizeof(cmd), "%s \"%s\"", cfg.delete_prg, src);
+		to_back_slash(cmd);
+
+		return os_system(cmd);
+#endif
+	}
+
 	if(!cfg.use_system_calls)
 	{
 #ifndef _WIN32
@@ -265,7 +322,7 @@ op_removesl(ops_t *ops, void *data, const char *src, const char *dst)
 		int result;
 		const int cancellable = data == NULL;
 
-		escaped = escape_filename(src, 0);
+		escaped = shell_like_escape(src, 0);
 		if(escaped == NULL)
 			return -1;
 
@@ -278,40 +335,51 @@ op_removesl(ops_t *ops, void *data, const char *src, const char *dst)
 #else
 		if(is_dir(src))
 		{
-			char buf[PATH_MAX];
+			char path[PATH_MAX];
 			int err;
-			int i;
-			snprintf(buf, sizeof(buf), "%s%c", src, '\0');
-			for(i = 0; buf[i] != '\0'; i++)
-				if(buf[i] == '/')
-					buf[i] = '\\';
-			SHFILEOPSTRUCTA fo = {
+
+			copy_str(path, sizeof(path), src);
+			to_back_slash(path);
+
+			wchar_t *const utf16_path = utf8_to_utf16(path);
+
+			SHFILEOPSTRUCTW fo = {
 				.hwnd = NULL,
 				.wFunc = FO_DELETE,
-				.pFrom = buf,
+				.pFrom = utf16_path,
 				.pTo = NULL,
 				.fFlags = FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI,
 			};
-			err = SHFileOperation(&fo);
+			err = SHFileOperationW(&fo);
+
 			log_msg("Error: %d", err);
+			free(utf16_path);
+
 			return err;
 		}
 		else
 		{
 			int ok;
-			DWORD attributes = GetFileAttributesA(src);
+			wchar_t *const utf16_path = utf8_to_utf16(src);
+			DWORD attributes = GetFileAttributesW(utf16_path);
 			if(attributes & FILE_ATTRIBUTE_READONLY)
-				SetFileAttributesA(src, attributes & ~FILE_ATTRIBUTE_READONLY);
-			ok = DeleteFile(src);
+			{
+				SetFileAttributesW(utf16_path, attributes & ~FILE_ATTRIBUTE_READONLY);
+			}
+
+			ok = DeleteFileW(utf16_path);
 			if(!ok)
+			{
 				LOG_WERROR(GetLastError());
+			}
+
+			free(utf16_path);
 			return !ok;
 		}
 #endif
 	}
 
-	io_args_t args =
-	{
+	io_args_t args = {
 		.arg1.path = src,
 
 		.cancellable = data == NULL,
@@ -356,10 +424,10 @@ op_cp(ops_t *ops, void *data, const char src[], const char dst[],
 		char *escaped_src, *escaped_dst;
 		char cmd[6 + PATH_MAX*2 + 1];
 		int result;
-		const int cancellable = data == NULL;
+		const int cancellable = (data == NULL);
 
-		escaped_src = escape_filename(src, 0);
-		escaped_dst = escape_filename(dst, 0);
+		escaped_src = shell_like_escape(src, 0);
+		escaped_dst = shell_like_escape(dst, 0);
 		if(escaped_src == NULL || escaped_dst == NULL)
 		{
 			free(escaped_dst);
@@ -368,8 +436,9 @@ op_cp(ops_t *ops, void *data, const char src[], const char dst[],
 		}
 
 		snprintf(cmd, sizeof(cmd),
-				"cp %s -R " PRESERVE_FLAGS " %s %s",
+				"cp %s %s -R " PRESERVE_FLAGS " %s %s",
 				(conflict_action == CA_FAIL) ? NO_CLOBBER : "",
+				cfg.fast_file_cloning ? REFLINK_AUTO : "",
 				escaped_src, escaped_dst);
 		LOG_INFO_MSG("Running cp command: \"%s\"", cmd);
 		result = background_and_wait_for_errors(cmd, cancellable);
@@ -393,22 +462,26 @@ op_cp(ops_t *ops, void *data, const char src[], const char dst[],
 				strcat(cmd, "/Y ");
 			}
 			strcat(cmd, "/E /I /H /R > NUL");
-			ret = system(cmd);
+			ret = os_system(cmd);
 		}
 		else
 		{
-			ret = (CopyFileA(src, dst, 0) == 0);
+			wchar_t *const utf16_src = utf8_to_utf16(src);
+			wchar_t *const utf16_dst = utf8_to_utf16(dst);
+			ret = (CopyFileW(utf16_src, utf16_dst, 0) == 0);
+			free(utf16_dst);
+			free(utf16_src);
 		}
 
 		return ret;
 #endif
 	}
 
-	io_args_t args =
-	{
+	io_args_t args = {
 		.arg1.src = src,
 		.arg2.dst = dst,
 		.arg3.crs = ca_to_crs(conflict_action),
+		.arg4.fast_file_cloning = cfg.fast_file_cloning,
 
 		.cancellable = data == NULL,
 	};
@@ -456,13 +529,14 @@ op_mv(ops_t *ops, void *data, const char src[], const char dst[],
 		char cmd[6 + PATH_MAX*2 + 1];
 		const int cancellable = data == NULL;
 
-		if(conflict_action == CA_FAIL && lstat(dst, &st) == 0)
+		if(conflict_action == CA_FAIL && os_lstat(dst, &st) == 0 &&
+				!is_case_change(src, dst))
 		{
 			return -1;
 		}
 
-		escaped_src = escape_filename(src, 0);
-		escaped_dst = escape_filename(dst, 0);
+		escaped_src = shell_like_escape(src, 0);
+		escaped_dst = shell_like_escape(dst, 0);
 		if(escaped_src == NULL || escaped_dst == NULL)
 		{
 			free(escaped_dst);
@@ -483,7 +557,14 @@ op_mv(ops_t *ops, void *data, const char src[], const char dst[],
 			return result;
 		}
 #else
-		BOOL ret = MoveFile(src, dst);
+		wchar_t *const utf16_src = utf8_to_utf16(src);
+		wchar_t *const utf16_dst = utf8_to_utf16(dst);
+
+		BOOL ret = MoveFileW(utf16_src, utf16_dst);
+
+		free(utf16_src);
+		free(utf16_dst);
+
 		if(!ret && GetLastError() == 5)
 		{
 			const int r = op_cp(ops, data, src, dst, conflict_action);
@@ -498,11 +579,12 @@ op_mv(ops_t *ops, void *data, const char src[], const char dst[],
 	}
 	else
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.src = src,
 			.arg2.dst = dst,
 			.arg3.crs = ca_to_crs(conflict_action),
+			/* It's safe to always use fast file cloning on moving files. */
+			.arg4.fast_file_cloning = 1,
 
 			.cancellable = data == NULL,
 		};
@@ -511,14 +593,8 @@ op_mv(ops_t *ops, void *data, const char src[], const char dst[],
 
 	if(result == 0)
 	{
-		if(is_under_trash(dst))
-		{
-			add_to_trash(src, dst);
-		}
-		else if(is_under_trash(src))
-		{
-			remove_from_trash(src);
-		}
+		trash_file_moved(src, dst);
+		bmarks_file_moved(src, dst);
 	}
 
 	return result;
@@ -547,7 +623,7 @@ op_chown(ops_t *ops, void *data, const char *src, const char *dst)
 	char *escaped;
 	uid_t uid = (uid_t)(long)data;
 
-	escaped = escape_filename(src, 0);
+	escaped = shell_like_escape(src, 0);
 	snprintf(cmd, sizeof(cmd), "chown -fR %u %s", uid, escaped);
 	free(escaped);
 
@@ -566,7 +642,7 @@ op_chgrp(ops_t *ops, void *data, const char *src, const char *dst)
 	char *escaped;
 	gid_t gid = (gid_t)(long)data;
 
-	escaped = escape_filename(src, 0);
+	escaped = shell_like_escape(src, 0);
 	snprintf(cmd, sizeof(cmd), "chown -fR :%u %s", gid, escaped);
 	free(escaped);
 
@@ -584,7 +660,7 @@ op_chmod(ops_t *ops, void *data, const char *src, const char *dst)
 	char cmd[128 + PATH_MAX];
 	char *escaped;
 
-	escaped = escape_filename(src, 0);
+	escaped = shell_like_escape(src, 0);
 	snprintf(cmd, sizeof(cmd), "chmod %s %s", (char *)data, escaped);
 	free(escaped);
 
@@ -598,7 +674,7 @@ op_chmodr(ops_t *ops, void *data, const char *src, const char *dst)
 	char cmd[128 + PATH_MAX];
 	char *escaped;
 
-	escaped = escape_filename(src, 0);
+	escaped = shell_like_escape(src, 0);
 	snprintf(cmd, sizeof(cmd), "chmod -R %s %s", (char *)data, escaped);
 	free(escaped);
 	start_background_job(cmd, 0);
@@ -609,17 +685,21 @@ static int
 op_addattr(ops_t *ops, void *data, const char *src, const char *dst)
 {
 	const DWORD add_mask = (size_t)data;
-	const DWORD attrs = GetFileAttributesA(src);
+	wchar_t *const utf16_path = utf8_to_utf16(src);
+	const DWORD attrs = GetFileAttributesW(utf16_path);
 	if(attrs == INVALID_FILE_ATTRIBUTES)
 	{
+		free(utf16_path);
 		LOG_WERROR(GetLastError());
 		return -1;
 	}
-	if(!SetFileAttributesA(src, attrs | add_mask))
+	if(!SetFileAttributesW(utf16_path, attrs | add_mask))
 	{
+		free(utf16_path);
 		LOG_WERROR(GetLastError());
 		return -1;
 	}
+	free(utf16_path);
 	return 0;
 }
 
@@ -627,17 +707,21 @@ static int
 op_subattr(ops_t *ops, void *data, const char *src, const char *dst)
 {
 	const DWORD sub_mask = (size_t)data;
-	const DWORD attrs = GetFileAttributesA(src);
+	wchar_t *const utf16_path = utf8_to_utf16(src);
+	const DWORD attrs = GetFileAttributesW(utf16_path);
 	if(attrs == INVALID_FILE_ATTRIBUTES)
 	{
+		free(utf16_path);
 		LOG_WERROR(GetLastError());
 		return -1;
 	}
-	if(!SetFileAttributesA(src, attrs & ~sub_mask))
+	if(!SetFileAttributesW(utf16_path, attrs & ~sub_mask))
 	{
+		free(utf16_path);
 		LOG_WERROR(GetLastError());
 		return -1;
 	}
+	free(utf16_path);
 	return 0;
 }
 #endif
@@ -651,11 +735,11 @@ op_symlink(ops_t *ops, void *data, const char *src, const char *dst)
 		char cmd[6 + PATH_MAX*2 + 1];
 		int result;
 #ifdef _WIN32
-		char buf[PATH_MAX + 2];
+		char exe_dir[PATH_MAX + 2];
 #endif
 
-		escaped_src = escape_filename(src, 0);
-		escaped_dst = escape_filename(dst, 0);
+		escaped_src = shell_like_escape(src, 0);
+		escaped_dst = shell_like_escape(dst, 0);
 		if(escaped_src == NULL || escaped_dst == NULL)
 		{
 			free(escaped_dst);
@@ -668,17 +752,16 @@ op_symlink(ops_t *ops, void *data, const char *src, const char *dst)
 		LOG_INFO_MSG("Running ln command: \"%s\"", cmd);
 		result = background_and_wait_for_errors(cmd, 1);
 #else
-		if(GetModuleFileNameA(NULL, buf, ARRAY_LEN(buf)) == 0)
+		if(get_exe_dir(exe_dir, ARRAY_LEN(exe_dir)) != 0)
 		{
 			free(escaped_dst);
 			free(escaped_src);
 			return -1;
 		}
 
-		*strrchr(buf, '\\') = '\0';
-		snprintf(cmd, sizeof(cmd), "%s\\win_helper -s %s %s", buf, escaped_src,
+		snprintf(cmd, sizeof(cmd), "%s\\win_helper -s %s %s", exe_dir, escaped_src,
 				escaped_dst);
-		result = system(cmd);
+		result = os_system(cmd);
 #endif
 
 		free(escaped_dst);
@@ -686,8 +769,7 @@ op_symlink(ops_t *ops, void *data, const char *src, const char *dst)
 		return result;
 	}
 
-	io_args_t args =
-	{
+	io_args_t args = {
 		.arg1.path = src,
 		.arg2.target = dst,
 		.arg3.crs = IO_CRS_REPLACE_FILES,
@@ -704,7 +786,7 @@ op_mkdir(ops_t *ops, void *data, const char *src, const char *dst)
 		char cmd[128 + PATH_MAX];
 		char *escaped;
 
-		escaped = escape_filename(src, 0);
+		escaped = shell_like_escape(src, 0);
 		snprintf(cmd, sizeof(cmd), "mkdir %s %s", (data == NULL) ? "" : "-p",
 				escaped);
 		free(escaped);
@@ -713,40 +795,38 @@ op_mkdir(ops_t *ops, void *data, const char *src, const char *dst)
 #else
 		if(data == NULL)
 		{
-			return CreateDirectory(src, NULL) == 0;
+			wchar_t *const utf16_path = utf8_to_utf16(src);
+			int r = CreateDirectoryW(utf16_path, NULL) == 0;
+			free(utf16_path);
+			return r;
 		}
 		else
 		{
-			char *p;
-			char t;
+			char *const partial_path = strdup(src);
+			char *part = partial_path + (is_path_absolute(src) ? 2 : 0);
+			char *state = NULL;
 
-			p = strchr(src + 2, '/');
-			do
+			while((part = split_and_get(part, '/', &state)) != NULL)
 			{
-				t = *p;
-				*p = '\0';
-
-				if(!is_dir(src))
+				if(!is_dir(partial_path))
 				{
-					if(!CreateDirectory(src, NULL))
+					wchar_t *const utf16_path = utf8_to_utf16(partial_path);
+					if(!CreateDirectoryW(utf16_path, NULL))
 					{
-						*p = t;
+						free(utf16_path);
+						free(partial_path);
 						return -1;
 					}
+					free(utf16_path);
 				}
-
-				*p = t;
-				if((p = strchr(p + 1, '/')) == NULL)
-					p = (char *)src + strlen(src);
 			}
-			while(t != '\0');
+			free(partial_path);
 			return 0;
 		}
 #endif
 	}
 
-	io_args_t args =
-	{
+	io_args_t args = {
 		.arg1.path = src,
 		.arg2.process_parents = data != NULL,
 		.arg3.mode = 0755,
@@ -763,18 +843,20 @@ op_rmdir(ops_t *ops, void *data, const char *src, const char *dst)
 		char cmd[128 + PATH_MAX];
 		char *escaped;
 
-		escaped = escape_filename(src, 0);
+		escaped = shell_like_escape(src, 0);
 		snprintf(cmd, sizeof(cmd), "rmdir %s", escaped);
 		free(escaped);
 		LOG_INFO_MSG("Running rmdir command: \"%s\"", cmd);
 		return background_and_wait_for_errors(cmd, 1);
 #else
-		return RemoveDirectory(src) == 0;
+		wchar_t *const utf16_path = utf8_to_utf16(src);
+		const BOOL r = RemoveDirectoryW(utf16_path);
+		free(utf16_path);
+		return r == FALSE;
 #endif
 	}
 
-	io_args_t args =
-	{
+	io_args_t args = {
 		.arg1.path = src,
 	};
 	return exec_io_op(ops, &iop_rmdir, &args);
@@ -789,7 +871,7 @@ op_mkfile(ops_t *ops, void *data, const char *src, const char *dst)
 		char cmd[128 + PATH_MAX];
 		char *escaped;
 
-		escaped = escape_filename(src, 0);
+		escaped = shell_like_escape(src, 0);
 		snprintf(cmd, sizeof(cmd), "touch %s", escaped);
 		free(escaped);
 		LOG_INFO_MSG("Running touch command: \"%s\"", cmd);
@@ -797,18 +879,21 @@ op_mkfile(ops_t *ops, void *data, const char *src, const char *dst)
 #else
 		HANDLE hfile;
 
-		hfile = CreateFileA(src, 0, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL,
-				NULL);
+		wchar_t *const utf16_path = utf8_to_utf16(src);
+		hfile = CreateFileW(utf16_path, 0, 0, NULL, CREATE_NEW,
+				FILE_ATTRIBUTE_NORMAL, NULL);
+		free(utf16_path);
 		if(hfile == INVALID_HANDLE_VALUE)
+		{
 			return -1;
+		}
 
 		CloseHandle(hfile);
 		return 0;
 #endif
 	}
 
-	io_args_t args =
-	{
+	io_args_t args = {
 		.arg1.path = src,
 	};
 	return exec_io_op(ops, &iop_mkfile, &args);
@@ -823,20 +908,181 @@ exec_io_op(ops_t *ops, int (*func)(io_args_t *const), io_args_t *const args)
 
 	args->estim = (ops == NULL) ? NULL : ops->estim;
 
+	if(ops != NULL)
+	{
+		if(!ops->bg)
+		{
+			args->confirm = &confirm_overwrite;
+			args->result.errors_cb = &dispatch_error;
+		}
+
+		ioe_errlst_init(&args->result.errors);
+	}
+
 	if(args->cancellable)
 	{
 		ui_cancellation_enable();
 	}
 
+	curr_ops = ops;
 	result = func(args);
+	curr_ops = NULL;
 
 	if(args->cancellable)
 	{
 		ui_cancellation_disable();
 	}
 
+	if(ops != NULL)
+	{
+		size_t len = (ops->errors == NULL) ? 0U : strlen(ops->errors);
+		char *const suffix = ioe_errlst_to_str(&args->result.errors);
+
+		(void)strappend(&ops->errors, &len, suffix);
+
+		free(suffix);
+		ioe_errlst_free(&args->result.errors);
+	}
+
 	return result;
 }
 
+/* Asks user to confirm file overwrite.  Returns non-zero on positive user
+ * answer, otherwise zero is returned. */
+static int
+confirm_overwrite(io_args_t *args, const char src[], const char dst[])
+{
+	/* TODO: think about adding "append" and "rename" options here. */
+	static const response_variant responses[] = {
+		{ .key = 'y', .descr = "[y]es", },
+		{ .key = 'Y', .descr = "[Y]es for all", },
+		{ .key = 'n', .descr = "[n]o", },
+		{ .key = 'N', .descr = "[N]o for all", },
+		{ },
+	};
+
+	char *title;
+	char *msg;
+	char response;
+	char *src_dir, *dst_dir;
+	const char *fname = get_last_path_component(dst);
+
+	if(curr_ops->crp != CRP_ASK)
+	{
+		return (curr_ops->crp == CRP_OVERWRITE_ALL) ? 1 : 0;
+	}
+
+	src_dir = pretty_dir_path(src);
+	dst_dir = pretty_dir_path(dst);
+
+	title = format_str("File overwrite while %s", curr_ops->descr);
+	msg = format_str("Overwrite \"%s\" in\n%s\nwith \"%s\" from\n%s\n?", fname,
+			dst_dir, fname, src_dir);
+
+	free(dst_dir);
+	free(src_dir);
+
+	response = prompt_user(args, title, msg, responses);
+
+	free(msg);
+	free(title);
+
+	switch(response)
+	{
+		case 'Y': curr_ops->crp = CRP_OVERWRITE_ALL; /* Fall through. */
+		case 'y': return 1;
+
+		case 'N': curr_ops->crp = CRP_SKIP_ALL; /* Fall through. */
+		case 'n': return 0;
+
+		default:
+			assert(0 && "Unexpected response.");
+			return 0;
+	}
+}
+
+/* Prepares path to presenting to the user.  Returns newly allocated string,
+ * which should be freed by the caller, or NULL if there is not enough
+ * memory. */
+static char *
+pretty_dir_path(const char path[])
+{
+	char dir_only[strlen(path) + 1];
+	char canonic[PATH_MAX];
+
+	copy_str(dir_only, sizeof(dir_only), path);
+	remove_last_path_component(dir_only);
+	canonicalize_path(dir_only, canonic, sizeof(canonic));
+
+	return strdup(canonic);
+}
+
+/* Asks user what to do with encountered error.  Returns the response. */
+static IoErrCbResult
+dispatch_error(io_args_t *args, const ioe_err_t *err)
+{
+	static const response_variant responses[] = {
+		{ .key = 'r', .descr = "[r]etry", },
+		{ .key = 'i', .descr = "[i]gnore", },
+		{ .key = 'I', .descr = "[I]gnore for all", },
+		{ .key = 'a', .descr = "[a]bort", },
+		{ },
+	};
+
+	char *title;
+	char *msg;
+	char response;
+
+	if(curr_ops->erp == ERP_IGNORE_ALL)
+	{
+		return IO_ECR_IGNORE;
+	}
+
+	title = format_str("Error while %s", curr_ops->descr);
+	msg = format_str("%s: %s", replace_home_part(err->path), err->msg);
+
+	response = prompt_user(args, title, msg, responses);
+
+	free(msg);
+	free(title);
+
+	switch(response)
+	{
+		case 'r': return IO_ECR_RETRY;
+
+		case 'I': curr_ops->erp = ERP_IGNORE_ALL; /* Fall through. */
+		case 'i': return IO_ECR_IGNORE;
+
+		case 'a': return IO_ECR_BREAK;
+
+		default:
+			assert(0 && "Unexpected response.");
+			return 0;
+	}
+}
+
+/* prompt_msg_custom() wrapper that takes care of interaction if cancellation is
+ * active. */
+static char
+prompt_user(const io_args_t *args, const char title[], const char msg[],
+		const response_variant variants[])
+{
+	char response;
+
+	/* Active cancellation conflicts with input processing by putting terminal in
+	 * a cooked mode. */
+	if(args->cancellable)
+	{
+		raw();
+	}
+	response = prompt_msg_custom(title, msg, variants);
+	if(args->cancellable)
+	{
+		noraw();
+	}
+
+	return response;
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

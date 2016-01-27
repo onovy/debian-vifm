@@ -1,0 +1,3942 @@
+/* vifm
+ * Copyright (C) 2001 Ken Steen.
+ * Copyright (C) 2011 xaizek.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA
+ */
+
+#include "cmd_handlers.h"
+
+#include <regex.h>
+
+#include <curses.h>
+
+#include <sys/stat.h> /* gid_t uid_t */
+
+#include <assert.h> /* assert() */
+#include <ctype.h> /* isdigit() */
+#include <signal.h>
+#include <stddef.h> /* NULL size_t */
+#include <stdio.h> /* snprintf() */
+#include <stdlib.h> /* EXIT_SUCCESS atoi() free() realloc() */
+#include <string.h> /* strchr() strcmp() strcasecmp() strcpy() strdup() strlen()
+                       strrchr() */
+#include <wctype.h> /* iswspace() */
+#include <wchar.h> /* wcslen() wcsncmp() */
+
+#include "cfg/config.h"
+#include "cfg/hist.h"
+#include "cfg/info.h"
+#include "compat/fs_limits.h"
+#include "compat/os.h"
+#include "engine/abbrevs.h"
+#include "engine/autocmds.h"
+#include "engine/cmds.h"
+#include "engine/keys.h"
+#include "engine/mode.h"
+#include "engine/options.h"
+#include "engine/parsing.h"
+#include "engine/text_buffer.h"
+#include "engine/var.h"
+#include "engine/variables.h"
+#include "int/path_env.h"
+#include "int/vim.h"
+#include "menus/all.h"
+#include "modes/dialogs/attr_dialog.h"
+#include "modes/dialogs/change_dialog.h"
+#include "modes/dialogs/msg_dialog.h"
+#include "modes/dialogs/sort_dialog.h"
+#include "modes/modes.h"
+#include "ui/color_manager.h"
+#include "ui/color_scheme.h"
+#include "ui/colors.h"
+#include "ui/fileview.h"
+#include "ui/quickview.h"
+#include "ui/statusbar.h"
+#include "ui/ui.h"
+#include "utils/env.h"
+#include "utils/filter.h"
+#include "utils/fs.h"
+#include "utils/int_stack.h"
+#include "utils/log.h"
+#include "utils/matcher.h"
+#include "utils/path.h"
+#include "utils/regexp.h"
+#include "utils/str.h"
+#include "utils/string_array.h"
+#include "utils/utils.h"
+#include "background.h"
+#include "bmarks.h"
+#include "bracket_notation.h"
+#include "cmd_completion.h"
+#include "cmd_core.h"
+#include "dir_stack.h"
+#include "filelist.h"
+#include "fileops.h"
+#include "filetype.h"
+#include "filtering.h"
+#include "macros.h"
+#include "marks.h"
+#include "ops.h"
+#include "opt_handlers.h"
+#include "registers.h"
+#include "running.h"
+#include "trash.h"
+#include "undo.h"
+#include "vifm.h"
+
+static int goto_cmd(const cmd_info_t *cmd_info);
+static int emark_cmd(const cmd_info_t *cmd_info);
+static int alink_cmd(const cmd_info_t *cmd_info);
+static int apropos_cmd(const cmd_info_t *cmd_info);
+static int autocmd_cmd(const cmd_info_t *cmd_info);
+static void aucmd_list_cb(const char event[], const char pattern[], int negated,
+		const char action[], void *arg);
+static void aucmd_action_handler(const char action[], void *arg);
+static int bmark_cmd(const cmd_info_t *cmd_info);
+static int bmarks_cmd(const cmd_info_t *cmd_info);
+static int bmgo_cmd(const cmd_info_t *cmd_info);
+static int bmarks_do(const cmd_info_t *cmd_info, int go);
+static char * make_tags_list(const cmd_info_t *cmd_info);
+static char * args_to_csl(const cmd_info_t *cmd_info);
+static int cabbrev_cmd(const cmd_info_t *cmd_info);
+static int cnoreabbrev_cmd(const cmd_info_t *cmd_info);
+static int handle_cabbrevs(const cmd_info_t *cmd_info, int no_remap);
+static int list_abbrevs(const char prefix[]);
+static int add_cabbrev(const cmd_info_t *cmd_info, int no_remap);
+static int cd_cmd(const cmd_info_t *cmd_info);
+static int change_cmd(const cmd_info_t *cmd_info);
+static int chmod_cmd(const cmd_info_t *cmd_info);
+#ifndef _WIN32
+static int chown_cmd(const cmd_info_t *cmd_info);
+#endif
+static int clone_cmd(const cmd_info_t *cmd_info);
+static int cmap_cmd(const cmd_info_t *cmd_info);
+static int cnoremap_cmd(const cmd_info_t *cmd_info);
+static int copy_cmd(const cmd_info_t *cmd_info);
+static int cquit_cmd(const cmd_info_t *cmd_info);
+static int cunabbrev_cmd(const cmd_info_t *cmd_info);
+static int colorscheme_cmd(const cmd_info_t *cmd_info);
+static int command_cmd(const cmd_info_t *cmd_info);
+static int cunmap_cmd(const cmd_info_t *cmd_info);
+static int delete_cmd(const cmd_info_t *cmd_info);
+static int delmarks_cmd(const cmd_info_t *cmd_info);
+static int delbmarks_cmd(const cmd_info_t *cmd_info);
+static void remove_bmark(const char path[], const char tags[], time_t timestamp,
+		void *arg);
+static char * get_bmark_dir(const cmd_info_t *cmd_info);
+static char * make_bmark_path(const char path[]);
+static int dirs_cmd(const cmd_info_t *cmd_info);
+static int echo_cmd(const cmd_info_t *cmd_info);
+static int edit_cmd(const cmd_info_t *cmd_info);
+static int else_cmd(const cmd_info_t *cmd_info);
+static int elseif_cmd(const cmd_info_t *cmd_info);
+static int empty_cmd(const cmd_info_t *cmd_info);
+static int endif_cmd(const cmd_info_t *cmd_info);
+static int exe_cmd(const cmd_info_t *cmd_info);
+static char * try_eval_arglist(const cmd_info_t *cmd_info);
+static int file_cmd(const cmd_info_t *cmd_info);
+static int filetype_cmd(const cmd_info_t *cmd_info);
+static int filextype_cmd(const cmd_info_t *cmd_info);
+static int add_filetype(const cmd_info_t *cmd_info, int for_x);
+static int fileviewer_cmd(const cmd_info_t *cmd_info);
+static int filter_cmd(const cmd_info_t *cmd_info);
+static int update_filter(FileView *view, const cmd_info_t *cmd_info);
+static void display_filters_info(const FileView *view);
+static char * get_filter_info(const char name[], const filter_t *filter);
+static int set_view_filter(FileView *view, const char filter[], int invert,
+		int case_sensitive);
+static const char * get_filter_value(const char filter[]);
+static const char * try_compile_regex(const char regex[], int cflags);
+static int get_filter_inversion_state(const cmd_info_t *cmd_info);
+static int find_cmd(const cmd_info_t *cmd_info);
+static int finish_cmd(const cmd_info_t *cmd_info);
+static int grep_cmd(const cmd_info_t *cmd_info);
+static int help_cmd(const cmd_info_t *cmd_info);
+static int highlight_cmd(const cmd_info_t *cmd_info);
+static int highlight_file(const cmd_info_t *cmd_info);
+static void display_file_highlights(const matcher_t *matcher);
+static int highlight_group(const cmd_info_t *cmd_info);
+static const char * get_all_highlights(void);
+static const char * get_group_str(int group, const col_attr_t *col);
+static const char * get_file_hi_str(const matcher_t *matcher,
+		const col_attr_t *col);
+static const char * get_hi_str(const char title[], const col_attr_t *col);
+static int parse_and_apply_highlight(const cmd_info_t *cmd_info,
+		col_attr_t *color);
+static int try_parse_color_name_value(const char str[], int fg,
+		col_attr_t *color);
+static int parse_color_name_value(const char str[], int fg, int *attr);
+static int get_attrs(const char *text);
+static int history_cmd(const cmd_info_t *cmd_info);
+static int if_cmd(const cmd_info_t *cmd_info);
+static int eval_if_condition(const cmd_info_t *cmd_info);
+static int invert_cmd(const cmd_info_t *cmd_info);
+static void print_inversion_state(char state_type);
+static void invert_state(char state_type);
+static int jobs_cmd(const cmd_info_t *cmd_info);
+static int let_cmd(const cmd_info_t *cmd_info);
+static int locate_cmd(const cmd_info_t *cmd_info);
+static int ls_cmd(const cmd_info_t *cmd_info);
+static int lstrash_cmd(const cmd_info_t *cmd_info);
+static int map_cmd(const cmd_info_t *cmd_info);
+static int mark_cmd(const cmd_info_t *cmd_info);
+static int marks_cmd(const cmd_info_t *cmd_info);
+static int messages_cmd(const cmd_info_t *cmd_info);
+static int mkdir_cmd(const cmd_info_t *cmd_info);
+static int mmap_cmd(const cmd_info_t *cmd_info);
+static int mnoremap_cmd(const cmd_info_t *cmd_info);
+static int move_cmd(const cmd_info_t *cmd_info);
+static int cpmv_cmd(const cmd_info_t *cmd_info, int move);
+static int munmap_cmd(const cmd_info_t *cmd_info);
+static int nmap_cmd(const cmd_info_t *cmd_info);
+static int nnoremap_cmd(const cmd_info_t *cmd_info);
+static int nohlsearch_cmd(const cmd_info_t *cmd_info);
+static int noremap_cmd(const cmd_info_t *cmd_info);
+static int map_or_remap(const cmd_info_t *cmd_info, int no_remap);
+static int normal_cmd(const cmd_info_t *cmd_info);
+static int nunmap_cmd(const cmd_info_t *cmd_info);
+static int only_cmd(const cmd_info_t *cmd_info);
+static int popd_cmd(const cmd_info_t *cmd_info);
+static int pushd_cmd(const cmd_info_t *cmd_info);
+static int put_cmd(const cmd_info_t *cmd_info);
+static int pwd_cmd(const cmd_info_t *cmd_info);
+static int qmap_cmd(const cmd_info_t *cmd_info);
+static int qnoremap_cmd(const cmd_info_t *cmd_info);
+static int qunmap_cmd(const cmd_info_t *cmd_info);
+static int redraw_cmd(const cmd_info_t *cmd_info);
+static int registers_cmd(const cmd_info_t *cmd_info);
+static int rename_cmd(const cmd_info_t *cmd_info);
+static int restart_cmd(const cmd_info_t *cmd_info);
+static int restore_cmd(const cmd_info_t *cmd_info);
+static int rlink_cmd(const cmd_info_t *cmd_info);
+static int link_cmd(const cmd_info_t *cmd_info, int absolute);
+static int screen_cmd(const cmd_info_t *cmd_info);
+static int set_cmd(const cmd_info_t *cmd_info);
+static int setlocal_cmd(const cmd_info_t *cmd_info);
+static int setglobal_cmd(const cmd_info_t *cmd_info);
+static int shell_cmd(const cmd_info_t *cmd_info);
+static int sort_cmd(const cmd_info_t *cmd_info);
+static int source_cmd(const cmd_info_t *cmd_info);
+static int split_cmd(const cmd_info_t *cmd_info);
+static int substitute_cmd(const cmd_info_t *cmd_info);
+static int sync_cmd(const cmd_info_t *cmd_info);
+static int sync_selectively(const cmd_info_t *cmd_info);
+static int parse_sync_properties(const cmd_info_t *cmd_info, int *location,
+		int *cursor_pos, int *local_options, int *filters);
+static void sync_location(const char path[], int sync_cursor_pos,
+		int sync_filters);
+static void sync_local_opts(void);
+static void sync_filters(void);
+static int touch_cmd(const cmd_info_t *cmd_info);
+static int tr_cmd(const cmd_info_t *cmd_info);
+static int trashes_cmd(const cmd_info_t *cmd_info);
+static int undolist_cmd(const cmd_info_t *cmd_info);
+static int unmap_cmd(const cmd_info_t *cmd_info);
+static int unlet_cmd(const cmd_info_t *cmd_info);
+static int view_cmd(const cmd_info_t *cmd_info);
+static int vifm_cmd(const cmd_info_t *cmd_info);
+static int vmap_cmd(const cmd_info_t *cmd_info);
+static int vnoremap_cmd(const cmd_info_t *cmd_info);
+#ifdef _WIN32
+static int volumes_cmd(const cmd_info_t *cmd_info);
+#endif
+static int vsplit_cmd(const cmd_info_t *cmd_info);
+static int do_split(const cmd_info_t *cmd_info, SPLIT orientation);
+static int do_map(const cmd_info_t *cmd_info, const char map_type[], int mode,
+		int no_remap);
+static int vunmap_cmd(const cmd_info_t *cmd_info);
+static int do_unmap(const char *keys, int mode);
+static int wincmd_cmd(const cmd_info_t *cmd_info);
+static int windo_cmd(const cmd_info_t *cmd_info);
+static int winrun_cmd(const cmd_info_t *cmd_info);
+static int winrun(FileView *view, const char cmd[]);
+static int write_cmd(const cmd_info_t *cmd_info);
+static int quit_cmd(const cmd_info_t *cmd_info);
+static int wq_cmd(const cmd_info_t *cmd_info);
+static int yank_cmd(const cmd_info_t *cmd_info);
+static int get_reg_and_count(const cmd_info_t *cmd_info, int *reg);
+static int get_reg(const char arg[], int *reg);
+static int usercmd_cmd(const cmd_info_t* cmd_info);
+static int parse_bg_mark(char cmd[]);
+
+const cmd_add_t cmds_list[] = {
+	{ .name = "",                 .abbr = NULL,    .emark = 0,  .id = COM_GOTO,        .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = goto_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "!",                .abbr = NULL,    .emark = 1,  .id = COM_EXECUTE,     .range = 1,    .bg = 1, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = emark_cmd,       .qmark = 0,      .expand = 5, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "alink",            .abbr = NULL,    .emark = 1,  .id = COM_ALINK,       .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = alink_cmd,       .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "apropos",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = apropos_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "autocmd",          .abbr = "au",    .emark = 1,  .id = COM_AUTOCMD,     .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 0,
+		.handler = autocmd_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "bmark",            .abbr = NULL,    .emark = 1,  .id = COM_BMARKS,      .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = bmark_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "bmarks",           .abbr = NULL,    .emark = 0,  .id = COM_BMARKS,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = bmarks_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "bmgo",             .abbr = NULL,    .emark = 0,  .id = COM_BMARKS,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = bmgo_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "cabbrev",          .abbr = "ca",    .emark = 0,  .id = COM_CABBR,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = cabbrev_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "cnoreabbrev",      .abbr = "cnorea",.emark = 0,  .id = COM_CABBR,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = cnoreabbrev_cmd, .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "cd",               .abbr = NULL,    .emark = 1,  .id = COM_CD,          .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = cd_cmd,          .qmark = 0,      .expand = 3, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 0, },
+	{ .name = "change",           .abbr = "c",     .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = change_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+#ifndef _WIN32
+	{ .name = "chmod",            .abbr = NULL,    .emark = 1,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = chmod_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "chown",            .abbr = NULL,    .emark = 0,  .id = COM_CHOWN,       .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = chown_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 1, },
+#else
+	{ .name = "chmod",            .abbr = NULL,    .emark = 1,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = chmod_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 1, },
+#endif
+	{ .name = "clone",            .abbr = NULL,    .emark = 1,  .id = COM_CLONE,       .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = clone_cmd,       .qmark = 1,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "cmap",             .abbr = "cm",    .emark = 0,  .id = COM_CMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = cmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "cnoremap",         .abbr = "cno",   .emark = 0,  .id = COM_CNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = cnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "colorscheme",      .abbr = "colo",  .emark = 0,  .id = COM_COLORSCHEME, .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = colorscheme_cmd, .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 0, },
+  { .name = "command",          .abbr = "com",   .emark = 1,  .id = COM_COMMAND,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+    .handler = command_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "copy",             .abbr = "co",    .emark = 1,  .id = COM_COPY,        .range = 1,    .bg = 1, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = copy_cmd,        .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "cquit",            .abbr = "cq",    .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = cquit_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "cunabbrev",        .abbr = "cuna",  .emark = 0,  .id = COM_CABBR,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = cunabbrev_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "cunmap",           .abbr = "cu",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = cunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "delete",           .abbr = "d",     .emark = 1,  .id = -1,              .range = 1,    .bg = 1, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = delete_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 1, },
+	{ .name = "delmarks",         .abbr = "delm",  .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = delmarks_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "delbmarks",        .abbr = NULL,    .emark = 1,  .id = COM_DELBMARKS,   .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = delbmarks_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "display",          .abbr = "di",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = registers_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "dirs",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = dirs_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "echo",             .abbr = "ec",    .emark = 0,  .id = COM_ECHO,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = echo_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "edit",             .abbr = "e",     .emark = 0,  .id = COM_EDIT,        .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = edit_cmd,        .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "else",             .abbr = "el",    .emark = 0,  .id = COM_ELSE_STMT,   .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = else_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	/* engine/parsing unit handles comments to resolve parsing ambiguity. */
+	{ .name = "elseif",           .abbr = "elsei", .emark = 0,  .id = COM_ELSEIF_STMT, .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = elseif_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "empty",            .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = empty_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "endif",            .abbr = "en",    .emark = 0,  .id = COM_ENDIF_STMT,  .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = endif_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "execute",          .abbr = "exe",   .emark = 0,  .id = COM_EXE,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = exe_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "exit",             .abbr = "exi",   .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = quit_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "file",             .abbr = "f",     .emark = 0,  .id = COM_FILE,        .range = 0,    .bg = 1, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = file_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "filetype",         .abbr = "filet", .emark = 0,  .id = COM_FILETYPE,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = filetype_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "fileviewer",       .abbr = "filev", .emark = 0,  .id = COM_FILEVIEWER,  .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = fileviewer_cmd,  .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "filextype",        .abbr = "filex", .emark = 0,  .id = COM_FILEXTYPE,   .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = filextype_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "filter",           .abbr = NULL,    .emark = 1,  .id = COM_FILTER,      .range = 0,    .bg = 0, .quote = 1, .regexp = 1, .comment = 0,
+		.handler = filter_cmd,      .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 0, },
+	{ .name = "find",             .abbr = "fin",   .emark = 0,  .id = COM_FIND,        .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 0,
+		.handler = find_cmd,        .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "finish",           .abbr = "fini",  .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = finish_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "grep",             .abbr = "gr",    .emark = 1,  .id = COM_GREP,        .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = grep_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "help",             .abbr = "h",     .emark = 0,  .id = COM_HELP,        .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 0,
+		.handler = help_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "highlight",        .abbr = "hi",    .emark = 0,  .id = COM_HIGHLIGHT,   .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = highlight_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 4,       .select = 0, },
+	{ .name = "history",          .abbr = "his",   .emark = 0,  .id = COM_HISTORY,     .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = history_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	/* engine/parsing unit handles comments to resolve parsing ambiguity. */
+	{ .name = "if",               .abbr = NULL,    .emark = 0,  .id = COM_IF_STMT,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = if_cmd,          .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "invert",           .abbr = NULL,    .emark = 0,  .id = COM_INVERT,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = invert_cmd,      .qmark = 2,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "jobs",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = jobs_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	/* engine/parsing unit handles comments to resolve parsing ambiguity. */
+	{ .name = "let",              .abbr = NULL,    .emark = 0,  .id = COM_LET,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = let_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "locate",           .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = locate_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "ls",               .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = ls_cmd,          .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "lstrash",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = lstrash_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "map",              .abbr = NULL,    .emark = 1,  .id = COM_MAP,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = map_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 2, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "mark",             .abbr = "ma",    .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = mark_cmd,        .qmark = 2,      .expand = 1, .cust_sep = 0,         .min_args = 1, .max_args = 3,       .select = 0, },
+	{ .name = "marks",            .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = marks_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "messages",         .abbr = "mes",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = messages_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "mkdir",            .abbr = NULL,    .emark = 1,  .id = COM_MKDIR,       .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = mkdir_cmd,       .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "mmap",             .abbr = "mm",    .emark = 0,  .id = COM_MMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = mmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "mnoremap",         .abbr = "mno",   .emark = 0,  .id = COM_MNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = mnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "move",             .abbr = "m",     .emark = 1,  .id = COM_MOVE,        .range = 1,    .bg = 1, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = move_cmd,        .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "munmap",           .abbr = "mu",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = munmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "nmap",             .abbr = "nm",    .emark = 0,  .id = COM_NMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = nmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "nnoremap",         .abbr = "nn",    .emark = 0,  .id = COM_NNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = nnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "nohlsearch",       .abbr = "noh",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = nohlsearch_cmd,  .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "noremap",          .abbr = "no",    .emark = 0,  .id = COM_NOREMAP,     .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = noremap_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "normal",           .abbr = "norm",  .emark = 1,  .id = COM_NORMAL,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = normal_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "nunmap",           .abbr = "nun",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = nunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "only",             .abbr = "on",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = only_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "popd",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = popd_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "pushd",            .abbr = NULL,    .emark = 1,  .id = COM_PUSHD,       .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = pushd_cmd,       .qmark = 0,      .expand = 2, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 0, },
+	{ .name = "put",              .abbr = "pu",    .emark = 1,  .id = -1,              .range = 0,    .bg = 1, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = put_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "pwd",              .abbr = "pw",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = pwd_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "qmap",             .abbr = "qm",    .emark = 0,  .id = COM_QMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = qmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "qnoremap",         .abbr = "qno",   .emark = 0,  .id = COM_QNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = qnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "quit",             .abbr = "q",     .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = quit_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "qunmap",           .abbr = "qun",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = qunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "redraw",           .abbr = "redr",  .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = redraw_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "registers",        .abbr = "reg",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = registers_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "rename",           .abbr = NULL,    .emark = 1,  .id = COM_RENAME,      .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = rename_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "restart",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = restart_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "restore",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = restore_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 1, },
+	{ .name = "rlink",            .abbr = NULL,    .emark = 1,  .id = COM_RLINK,       .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = rlink_cmd,       .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+	{ .name = "screen",           .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = screen_cmd,      .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	/* engine/set unit handles comments to resolve parsing ambiguity. */
+	{ .name = "set",              .abbr = "se",    .emark = 0,  .id = COM_SET,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = set_cmd,         .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "setlocal",         .abbr = "setl",  .emark = 0,  .id = COM_SETLOCAL,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = setlocal_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "setglobal",        .abbr = "setg",  .emark = 0,  .id = COM_SET,         .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = setglobal_cmd,   .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "shell",            .abbr = "sh",    .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = shell_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "sort",             .abbr = "sor",   .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = sort_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "source",           .abbr = "so",    .emark = 0,  .id = COM_SOURCE,      .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = source_cmd,      .qmark = 0,      .expand = 2, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "split",            .abbr = "sp",    .emark = 1,  .id = COM_SPLIT,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = split_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "substitute",       .abbr = "s",     .emark = 0,  .id = COM_SUBSTITUTE,  .range = 1,    .bg = 0, .quote = 0, .regexp = 1, .comment = 1,
+		.handler = substitute_cmd,  .qmark = 0,      .expand = 0, .cust_sep = 1,         .min_args = 0, .max_args = 3,       .select = 1, },
+	{ .name = "sync",             .abbr = NULL,    .emark = 1,  .id = COM_SYNC,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = sync_cmd,        .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "touch",            .abbr = NULL,    .emark = 0,  .id = COM_TOUCH,       .range = 0,    .bg = 0, .quote = 1, .regexp = 0, .comment = 1,
+		.handler = touch_cmd,       .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "tr",               .abbr = NULL,    .emark = 0,  .id = COM_TR,          .range = 1,    .bg = 0, .quote = 0, .regexp = 1, .comment = 1,
+		.handler = tr_cmd,          .qmark = 0,      .expand = 0, .cust_sep = 1,         .min_args = 2, .max_args = 2,       .select = 1, },
+	{ .name = "trashes",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = trashes_cmd,     .qmark = 1,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "undolist",         .abbr = "undol", .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = undolist_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "unmap",            .abbr = "unm",   .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = unmap_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "unlet",            .abbr = "unl",   .emark = 1,  .id = COM_UNLET,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = unlet_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "version",          .abbr = "ve",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = vifm_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "view",             .abbr = "vie",   .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = view_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "vifm",             .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = vifm_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "vmap",             .abbr = "vm",    .emark = 0,  .id = COM_VMAP,        .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = vmap_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "vnoremap",         .abbr = "vn",    .emark = 0,  .id = COM_VNOREMAP,    .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = vnoremap_cmd,    .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+#ifdef _WIN32
+	{ .name = "volumes",          .abbr = NULL,    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = volumes_cmd,     .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+#endif
+	{ .name = "vsplit",           .abbr = "vs",    .emark = 1,  .id = COM_VSPLIT,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = vsplit_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 1,       .select = 0, },
+	{ .name = "vunmap",           .abbr = "vu",    .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = vunmap_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "wincmd",           .abbr = "winc",  .emark = 0,  .id = COM_WINCMD,      .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = wincmd_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 1, .max_args = 1,       .select = 0, },
+	{ .name = "windo",            .abbr = NULL,    .emark = 0,  .id = COM_WINDO,       .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = windo_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "winrun",           .abbr = NULL,    .emark = 0,  .id = COM_WINRUN,      .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = winrun_cmd,      .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 0, },
+	{ .name = "write",            .abbr = "w",     .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = write_cmd,       .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "wq",               .abbr = NULL,    .emark = 1,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = wq_cmd,          .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "xit",              .abbr = "x",     .emark = 0,  .id = -1,              .range = 0,    .bg = 0, .quote = 0, .regexp = 0, .comment = 1,
+		.handler = quit_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
+	{ .name = "yank",             .abbr = "y",     .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 0, .regexp = 0, .comment = 0,
+		.handler = yank_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 2,       .select = 1, },
+
+	{ .name = "<USERCMD>",        .abbr = NULL,    .emark = 0,  .id = -1,              .range = 1,    .bg = 0, .quote = 1, .regexp = 0, .comment = 0,
+		.handler = usercmd_cmd,     .qmark = 0,      .expand = 1, .cust_sep = 0,         .min_args = 0, .max_args = NOT_DEF, .select = 1, },
+};
+const size_t cmds_list_size = ARRAY_LEN(cmds_list);
+
+static void
+select_count(const cmd_info_t *cmd_info, int count)
+{
+	int pos;
+
+	/* Both a starting range and an ending range are given. */
+	pos = cmd_info->end;
+	if(pos < 0)
+		pos = curr_view->list_pos;
+
+	clean_selected_files(curr_view);
+
+	while(count-- > 0 && pos < curr_view->list_rows)
+	{
+		if(!is_parent_dir(curr_view->dir_entry[pos].name))
+		{
+			curr_view->dir_entry[pos].selected = 1;
+			curr_view->selected_files++;
+		}
+		pos++;
+	}
+}
+
+/* Return value of all functions below which name ends with "_cmd" mean:
+ *  - <0 -- one of CMDS_* errors from cmds.h;
+ *  - =0 -- nothing was outputted to the status bar, don't need to save its
+ *          state;
+ *  - <0 -- someting was outputted to the status bar, need to save its state. */
+static int
+goto_cmd(const cmd_info_t *cmd_info)
+{
+	flist_set_pos(curr_view, cmd_info->end);
+	return 0;
+}
+
+/* Handles :! command, which executes external command via shell. */
+static int
+emark_cmd(const cmd_info_t *cmd_info)
+{
+	int save_msg = 0;
+	const char *com = cmd_info->args;
+	char buf[COMMAND_GROUP_INFO_LEN];
+	MacroFlags flags;
+	int handled;
+
+	if(cmd_info->argc == 0)
+	{
+		if(cmd_info->emark)
+		{
+			const char *const last_cmd = curr_stats.last_cmdline_command;
+			if(last_cmd == NULL)
+			{
+				status_bar_message("No previous command-line command");
+				return 1;
+			}
+			return exec_commands(last_cmd, curr_view, CIT_COMMAND) != 0;
+		}
+		return CMDS_ERR_TOO_FEW_ARGS;
+	}
+
+	com = skip_whitespace(com);
+	if(com[0] == '\0')
+	{
+		return 0;
+	}
+
+	flags = (MacroFlags)cmd_info->usr1;
+	handled = run_ext_command(com, flags, cmd_info->bg, &save_msg);
+	if(handled > 0)
+	{
+		/* Do nothing. */
+	}
+	else if(handled < 0)
+	{
+		return save_msg;
+	}
+	else if(cmd_info->bg)
+	{
+		start_background_job(com, 0);
+	}
+	else
+	{
+		const int use_term_mux = flags != MF_NO_TERM_MUX;
+
+		clean_selected_files(curr_view);
+		if(cfg.fast_run)
+		{
+			char *const buf = fast_run_complete(com);
+			if(buf != NULL)
+			{
+				(void)shellout(buf, cmd_info->emark ? PAUSE_ALWAYS : PAUSE_ON_ERROR,
+						use_term_mux);
+				free(buf);
+			}
+		}
+		else
+		{
+			(void)shellout(com, cmd_info->emark ? PAUSE_ALWAYS : PAUSE_ON_ERROR,
+					use_term_mux);
+		}
+	}
+
+	snprintf(buf, sizeof(buf), "in %s: !%s",
+			replace_home_part(flist_get_dir(curr_view)), cmd_info->raw_args);
+	cmd_group_begin(buf);
+	add_operation(OP_USR, strdup(com), NULL, "", "");
+	cmd_group_end();
+
+	return save_msg;
+}
+
+/* Creates symbolic links with absolute paths to files. */
+static int
+alink_cmd(const cmd_info_t *cmd_info)
+{
+	return link_cmd(cmd_info, 1);
+}
+
+static int
+apropos_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+
+	if(cmd_info->argc > 0)
+	{
+		(void)replace_string(&last_args, cmd_info->args);
+	}
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
+	}
+
+	return show_apropos_menu(curr_view, last_args) != 0;
+}
+
+/* Adds/lists/removes autocommands. */
+static int
+autocmd_cmd(const cmd_info_t *cmd_info)
+{
+	enum { ADDITION, LISTING, REMOVAL } type = cmd_info->emark
+	                                         ? REMOVAL : (cmd_info->argc < 3)
+	                                         ? LISTING : ADDITION;
+
+	const char *event = NULL;
+	const char *patterns = NULL;
+	const char *action;
+
+	/* Check usage. */
+	if(cmd_info->emark && cmd_info->argc > 2)
+	{
+		return CMDS_ERR_TRAILING_CHARS;
+	}
+
+	/* Parse event and patterns. */
+	if(cmd_info->argc > 0)
+	{
+		if(type == ADDITION || strcmp(cmd_info->argv[0], "*") != 0)
+		{
+			event = cmd_info->argv[0];
+		}
+		if(cmd_info->argc > 1)
+		{
+			patterns = cmd_info->argv[1];
+		}
+	}
+
+	/* Check validity of event. */
+	if(event != NULL)
+	{
+		/* Non-const for is_in_string_array_case(). */
+		static char *events[] = { "DirEnter" };
+		if(!is_in_string_array_case(events, ARRAY_LEN(events), event))
+		{
+			status_bar_errorf("No such event: %s", event);
+			return 1;
+		}
+	}
+
+	if(type == REMOVAL)
+	{
+		vle_aucmd_remove(event, patterns);
+		return 0;
+	}
+
+	if(type == LISTING)
+	{
+		vle_textbuf *const msg = vle_tb_create();
+		vle_aucmd_list(event, patterns, &aucmd_list_cb, msg);
+		status_bar_message(vle_tb_get_data(msg));
+		vle_tb_free(msg);
+		return 1;
+	}
+
+	/* Addition. */
+
+	action = &cmd_info->args[cmd_info->argvp[2][0]];
+
+	if(vle_aucmd_on_execute(event, patterns, action, &aucmd_action_handler) != 0)
+	{
+		status_bar_error("Failed to register autocommand");
+		return 1;
+	}
+
+	return 0;
+}
+
+/* Implementation of autocommand action. */
+static void
+aucmd_action_handler(const char action[], void *arg)
+{
+	FileView *view = arg;
+	(void)exec_commands(action, view, CIT_COMMAND);
+}
+
+/* Handler of list callback for autocommands. */
+static void
+aucmd_list_cb(const char event[], const char pattern[], int negated,
+		const char action[], void *arg)
+{
+	vle_textbuf *msg = arg;
+	const char *fmt = (strlen(pattern) <= 10)
+	                ? "%-10s %s%-10s %s"
+	                : "%-10s %s%-10s\n                      %s";
+
+	vle_tb_append_linef(msg, fmt, event, negated ? "!" : "", pattern, action);
+}
+
+/* Marks directory with set of tags. */
+static int
+bmark_cmd(const cmd_info_t *cmd_info)
+{
+	char *const tags = make_tags_list(cmd_info);
+	char *const path = get_bmark_dir(cmd_info);
+	const int err = (tags == NULL || bmarks_set(path, tags) != 0);
+	if(err && tags != NULL)
+	{
+		status_bar_error("Failed to add bookmark");
+	}
+	free(path);
+	free(tags);
+	return err;
+}
+
+/* Lists either all bookmarks or those matching specified tags. */
+static int
+bmarks_cmd(const cmd_info_t *cmd_info)
+{
+	return bmarks_do(cmd_info, 0);
+}
+
+/* When there are more than 1 match acts like :bmarks, otherwise navigates to
+ * single match immediately. */
+static int
+bmgo_cmd(const cmd_info_t *cmd_info)
+{
+	return bmarks_do(cmd_info, 1);
+}
+
+/* Runs bookmarks menu in either view or go mode (different only on single
+ * match). */
+static int
+bmarks_do(const cmd_info_t *cmd_info, int go)
+{
+	char *const tags = args_to_csl(cmd_info);
+	const int result = (show_bmarks_menu(curr_view, tags, go) != 0);
+	free(tags);
+	return result;
+}
+
+/* Converts command arguments into comma-separated list of tags.  Returns newly
+ * allocated string or NULL on error or invalid tag name (in which case an error
+ * is printed on the status bar). */
+static char *
+make_tags_list(const cmd_info_t *cmd_info)
+{
+	int i;
+
+	if(cmd_info->emark && cmd_info->argc == 1)
+	{
+		status_bar_error("Too few arguments");
+		return NULL;
+	}
+
+	for(i = cmd_info->emark ? 1 : 0; i < cmd_info->argc; ++i)
+	{
+		if(strpbrk(cmd_info->argv[i], ", \t") != NULL)
+		{
+			status_bar_errorf("Tags can't include comma or whitespace: %s",
+					cmd_info->argv[i]);
+			return NULL;
+		}
+	}
+
+	return args_to_csl(cmd_info);
+}
+
+/* Makes comma-separated list from command line arguments.  Returns newly
+ * allocated string or NULL on absence of arguments. */
+static char *
+args_to_csl(const cmd_info_t *cmd_info)
+{
+	int i;
+	char *tags = NULL;
+	size_t len = 0U;
+
+	if(cmd_info->argc == 0)
+	{
+		return NULL;
+	}
+
+	i = cmd_info->emark ? 1 : 0;
+	strappend(&tags, &len, cmd_info->argv[i]);
+	for(++i; i < cmd_info->argc; ++i)
+	{
+		strappendch(&tags, &len, ',');
+		strappend(&tags, &len, cmd_info->argv[i]);
+	}
+
+	return tags;
+}
+
+/* Registers command-line mode abbreviation. */
+static int
+cabbrev_cmd(const cmd_info_t *cmd_info)
+{
+	return handle_cabbrevs(cmd_info, 0);
+}
+
+/* Registers command-line mode abbreviation of noremap kind. */
+static int
+cnoreabbrev_cmd(const cmd_info_t *cmd_info)
+{
+	return handle_cabbrevs(cmd_info, 1);
+}
+
+/* Handles command-line mode abbreviation of both kinds in one place.  Returns
+ * value to be returned by command handler. */
+static int
+handle_cabbrevs(const cmd_info_t *cmd_info, int no_remap)
+{
+	if(cmd_info->argc == 0)
+	{
+		return show_cabbrevs_menu(curr_view) != 0;
+	}
+	if(cmd_info->argc == 1)
+	{
+		return list_abbrevs(cmd_info->argv[0]);
+	}
+	return add_cabbrev(cmd_info, no_remap);
+}
+
+/* List command-line mode abbreviations that start with specified prefix.
+ * Returns value to be returned by command handler. */
+static int
+list_abbrevs(const char prefix[])
+{
+	wchar_t *wide_prefix;
+	size_t prefix_len;
+	void *state;
+	const wchar_t *lhs, *rhs;
+	int no_remap;
+	vle_textbuf *msg;
+
+	state = NULL;
+	if(!vle_abbr_iter(&lhs, &rhs, &no_remap, &state))
+	{
+		status_bar_message("No abbreviation found");
+		return 1;
+	}
+
+	msg = vle_tb_create();
+	vle_tb_append_line(msg, "Abbreviation -- N -- Replacement");
+
+	wide_prefix = to_wide(prefix);
+	prefix_len = wcslen(wide_prefix);
+
+	state = NULL;
+	while(vle_abbr_iter(&lhs, &rhs, &no_remap, &state))
+	{
+		if(wcsncmp(lhs, wide_prefix, prefix_len) == 0)
+		{
+			char *const descr = describe_abbrev(lhs, rhs, no_remap, 0);
+			vle_tb_append_line(msg, descr);
+			free(descr);
+		}
+	}
+
+	status_bar_message(vle_tb_get_data(msg));
+	vle_tb_free(msg);
+
+	free(wide_prefix);
+	return 1;
+}
+
+/* Registers command-line mode abbreviation.  Returns value to be returned by
+ * command handler. */
+static int
+add_cabbrev(const cmd_info_t *cmd_info, int no_remap)
+{
+	int result;
+	wchar_t *subst;
+	wchar_t *wargs = to_wide(cmd_info->args);
+	wchar_t *rhs = wargs;
+
+	while(cfg_is_word_wchar(*rhs))
+	{
+		++rhs;
+	}
+	while(iswspace(*rhs))
+	{
+		*rhs++ = L'\0';
+	}
+
+	subst = substitute_specsw(rhs);
+	result = no_remap
+	       ? vle_abbr_add_no_remap(wargs, subst)
+	       : vle_abbr_add(wargs, subst);
+	free(subst);
+	free(wargs);
+
+	if(result != 0)
+	{
+		status_bar_error("Failed to register abbreviation");
+	}
+
+	return result;
+}
+
+/* Changes location of a view or both views.  Handlee multiple configurations of
+ * the command (with/without !, none/one/two arguments). */
+static int
+cd_cmd(const cmd_info_t *cmd_info)
+{
+	int result;
+
+	char *const curr_dir = strdup(flist_get_dir(curr_view));
+	char *const other_dir = strdup(flist_get_dir(other_view));
+
+	if(!cfg.auto_ch_pos)
+	{
+		clean_positions_in_history(curr_view);
+		curr_stats.ch_pos = 0;
+	}
+
+	if(cmd_info->argc == 0)
+	{
+		result = cd(curr_view, curr_dir, cfg.home_dir);
+		if(cmd_info->emark)
+			result += cd(other_view, other_dir, cfg.home_dir);
+	}
+	else if(cmd_info->argc == 1)
+	{
+		result = cd(curr_view, curr_dir, cmd_info->argv[0]);
+		if(cmd_info->emark)
+		{
+			if(!is_path_absolute(cmd_info->argv[0]) && cmd_info->argv[0][0] != '~' &&
+					strcmp(cmd_info->argv[0], "-") != 0)
+			{
+				char dir[PATH_MAX];
+				snprintf(dir, sizeof(dir), "%s/%s", curr_dir, cmd_info->argv[0]);
+				result += cd(other_view, other_dir, dir);
+			}
+			else if(strcmp(cmd_info->argv[0], "-") == 0)
+			{
+				result += cd(other_view, other_dir, curr_dir);
+			}
+			else
+			{
+				result += cd(other_view, other_dir, cmd_info->argv[0]);
+			}
+			refresh_view_win(other_view);
+		}
+	}
+	else
+	{
+		result = cd(curr_view, curr_dir, cmd_info->argv[0]);
+		if(!is_path_absolute(cmd_info->argv[1]) && cmd_info->argv[1][0] != '~')
+		{
+			char dir[PATH_MAX];
+			snprintf(dir, sizeof(dir), "%s/%s", curr_dir, cmd_info->argv[1]);
+			result += cd(other_view, other_dir, dir);
+		}
+		else
+		{
+			result += cd(other_view, other_dir, cmd_info->argv[1]);
+		}
+		refresh_view_win(other_view);
+	}
+
+	if(!cfg.auto_ch_pos)
+	{
+		curr_stats.ch_pos = 1;
+	}
+
+	free(curr_dir);
+	free(other_dir);
+
+	return result;
+}
+
+static int
+change_cmd(const cmd_info_t *cmd_info)
+{
+	enter_change_mode(curr_view);
+	cmds_preserve_selection();
+	return 0;
+}
+
+static int
+chmod_cmd(const cmd_info_t *cmd_info)
+{
+#ifndef _WIN32
+	regex_t re;
+	int err;
+	int i;
+#endif
+
+	if(cmd_info->argc == 0)
+	{
+		enter_attr_mode(curr_view);
+		cmds_preserve_selection();
+		return 0;
+	}
+
+#ifndef _WIN32
+	if((err = regcomp(&re, "^([ugoa]*([-+=]([rwxXst]*|[ugo]))+)|([0-7]{3,4})$",
+			REG_EXTENDED)) != 0)
+	{
+		status_bar_errorf("Regexp error: %s", get_regexp_error(err, &re));
+		regfree(&re);
+		return 1;
+	}
+
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		if(regexec(&re, cmd_info->argv[i], 0, NULL, 0) == REG_NOMATCH)
+		{
+			break;
+		}
+	}
+	regfree(&re);
+
+	if(i < cmd_info->argc)
+	{
+		status_bar_errorf("Invalid argument: %s", cmd_info->argv[i]);
+		return 1;
+	}
+
+	files_chmod(curr_view, cmd_info->args, cmd_info->emark);
+#endif
+	return 0;
+}
+
+#ifndef _WIN32
+static int
+chown_cmd(const cmd_info_t *cmd_info)
+{
+	char *colon, *user, *group;
+	int u, g;
+	uid_t uid = (uid_t)-1;
+	gid_t gid = (gid_t)-1;
+
+	if(cmd_info->argc == 0)
+	{
+		change_owner();
+		return 0;
+	}
+
+	colon = strchr(cmd_info->argv[0], ':');
+	if(colon == NULL)
+	{
+		user = cmd_info->argv[0];
+		group = "";
+	}
+	else
+	{
+		*colon = '\0';
+		user = cmd_info->argv[0];
+		group = colon + 1;
+	}
+	u = user[0] != '\0';
+	g = group[0] != '\0';
+
+	if(u && get_uid(user, &uid) != 0)
+	{
+		status_bar_errorf("Invalid user name: \"%s\"", user);
+		return 1;
+	}
+	if(g && get_gid(group, &gid) != 0)
+	{
+		status_bar_errorf("Invalid group name: \"%s\"", group);
+		return 1;
+	}
+
+	mark_selection_or_current(curr_view);
+	chown_files(u, g, uid, gid);
+
+	return 0;
+}
+#endif
+
+/* Clones file [count=1] times. */
+static int
+clone_cmd(const cmd_info_t *cmd_info)
+{
+	check_marking(curr_view, 0, NULL);
+
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"?\"");
+			return 1;
+		}
+		return clone_files(curr_view, NULL, -1, 0, 1) != 0;
+	}
+
+	return clone_files(curr_view, cmd_info->argv, cmd_info->argc, cmd_info->emark,
+			1) != 0;
+}
+
+static int
+cmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Command Line", CMDLINE_MODE, 0) != 0;
+}
+
+static int
+cnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Command Line", CMDLINE_MODE, 1) != 0;
+}
+
+static int
+colorscheme_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		status_bar_message(cfg.cs.name);
+		return 1;
+	}
+
+	if(cmd_info->argc == 0)
+	{
+		/* Show menu with colorschemes listed. */
+		return show_colorschemes_menu(curr_view) != 0;
+	}
+
+	if(!color_scheme_exists(cmd_info->argv[0]))
+	{
+		status_bar_errorf("Cannot find colorscheme %s" , cmd_info->argv[0]);
+		return 1;
+	}
+
+	if(cmd_info->argc == 2)
+	{
+		char *directory = expand_tilde(cmd_info->argv[1]);
+		if(!is_path_absolute(directory))
+		{
+			if(curr_stats.load_stage < 3)
+			{
+				status_bar_errorf("The path in :colorscheme command cannot be "
+						"relative in startup scripts (%s)", directory);
+				free(directory);
+				return 1;
+			}
+			else
+			{
+				char path[PATH_MAX];
+				snprintf(path, sizeof(path), "%s/%s", curr_view->curr_dir, directory);
+				(void)replace_string(&directory, path);
+			}
+		}
+		if(!is_dir(directory))
+		{
+			status_bar_errorf("%s isn't a directory", directory);
+			free(directory);
+			return 1;
+		}
+
+		assoc_dir(cmd_info->argv[0], directory);
+		free(directory);
+
+		lwin.local_cs = check_directory_for_color_scheme(1, lwin.curr_dir);
+		rwin.local_cs = check_directory_for_color_scheme(0, rwin.curr_dir);
+		redraw_lists();
+		return 0;
+	}
+	else
+	{
+		const int cs_load_result = load_primary_color_scheme(cmd_info->argv[0]);
+
+		if(!lwin.local_cs)
+		{
+			assign_color_scheme(&lwin.cs, &cfg.cs);
+		}
+		if(!rwin.local_cs)
+		{
+			assign_color_scheme(&rwin.cs, &cfg.cs);
+		}
+		redraw_lists();
+		update_all_windows();
+
+		return cs_load_result;
+	}
+}
+
+static int
+command_cmd(const cmd_info_t *cmd_info)
+{
+	char *desc;
+
+	if(cmd_info->argc == 0)
+	{
+		return show_commands_menu(curr_view) != 0;
+	}
+
+	desc = list_udf_content(cmd_info->argv[0]);
+	if(desc == NULL)
+	{
+		status_bar_message("No user-defined commands found");
+		return 1;
+	}
+
+	status_bar_message(desc);
+	free(desc);
+	return 1;
+}
+
+/* Copies files. */
+static int
+copy_cmd(const cmd_info_t *cmd_info)
+{
+	return cpmv_cmd(cmd_info, 0);
+}
+
+/* Same as :quit, but also aborts directory choosing and mandatory returns
+ * non-zero exit code. */
+static int
+cquit_cmd(const cmd_info_t *cmd_info)
+{
+	vifm_try_leave(!cmd_info->emark, 1, cmd_info->emark);
+	return 0;
+}
+
+/* Unregisters command-line abbreviation either by its LHS or RHS. */
+static int
+cunabbrev_cmd(const cmd_info_t *cmd_info)
+{
+	wchar_t *const wargs = to_wide(cmd_info->args);
+	const int result = vle_abbr_remove(wargs);
+	free(wargs);
+	if(result != 0)
+	{
+		status_bar_error("No such abbreviation");
+	}
+	return 0;
+}
+
+static int
+cunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], CMDLINE_MODE);
+}
+
+/* Processes :[range]delete command followed by "{reg} [{count}]" or
+ * "{reg}|{count}" with optional " &". */
+static int
+delete_cmd(const cmd_info_t *cmd_info)
+{
+	int reg = DEFAULT_REG_NAME;
+	int result;
+
+	result = get_reg_and_count(cmd_info, &reg);
+	if(result != 0)
+	{
+		return result;
+	}
+
+	check_marking(curr_view, 0, NULL);
+	if(cmd_info->bg)
+	{
+		result = delete_files_bg(curr_view, !cmd_info->emark) != 0;
+	}
+	else
+	{
+		result = delete_files(curr_view, reg, !cmd_info->emark) != 0;
+	}
+
+	return result;
+}
+
+static int
+delmarks_cmd(const cmd_info_t *cmd_info)
+{
+	int i;
+
+	if(cmd_info->emark)
+	{
+		if(cmd_info->argc == 0)
+		{
+			clear_all_marks();
+			return 0;
+		}
+		else
+		{
+			status_bar_error("No arguments are allowed if you use \"!\"");
+			return 1;
+		}
+	}
+
+	if(cmd_info->argc == 0)
+	{
+		return CMDS_ERR_TOO_FEW_ARGS;
+	}
+
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		int j;
+		for(j = 0; cmd_info->argv[i][j] != '\0'; j++)
+		{
+			if(!char_is_one_of(valid_marks, cmd_info->argv[i][j]))
+			{
+				return CMDS_ERR_INVALID_ARG;
+			}
+		}
+	}
+
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		int j;
+		for(j = 0; cmd_info->argv[i][j] != '\0'; j++)
+		{
+			clear_mark(cmd_info->argv[i][j]);
+		}
+	}
+	return 0;
+}
+
+/* Removes bookmarks. */
+static int
+delbmarks_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->emark)
+	{
+		int i;
+
+		/* Remove all bookmarks. */
+		if(cmd_info->argc == 0)
+		{
+			bmarks_clear();
+			return 0;
+		}
+
+		/* Remove bookmarks from listed paths. */
+		for(i = 0; i < cmd_info->argc; ++i)
+		{
+			char *const path = make_bmark_path(cmd_info->argv[i]);
+			bmarks_remove(path);
+			free(path);
+		}
+	}
+	else if(cmd_info->argc == 0)
+	{
+		/* Remove bookmarks from current directory. */
+		char *const path = get_bmark_dir(cmd_info);
+		bmarks_remove(path);
+		free(path);
+	}
+	else
+	{
+		/* Remove set of bookmarks that include all of the specified tags. */
+		char *const tags = make_tags_list(cmd_info);
+		bmarks_find(tags, &remove_bmark, NULL);
+		free(tags);
+	}
+	return 0;
+}
+
+/* bmarks_find() callback that removes bookmarks. */
+static void
+remove_bmark(const char path[], const char tags[], time_t timestamp, void *arg)
+{
+	/* It's safe to remove bookmark in the callback. */
+	bmarks_remove(path);
+}
+
+/* Formats path for a bookmark in a unified way for several commands.  Returns
+ * newly allocated string with the path. */
+static char *
+get_bmark_dir(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->emark)
+	{
+		return make_bmark_path(cmd_info->argv[0]);
+	}
+
+	return is_root_dir(curr_view->curr_dir)
+	     ? strdup(curr_view->curr_dir)
+	     : format_str("%s/", curr_view->curr_dir);
+}
+
+/* Prepares path for a bookmark.  Returns newly allocated string. */
+static char *
+make_bmark_path(const char path[])
+{
+	char *ret;
+	char *const expanded = ma_expand_single(path);
+
+	if(is_path_absolute(expanded))
+	{
+		return expanded;
+	}
+
+	ret = format_str("%s%s%s", curr_view->curr_dir,
+			is_root_dir(curr_view->curr_dir) ? "" : "/", expanded);
+	free(expanded);
+	return ret;
+}
+
+static int
+dirs_cmd(const cmd_info_t *cmd_info)
+{
+	return show_dirstack_menu(curr_view) != 0;
+}
+
+/* Evaluates arguments as expression and outputs result to statusbar. */
+static int
+echo_cmd(const cmd_info_t *cmd_info)
+{
+	char *const eval_result = try_eval_arglist(cmd_info);
+	status_bar_message(eval_result);
+	free(eval_result);
+	return 1;
+}
+
+/* Edits current/selected/specified file(s) in editor. */
+static int
+edit_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->argc != 0)
+	{
+		if(stats_file_choose_action_set())
+		{
+			/* The call below does not return. */
+			vifm_choose_files(curr_view, cmd_info->argc, cmd_info->argv);
+		}
+
+		vim_edit_files(cmd_info->argc, cmd_info->argv);
+		return 0;
+	}
+
+	if(!curr_view->selected_files ||
+			!curr_view->dir_entry[curr_view->list_pos].selected)
+	{
+		char file_to_view[PATH_MAX];
+
+		if(stats_file_choose_action_set())
+		{
+			/* The call below does not return. */
+			vifm_choose_files(curr_view, cmd_info->argc, cmd_info->argv);
+		}
+
+		get_current_full_path(curr_view, sizeof(file_to_view), file_to_view);
+		(void)vim_view_file(file_to_view, -1, -1, 1);
+	}
+	else
+	{
+		int i;
+
+		for(i = 0; i < curr_view->list_rows; i++)
+		{
+			struct stat st;
+			if(curr_view->dir_entry[i].selected == 0)
+				continue;
+			if(os_lstat(curr_view->dir_entry[i].name, &st) == 0 &&
+					!path_exists(curr_view->dir_entry[i].name, DEREF))
+			{
+				show_error_msgf("Access error",
+						"Can't access destination of link \"%s\". It might be broken.",
+						curr_view->dir_entry[i].name);
+				return 0;
+			}
+		}
+
+		if(stats_file_choose_action_set())
+		{
+			/* The call below does not return. */
+			vifm_choose_files(curr_view, cmd_info->argc, cmd_info->argv);
+		}
+
+		if(vim_edit_selection() != 0)
+		{
+			show_error_msg("Edit error", "Can't edit selection");
+		}
+	}
+	return 0;
+}
+
+/* This command designates beginning of the alternative part of if-endif
+ * statement. */
+static int
+else_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmds_scoped_else() != 0)
+	{
+		status_bar_error("Misplaced :else");
+		return CMDS_ERR_CUSTOM;
+	}
+	return 0;
+}
+
+/* This command designates beginning of the alternative branch of if-endif
+ * statement with its own condition. */
+static int
+elseif_cmd(const cmd_info_t *cmd_info)
+{
+	const int x = eval_if_condition(cmd_info);
+	if(x < 0)
+	{
+		return CMDS_ERR_CUSTOM;
+	}
+
+	if(cmds_scoped_elseif(x) != 0)
+	{
+		status_bar_error("Misplaced :elseif");
+		return CMDS_ERR_CUSTOM;
+	}
+
+	return 0;
+}
+
+/* Starts process of emptying all trashes in background. */
+static int
+empty_cmd(const cmd_info_t *cmd_info)
+{
+	trash_empty_all();
+	return 0;
+}
+
+/* This command ends conditional block. */
+static int
+endif_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmds_scoped_endif() != 0)
+	{
+		status_bar_error(":endif without :if");
+		return CMDS_ERR_CUSTOM;
+	}
+	return 0;
+}
+
+/* This command composes a string from expressions and runs it as a command. */
+static int
+exe_cmd(const cmd_info_t *cmd_info)
+{
+	int result = 1;
+	char *const eval_result = try_eval_arglist(cmd_info);
+	if(eval_result != NULL)
+	{
+		result = exec_commands(eval_result, curr_view, CIT_COMMAND);
+		free(eval_result);
+	}
+	return result != 0;
+}
+
+/* Tries to evaluate a set of expressions and concatenate results with a space.
+ * Returns pointer to newly allocated string, which should be freed by caller,
+ * or NULL on error. */
+static char *
+try_eval_arglist(const cmd_info_t *cmd_info)
+{
+	char *eval_result;
+	const char *error_pos = NULL;
+
+	if(cmd_info->argc == 0)
+	{
+		return NULL;
+	}
+
+	vle_tb_clear(vle_err);
+	eval_result = eval_arglist(cmd_info->raw_args, &error_pos);
+
+	if(eval_result == NULL)
+	{
+		vle_tb_append_linef(vle_err, "%s: %s", "Invalid expression", error_pos);
+		status_bar_error(vle_tb_get_data(vle_err));
+	}
+
+	return eval_result;
+}
+
+/* Displays file handler picking menu. */
+static int
+file_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->argc == 0)
+	{
+		cmds_preserve_selection();
+		return show_file_menu(curr_view, cmd_info->bg) != 0;
+	}
+
+	if(run_with_filetype(curr_view, cmd_info->argv[0], cmd_info->bg) != 0)
+	{
+		status_bar_error(
+				"Can't find associated program with requested beginning");
+		return 1;
+	}
+
+	return 0;
+}
+
+/* Registers non-x file association handler. */
+static int
+filetype_cmd(const cmd_info_t *cmd_info)
+{
+	return add_filetype(cmd_info, 0);
+}
+
+/* Registers x file association handler. */
+static int
+filextype_cmd(const cmd_info_t *cmd_info)
+{
+	return add_filetype(cmd_info, 1);
+}
+
+/* Registers x/non-x file association handler.  Single argument form lists
+ * currently registered patterns that match specified file name in menu mode.
+ * Returns regular *_cmd handler value. */
+static int
+add_filetype(const cmd_info_t *cmd_info, int for_x)
+{
+	const char *records;
+	int in_x;
+	char *error;
+	matcher_t *m;
+
+	if(cmd_info->argc == 1)
+	{
+		return show_fileprograms_menu(curr_view, cmd_info->argv[0]) != 0;
+	}
+
+	m = matcher_alloc(cmd_info->argv[0], 0, 1, &error);
+	if(m == NULL)
+	{
+		status_bar_errorf("Wrong pattern: %s", error);
+		free(error);
+		return 1;
+	}
+
+	records = vle_cmds_next_arg(cmd_info->args);
+	in_x = curr_stats.exec_env_type == EET_EMULATOR_WITH_X;
+	ft_set_programs(m, records, for_x, in_x);
+	return 0;
+}
+
+/* Registers external applications as file viewer scripts for files that match
+ * name pattern.  Single argument form lists currently registered patterns that
+ * match specified file name in menu mode. */
+static int
+fileviewer_cmd(const cmd_info_t *cmd_info)
+{
+	const char *records;
+	char *error;
+	matcher_t *m;
+
+	if(cmd_info->argc == 1)
+	{
+		return show_fileviewers_menu(curr_view, cmd_info->argv[0]) != 0;
+	}
+
+	m = matcher_alloc(cmd_info->argv[0], 0, 1, &error);
+	if(m == NULL)
+	{
+		status_bar_errorf("Wrong pattern: %s", error);
+		free(error);
+		return 1;
+	}
+
+	records = vle_cmds_next_arg(cmd_info->args);
+	ft_set_viewers(m, records);
+	return 0;
+}
+
+/* Sets/displays/clears filters. */
+static int
+filter_cmd(const cmd_info_t *cmd_info)
+{
+	int ret;
+
+	if(cmd_info->qmark)
+	{
+		display_filters_info(curr_view);
+		return 1;
+	}
+
+	ret = update_filter(curr_view, cmd_info);
+	if(curr_stats.global_local_settings)
+	{
+		ret = update_filter(other_view, cmd_info);
+	}
+
+	return ret;
+}
+
+/* Updates filters of the view. */
+static int
+update_filter(FileView *view, const cmd_info_t *cmd_info)
+{
+	if(cmd_info->argc == 0)
+	{
+		if(cmd_info->emark)
+		{
+			toggle_filter_inversion(view);
+			return 0;
+		}
+		else
+		{
+			const int invert_filter = get_filter_inversion_state(cmd_info);
+			return set_view_filter(view, NULL, invert_filter,
+					FILTER_DEF_CASE_SENSITIVITY) != 0;
+		}
+	}
+	else
+	{
+		int invert_filter;
+		int case_sensitive = FILTER_DEF_CASE_SENSITIVITY;
+
+		if(cmd_info->argc == 2)
+		{
+			if(parse_case_flag(cmd_info->argv[1], &case_sensitive) != 0)
+			{
+				return CMDS_ERR_TRAILING_CHARS;
+			}
+		}
+
+		invert_filter = get_filter_inversion_state(cmd_info);
+
+		return set_view_filter(view, cmd_info->argv[0], invert_filter,
+				case_sensitive) != 0;
+	}
+}
+
+/* Displays state of all filters on the status bar. */
+static void
+display_filters_info(const FileView *view)
+{
+	char *const localf = get_filter_info("Local", &view->local_filter.filter);
+	char *const manualf = get_filter_info("Name", &view->manual_filter);
+	char *const autof = get_filter_info("Auto", &view->auto_filter);
+
+	status_bar_messagef("Filter -- Flags -- Value\n%s\n%s\n%s", localf, manualf, autof);
+
+	free(localf);
+	free(manualf);
+	free(autof);
+}
+
+/* Composes a description string for given filter.  Returns NULL on out of
+ * memory error, otherwise a newly allocated string, which should be freed by
+ * the caller, is returned. */
+static char *
+get_filter_info(const char name[], const filter_t *filter)
+{
+	const char *flags_str;
+
+	if(filter_is_empty(filter))
+	{
+		flags_str = "";
+	}
+	else
+	{
+		flags_str = (filter->cflags & REG_ICASE) ? "i" : "I";
+	}
+
+	return format_str("%-6s    %-5s    %s", name, flags_str, filter->raw);
+}
+
+/* Returns value for filter inversion basing on current configuration and
+ * filter command. */
+static int
+get_filter_inversion_state(const cmd_info_t *cmd_info)
+{
+	int invert_filter = cfg.filter_inverted_by_default;
+	if(cmd_info->emark)
+	{
+		invert_filter = !invert_filter;
+	}
+	return invert_filter;
+}
+
+/* Tries to update filter of the view rejecting incorrect regular expression.
+ * NULL as filter value means filter reset, empty string means using of the last
+ * search pattern.  Returns non-zero if message on the statusbar should be
+ * saved, otherwise zero is returned. */
+static int
+set_view_filter(FileView *view, const char filter[], int invert,
+		int case_sensitive)
+{
+	const char *error_msg;
+
+	filter = get_filter_value(filter);
+
+	error_msg = try_compile_regex(filter, REG_EXTENDED);
+	if(error_msg != NULL)
+	{
+		status_bar_errorf("Name filter not set: %s", error_msg);
+		return 1;
+	}
+
+	view->invert = invert;
+	(void)filter_change(&view->manual_filter, filter, case_sensitive);
+	(void)filter_clear(&view->auto_filter);
+	ui_view_schedule_reload(view);
+	return 0;
+}
+
+/* Returns new value for a filter taking special values of the filter into
+ * account.  NULL means filter reset, empty string means using of the last
+ * search pattern.  Returns possibly changed filter value, which might be
+ * invalidated after adding new search pattern/changing history size. */
+static const char *
+get_filter_value(const char filter[])
+{
+	if(filter == NULL)
+	{
+		filter = "";
+	}
+	else if(filter[0] == '\0')
+	{
+		if(!hist_is_empty(&cfg.search_hist))
+		{
+			filter = cfg.search_hist.items[0];
+		}
+	}
+	return filter;
+}
+
+/* Tries to compile given regular expression and specified compile flags.
+ * Returns NULL on success, otherwise statically allocated message describing
+ * compiling error is returned. */
+static const char *
+try_compile_regex(const char regex[], int cflags)
+{
+	const char *error_msg = NULL;
+
+	if(regex[0] != '\0')
+	{
+		regex_t re;
+		const int err = regcomp(&re, regex, cflags);
+		if(err != 0)
+		{
+			error_msg = get_regexp_error(err, &re);
+		}
+		regfree(&re);
+	}
+
+	return error_msg;
+}
+
+static int
+find_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+	static int last_dir;
+
+	if(cmd_info->argc > 0)
+	{
+		if(cmd_info->argc == 1)
+			last_dir = 0;
+		else if(is_dir(cmd_info->argv[0]))
+			last_dir = 1;
+		else
+			last_dir = 0;
+		(void)replace_string(&last_args, cmd_info->args);
+	}
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
+	}
+
+	return show_find_menu(curr_view, last_dir, last_args) != 0;
+}
+
+static int
+finish_cmd(const cmd_info_t *cmd_info)
+{
+	if(curr_stats.sourcing_state != SOURCING_PROCESSING)
+	{
+		status_bar_error(":finish used outside of a sourced file");
+		return 1;
+	}
+
+	curr_stats.sourcing_state = SOURCING_FINISHING;
+	return 0;
+}
+
+static int
+grep_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+	static int last_invert;
+	int inv;
+
+	if(cmd_info->argc > 0)
+	{
+		(void)replace_string(&last_args, cmd_info->args);
+		last_invert = cmd_info->emark;
+	}
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
+	}
+
+	inv = last_invert;
+	if(cmd_info->argc == 0 && cmd_info->emark)
+		inv = !inv;
+
+	return show_grep_menu(curr_view, last_args, inv) != 0;
+}
+
+/* Displays documentation. */
+static int
+help_cmd(const cmd_info_t *cmd_info)
+{
+	char cmd[PATH_MAX];
+	int bg;
+
+	if(cfg.use_vim_help)
+	{
+		const char *topic = (cmd_info->argc > 0) ? cmd_info->args : VIFM_VIM_HELP;
+		bg = vim_format_help_cmd(topic, cmd, sizeof(cmd));
+	}
+	else
+	{
+		if(cmd_info->argc != 0)
+		{
+			status_bar_error("No arguments are allowed when 'vimhelp' option is off");
+			return 1;
+		}
+
+		if(!path_exists_at(cfg.config_dir, VIFM_HELP, DEREF))
+		{
+			show_error_msgf("No help file", "Can't find \"%s/" VIFM_HELP "\" file",
+					cfg.config_dir);
+			return 0;
+		}
+
+		bg = format_help_cmd(cmd, sizeof(cmd));
+	}
+
+	if(bg)
+	{
+		start_background_job(cmd, 0);
+	}
+	else
+	{
+		display_help(cmd);
+	}
+	return 0;
+}
+
+/* Handles :highlight command.  There are three forms:
+ *  - clear all
+ *  - highlight file
+ *  - highlight group */
+static int
+highlight_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->argc == 0)
+	{
+		status_bar_message(get_all_highlights());
+		return 1;
+	}
+
+	if(cmd_info->argc == 1 && strcasecmp(cmd_info->argv[0], "clear") == 0)
+	{
+		reset_color_scheme(curr_stats.cs);
+		fview_view_cs_reset(&lwin);
+		fview_view_cs_reset(&rwin);
+
+		/* Request full update instead of redraw to force recalculation of mixed
+		 * colors like cursor line, which otherwise are not updated. */
+		curr_stats.need_update = UT_FULL;
+		return 0;
+	}
+
+	if(matcher_is_expr(cmd_info->argv[0]))
+	{
+		return highlight_file(cmd_info);
+	}
+
+	return highlight_group(cmd_info);
+}
+
+/* Handles highlight-file form of :highlight command.  Returns value to be
+ * returned by command handler. */
+static int
+highlight_file(const cmd_info_t *cmd_info)
+{
+	char pattern[strlen(cmd_info->args) + 1];
+	col_attr_t color = { .fg = -1, .bg = -1, .attr = 0, };
+	int result;
+	matcher_t *matcher;
+	char *error;
+
+	(void)extract_part(cmd_info->args, ' ', pattern);
+
+	matcher = matcher_alloc(pattern, 0, 1, &error);
+	if(matcher == NULL)
+	{
+		status_bar_errorf("Pattern error: %s", error);
+		free(error);
+		return CMDS_ERR_CUSTOM;
+	}
+
+	if(cmd_info->argc == 1)
+	{
+		display_file_highlights(matcher);
+		matcher_free(matcher);
+		return 1;
+	}
+
+	result = parse_and_apply_highlight(cmd_info, &color);
+	result += add_file_hi(matcher, &color);
+
+	/* Redraw is enough to update filename specific highlights. */
+	curr_stats.need_update = UT_REDRAW;
+
+	return result;
+}
+
+/* Displays information about filename specific highlight on the status bar. */
+static void
+display_file_highlights(const matcher_t *matcher)
+{
+	int i;
+
+	const col_scheme_t *cs = ui_view_get_cs(curr_view);
+
+	for(i = 0; i < cs->file_hi_count; ++i)
+	{
+		const file_hi_t *const file_hi = &cs->file_hi[i];
+		if(matcher_includes(file_hi->matcher, matcher))
+		{
+			break;
+		}
+	}
+
+	if(i >= cs->file_hi_count)
+	{
+		status_bar_errorf("Highlight group not found: %s",
+				matcher_get_expr(matcher));
+		return;
+	}
+
+	status_bar_message(get_file_hi_str(cs->file_hi[i].matcher,
+				&cs->file_hi[i].hi));
+}
+
+/* Handles highlight-group form of :highlight command.  Returns value to be
+ * returned by command handler. */
+static int
+highlight_group(const cmd_info_t *cmd_info)
+{
+	int result;
+	int group_id;
+	col_attr_t *color;
+
+	group_id = string_array_pos_case(HI_GROUPS, MAXNUM_COLOR, cmd_info->argv[0]);
+	if(group_id < 0)
+	{
+		status_bar_errorf("Highlight group not found: %s", cmd_info->argv[0]);
+		return 1;
+	}
+
+	color = &curr_stats.cs->color[group_id];
+
+	if(cmd_info->argc == 1)
+	{
+		status_bar_message(get_group_str(group_id, color));
+		return 1;
+	}
+
+	result = parse_and_apply_highlight(cmd_info, color);
+
+	curr_stats.cs->pair[group_id] = colmgr_get_pair(color->fg, color->bg);
+
+	/* Other highlight commands might have finished successfully, so update TUI.
+	 * Request full update instead of redraw to force recalculation of mixed
+	 * colors like cursor line, which otherwise are not updated. */
+	curr_stats.need_update = UT_FULL;
+
+	return result;
+}
+
+/* Composes string representation of all highlight group definitions.  Returns
+ * pointer to statically allocated buffer. */
+static const char *
+get_all_highlights(void)
+{
+	static char msg[256*MAXNUM_COLOR];
+
+	const col_scheme_t *cs = ui_view_get_cs(curr_view);
+	size_t msg_len = 0U;
+	int i;
+
+	msg[0] = '\0';
+
+	for(i = 0; i < MAXNUM_COLOR; ++i)
+	{
+		msg_len += snprintf(msg + msg_len, sizeof(msg) - msg_len, "%s%s",
+				get_group_str(i, &cs->color[i]), (i < MAXNUM_COLOR - 1) ? "\n" : "");
+	}
+
+	if(cs->file_hi_count <= 0)
+	{
+		return msg;
+	}
+
+	msg_len += snprintf(msg + msg_len, sizeof(msg) - msg_len, "\n\n");
+
+	for(i = 0; i < cs->file_hi_count; ++i)
+	{
+		const file_hi_t *const file_hi = &cs->file_hi[i];
+		const char *const line = get_file_hi_str(file_hi->matcher, &file_hi->hi);
+		msg_len += snprintf(msg + msg_len, sizeof(msg) - msg_len, "%s%s", line,
+				(i < cs->file_hi_count - 1) ? "\n" : "");
+	}
+
+	return msg;
+}
+
+/* Composes string representation of highlight group definition.  Returns
+ * pointer to a statically allocated buffer. */
+static const char *
+get_group_str(int group, const col_attr_t *col)
+{
+	return get_hi_str(HI_GROUPS[group], col);
+}
+
+/* Composes string representation of filename specific highlight definition.
+ * Returns pointer to a statically allocated buffer. */
+static const char *
+get_file_hi_str(const matcher_t *matcher, const col_attr_t *col)
+{
+	return get_hi_str(matcher_get_expr(matcher), col);
+}
+
+/* Composes string representation of highlight definition.  Returns pointer to a
+ * statically allocated buffer. */
+static const char *
+get_hi_str(const char title[], const col_attr_t *col)
+{
+	static char buf[256];
+
+	char fg_buf[16], bg_buf[16];
+
+	color_to_str(col->fg, sizeof(fg_buf), fg_buf);
+	color_to_str(col->bg, sizeof(bg_buf), bg_buf);
+
+	snprintf(buf, sizeof(buf), "%-10s cterm=%s ctermfg=%-7s ctermbg=%-7s", title,
+			attrs_to_str(col->attr), fg_buf, bg_buf);
+
+	return buf;
+}
+
+/* Parses arguments of :highlight command.  Returns non-zero in case something
+ * was output to the status bar, otherwise zero is returned. */
+static int
+parse_and_apply_highlight(const cmd_info_t *cmd_info, col_attr_t *color)
+{
+	int i;
+
+	for(i = 1; i < cmd_info->argc; ++i)
+	{
+		const char *const arg = cmd_info->argv[i];
+		const char *const equal = strchr(arg, '=');
+		char arg_name[16];
+
+		if(equal == NULL)
+		{
+			status_bar_errorf("Missing equal sign in \"%s\"", arg);
+			return 1;
+		}
+		if(equal[1] == '\0')
+		{
+			status_bar_errorf("Missing argument: %s", arg);
+			return 1;
+		}
+
+		copy_str(arg_name, MIN(sizeof(arg_name), (size_t)(equal - arg + 1)), arg);
+
+		if(strcmp(arg_name, "ctermbg") == 0)
+		{
+			if(try_parse_color_name_value(equal + 1, 0, color) != 0)
+			{
+				return 1;
+			}
+		}
+		else if(strcmp(arg_name, "ctermfg") == 0)
+		{
+			if(try_parse_color_name_value(equal + 1, 1, color) != 0)
+			{
+				return 1;
+			}
+		}
+		else if(strcmp(arg_name, "cterm") == 0)
+		{
+			int attrs;
+			if((attrs = get_attrs(equal + 1)) == -1)
+			{
+				status_bar_errorf("Illegal argument: %s", equal + 1);
+				return 1;
+			}
+			color->attr = attrs;
+			if(curr_stats.exec_env_type == EET_LINUX_NATIVE &&
+					(attrs & (A_BOLD | A_REVERSE)) == (A_BOLD | A_REVERSE))
+			{
+				color->attr |= A_BLINK;
+			}
+		}
+		else
+		{
+			status_bar_errorf("Illegal argument: %s", arg);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/* Tries to parse color name value into a number.  Returns non-zero if status
+ * bar message should be preserved, otherwise zero is returned. */
+static int
+try_parse_color_name_value(const char str[], int fg, col_attr_t *color)
+{
+	col_scheme_t *const cs = curr_stats.cs;
+	const int col_num = parse_color_name_value(str, fg, &color->attr);
+
+	if(col_num < -1)
+	{
+		status_bar_errorf("Color name or number not recognized: %s", str);
+		if(cs->state == CSS_LOADING)
+		{
+			cs->state = CSS_BROKEN;
+		}
+
+		return 1;
+	}
+
+	if(fg)
+	{
+		color->fg = col_num;
+	}
+	else
+	{
+		color->bg = col_num;
+	}
+
+	return 0;
+}
+
+/* Parses color string into color number and alters *attr in some cases.
+ * Returns value less than -1 to indicate error as -1 is valid return value. */
+static int
+parse_color_name_value(const char str[], int fg, int *attr)
+{
+	int col_pos;
+	int light_col_pos;
+	int col_num;
+
+	if(strcmp(str, "-1") == 0 || strcasecmp(str, "default") == 0 ||
+			strcasecmp(str, "none") == 0)
+	{
+		return -1;
+	}
+
+	light_col_pos = string_array_pos_case(LIGHT_COLOR_NAMES,
+			ARRAY_LEN(LIGHT_COLOR_NAMES), str);
+	if(light_col_pos >= 0)
+	{
+		*attr |= (!fg && curr_stats.exec_env_type == EET_LINUX_NATIVE) ?
+				A_BLINK : A_BOLD;
+		return light_col_pos;
+	}
+
+	col_pos = string_array_pos_case(XTERM256_COLOR_NAMES,
+			ARRAY_LEN(XTERM256_COLOR_NAMES), str);
+	if(col_pos >= 0)
+	{
+		if(!fg && curr_stats.exec_env_type == EET_LINUX_NATIVE)
+		{
+			*attr &= ~A_BLINK;
+		}
+		return col_pos;
+	}
+
+	col_num = isdigit(*str) ? atoi(str) : -1;
+	if(col_num >= 0 && col_num < COLORS)
+	{
+		return col_num;
+	}
+
+	/* Fail if all possible parsing ways failed. */
+	return -2;
+}
+
+static int
+get_attrs(const char *text)
+{
+	int result = 0;
+	while(*text != '\0')
+	{
+		const char *const p = until_first(text, ',');
+		char buf[64];
+
+		snprintf(buf, p - text + 1, "%s", text);
+		if(strcasecmp(buf, "bold") == 0)
+			result |= A_BOLD;
+		else if(strcasecmp(buf, "underline") == 0)
+			result |= A_UNDERLINE;
+		else if(strcasecmp(buf, "reverse") == 0)
+			result |= A_REVERSE;
+		else if(strcasecmp(buf, "inverse") == 0)
+			result |= A_REVERSE;
+		else if(strcasecmp(buf, "standout") == 0)
+			result |= A_STANDOUT;
+		else if(strcasecmp(buf, "none") == 0)
+			result = 0;
+		else
+			return -1;
+
+		text = (*p == '\0') ? p : p + 1;
+	}
+	return result;
+}
+
+static int
+history_cmd(const cmd_info_t *cmd_info)
+{
+	const char *const type = (cmd_info->argc == 0) ? "." : cmd_info->argv[0];
+	const size_t len = strlen(type);
+
+	if(strcmp(type, ":") == 0 || starts_withn("cmd", type, len))
+		return show_cmdhistory_menu(curr_view) != 0;
+	else if(strcmp(type, "/") == 0 || starts_withn("search", type, len) ||
+			starts_withn("fsearch", type, len))
+		return show_fsearchhistory_menu(curr_view) != 0;
+	else if(strcmp(type, "?") == 0 || starts_withn("bsearch", type, len))
+		return show_bsearchhistory_menu(curr_view) != 0;
+	else if(strcmp(type, "@") == 0 || starts_withn("input", type, len))
+		return show_prompthistory_menu(curr_view) != 0;
+	else if(strcmp(type, "=") == 0 || starts_withn("filter", type, MAX(2U, len)))
+		return show_filterhistory_menu(curr_view) != 0;
+	else if(strcmp(type, ".") == 0 || starts_withn("dir", type, len))
+		return show_history_menu(curr_view) != 0;
+	else
+		return CMDS_ERR_TRAILING_CHARS;
+}
+
+/* This command starts conditional block. */
+static int
+if_cmd(const cmd_info_t *cmd_info)
+{
+	const int x = eval_if_condition(cmd_info);
+	if(x < 0)
+	{
+		return CMDS_ERR_CUSTOM;
+	}
+
+	cmds_scoped_if(x);
+	return 0;
+}
+
+/* Evaluates condition for if-endif statement.  Returns negative number on
+ * error, zero for expression that's evaluated to false and positive number for
+ * true expressions. */
+static int
+eval_if_condition(const cmd_info_t *cmd_info)
+{
+	var_t condition;
+	int result;
+
+	vle_tb_clear(vle_err);
+	if(parse(cmd_info->args, &condition) != PE_NO_ERROR)
+	{
+		vle_tb_append_linef(vle_err, "%s: %s", "Invalid expression",
+				cmd_info->args);
+		status_bar_error(vle_tb_get_data(vle_err));
+		return -1;
+	}
+
+	result = var_to_boolean(condition);
+	var_free(condition);
+	return result;
+}
+
+static int
+invert_cmd(const cmd_info_t *cmd_info)
+{
+	const char *const type_str = (cmd_info->argc == 0) ? "f" : cmd_info->argv[0];
+	const char state_type = type_str[0];
+
+	if(type_str[1] != '\0' || !char_is_one_of("fso", type_str[0]))
+	{
+		return CMDS_ERR_INVALID_ARG;
+	}
+
+	if(cmd_info->qmark)
+	{
+		print_inversion_state(state_type);
+		return 1;
+	}
+	else
+	{
+		invert_state(state_type);
+		return 0;
+	}
+}
+
+/* Prints inversion state of the feature specified by the state_type
+ * argument. */
+static void
+print_inversion_state(char state_type)
+{
+	if(state_type == 'f')
+	{
+		status_bar_messagef("Filter is %sinverted",
+				curr_view->invert ? "" : "not ");
+	}
+	else if(state_type == 's')
+	{
+		status_bar_message("Selection does not have inversion state");
+	}
+	else if(state_type == 'o')
+	{
+		status_bar_messagef("Primary key is sorted in %s order",
+				(curr_view->sort[0] > 0) ? "ascending" : "descending");
+	}
+	else
+	{
+		assert(0 && "Unexpected state type.");
+	}
+}
+
+/* Inverts state of the feature specified by the state_type argument. */
+static void
+invert_state(char state_type)
+{
+	if(state_type == 'f')
+	{
+		toggle_filter_inversion(curr_view);
+	}
+	else if(state_type == 's')
+	{
+		invert_selection(curr_view);
+		redraw_view(curr_view);
+		cmds_preserve_selection();
+	}
+	else if(state_type == 'o')
+	{
+		invert_sorting_order(curr_view);
+		resort_dir_list(1, curr_view);
+		redraw_view(curr_view);
+	}
+	else
+	{
+		assert(0 && "Unexpected state type.");
+	}
+}
+
+static int
+jobs_cmd(const cmd_info_t *cmd_info)
+{
+	return show_jobs_menu(curr_view) != 0;
+}
+
+static int
+let_cmd(const cmd_info_t *cmd_info)
+{
+	vle_tb_clear(vle_err);
+	if(let_variables(cmd_info->args) != 0)
+	{
+		status_bar_error(vle_tb_get_data(vle_err));
+		return 1;
+	}
+	else if(*vle_tb_get_data(vle_err) != '\0')
+	{
+		status_bar_message(vle_tb_get_data(vle_err));
+	}
+	update_path_env(0);
+	return 0;
+}
+
+static int
+locate_cmd(const cmd_info_t *cmd_info)
+{
+	static char *last_args;
+	if(cmd_info->argc > 0)
+	{
+		(void)replace_string(&last_args, cmd_info->args);
+	}
+	else if(last_args == NULL)
+	{
+		status_bar_error("Nothing to repeat");
+		return 1;
+	}
+	return show_locate_menu(curr_view, last_args) != 0;
+}
+
+/* Lists active windows of terminal multiplexer in use, if any. */
+static int
+ls_cmd(const cmd_info_t *cmd_info)
+{
+	switch(curr_stats.term_multiplexer)
+	{
+		case TM_NONE:
+			status_bar_message("No terminal multiplexer is in use");
+			return 1;
+		case TM_SCREEN:
+			(void)vifm_system("screen -X eval windowlist");
+			return 0;
+		case TM_TMUX:
+			if(vifm_system("tmux choose-window") != EXIT_SUCCESS)
+			{
+				/* Refresh all windows as failed command outputs message, which can't be
+				 * suppressed. */
+				update_all_windows();
+				/* Fall back to worse way of doing the same for tmux versions < 1.8. */
+				(void)vifm_system("tmux command-prompt choose-window");
+			}
+			return 0;
+
+		default:
+			assert(0 && "Unknown active terminal multiplexer value");
+			status_bar_message("Unknown terminal multiplexer is in use");
+			return 1;
+	}
+}
+
+/* Lists files in trash. */
+static int
+lstrash_cmd(const cmd_info_t *cmd_info)
+{
+	return show_trash_menu(curr_view) != 0;
+}
+
+static int
+map_cmd(const cmd_info_t *cmd_info)
+{
+	return map_or_remap(cmd_info, 0);
+}
+
+static int
+mark_cmd(const cmd_info_t *cmd_info)
+{
+	int result;
+	char *expanded_path;
+	const char *file;
+	char mark = cmd_info->argv[0][0];
+
+	if(cmd_info->argv[0][1] != '\0')
+		return CMDS_ERR_TRAILING_CHARS;
+
+	if(cmd_info->qmark)
+	{
+		if(!is_mark_empty(mark))
+		{
+			status_bar_errorf("Mark isn't empty: %c", mark);
+			return 1;
+		}
+	}
+
+	if(cmd_info->argc == 1)
+	{
+		const int pos = (cmd_info->end == NOT_DEF)
+		              ? curr_view->list_pos
+		              : cmd_info->end;
+		const dir_entry_t *const entry = &curr_view->dir_entry[pos];
+		return set_user_mark(mark, entry->origin, entry->name);
+	}
+
+	expanded_path = expand_tilde(cmd_info->argv[1]);
+	if(!is_path_absolute(expanded_path))
+	{
+		free(expanded_path);
+		status_bar_error("Expected full path to the directory");
+		return 1;
+	}
+
+	if(cmd_info->argc == 2)
+	{
+		if(cmd_info->end == NOT_DEF || !pane_in_dir(curr_view, expanded_path))
+		{
+			if(curr_stats.load_stage >= 3 && pane_in_dir(curr_view, expanded_path))
+			{
+				file = curr_view->dir_entry[curr_view->list_pos].name;
+			}
+			else
+			{
+				file = NO_MARK_FILE;
+			}
+		}
+		else
+		{
+			file = curr_view->dir_entry[cmd_info->end].name;
+		}
+	}
+	else
+	{
+		file = cmd_info->argv[2];
+	}
+	result = set_user_mark(mark, expanded_path, file);
+	free(expanded_path);
+
+	return result;
+}
+
+/* Displays all or some of marks. */
+static int
+marks_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[256];
+	int i, j;
+
+	if(cmd_info->argc == 0)
+	{
+		return show_marks_menu(curr_view, valid_marks) != 0;
+	}
+
+	j = 0;
+	buf[0] = '\0';
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		const char *p = cmd_info->argv[i];
+		while(*p != '\0')
+		{
+			if(strchr(buf, *p) == NULL)
+			{
+				buf[j++] = *p;
+				buf[j] = '\0';
+			}
+			p++;
+		}
+	}
+	return show_marks_menu(curr_view, buf) != 0;
+}
+
+static int
+messages_cmd(const cmd_info_t *cmd_info)
+{
+	/* TODO: move this code to ui.c */
+	char *lines;
+	size_t len;
+	int count;
+	int t;
+
+	lines = NULL;
+	len = 0;
+	count = curr_stats.msg_tail - curr_stats.msg_head;
+	if(count < 0)
+		count += ARRAY_LEN(curr_stats.msgs);
+	t = (curr_stats.msg_head + 1) % ARRAY_LEN(curr_stats.msgs);
+	while(count-- > 0)
+	{
+		const char *msg = curr_stats.msgs[t];
+		char *new_lines = realloc(lines, len + 1 + strlen(msg) + 1);
+		if(new_lines != NULL)
+		{
+			lines = new_lines;
+			len += sprintf(lines + len, "%s%s", (len == 0) ? "": "\n", msg);
+			t = (t + 1) % ARRAY_LEN(curr_stats.msgs);
+		}
+	}
+
+	if(lines == NULL)
+		return 0;
+
+	curr_stats.save_msg_in_list = 0;
+	curr_stats.allow_sb_msg_truncation = 0;
+	status_bar_message(lines);
+	curr_stats.allow_sb_msg_truncation = 1;
+	curr_stats.save_msg_in_list = 1;
+
+	free(lines);
+	return 1;
+}
+
+/* :mkdir ceates sub-directory.  :mkdir! creates chain of directories.  In
+ * second case both relative and absolute paths are allowed. */
+static int
+mkdir_cmd(const cmd_info_t *cmd_info)
+{
+	make_dirs(curr_view, cmd_info->argv, cmd_info->argc, cmd_info->emark);
+	return 1;
+}
+
+static int
+mmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Menu", MENU_MODE, 0) != 0;
+}
+
+static int
+mnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Menu", MENU_MODE, 1) != 0;
+}
+
+/* Moves files. */
+static int
+move_cmd(const cmd_info_t *cmd_info)
+{
+	return cpmv_cmd(cmd_info, 1);
+}
+
+/* Common part of copy and move commands interface implementation. */
+static int
+cpmv_cmd(const cmd_info_t *cmd_info, int move)
+{
+	const CopyMoveLikeOp op = move ? CMLO_MOVE : CMLO_COPY;
+
+	check_marking(curr_view, 0, NULL);
+
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"?\"");
+			return 1;
+		}
+
+		if(cmd_info->bg)
+		{
+			return cpmv_files_bg(curr_view, NULL, -1, move, cmd_info->emark) != 0;
+		}
+
+		return cpmv_files(curr_view, NULL, -1, op, 0) != 0;
+	}
+
+	if(cmd_info->bg)
+	{
+		return cpmv_files_bg(curr_view, cmd_info->argv, cmd_info->argc, move,
+				cmd_info->emark) != 0;
+	}
+
+	return cpmv_files(curr_view, cmd_info->argv, cmd_info->argc, op,
+			cmd_info->emark) != 0;
+}
+
+static int
+munmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], MENU_MODE);
+}
+
+static int
+nmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Normal", NORMAL_MODE, 0) != 0;
+}
+
+static int
+nnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Normal", NORMAL_MODE, 1) != 0;
+}
+
+/* Resets file selection and search highlight. */
+static int
+nohlsearch_cmd(const cmd_info_t *cmd_info)
+{
+	ui_view_reset_search_highlight(curr_view);
+
+	if(curr_view->selected_files != 0)
+	{
+		clean_selected_files(curr_view);
+		redraw_current_view();
+	}
+	return 0;
+}
+
+static int
+noremap_cmd(const cmd_info_t *cmd_info)
+{
+	return map_or_remap(cmd_info, 1);
+}
+
+static int
+map_or_remap(const cmd_info_t *cmd_info, int no_remap)
+{
+	int result;
+	if(cmd_info->emark)
+	{
+		result = do_map(cmd_info, "", CMDLINE_MODE, no_remap);
+	}
+	else
+	{
+		result = do_map(cmd_info, "", NORMAL_MODE, no_remap);
+		if(result == 0)
+			result = do_map(cmd_info, "", VISUAL_MODE, no_remap);
+	}
+	return result != 0;
+}
+
+/* Executes normal mode commands. */
+static int
+normal_cmd(const cmd_info_t *cmd_info)
+{
+	wchar_t *wide = to_wide(cmd_info->args);
+
+	if(cmd_info->emark)
+	{
+		(void)execute_keys_timed_out_no_remap(wide);
+	}
+	else
+	{
+		(void)execute_keys_timed_out(wide);
+	}
+
+	/* Force leaving command-line mode if the wide contains unfinished ":". */
+	if(vle_mode_is(CMDLINE_MODE))
+	{
+		(void)execute_keys_timed_out(L"\x03");
+	}
+
+	free(wide);
+	return 0;
+}
+
+static int
+nunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], NORMAL_MODE);
+}
+
+static int
+only_cmd(const cmd_info_t *cmd_info)
+{
+	only();
+	return 0;
+}
+
+static int
+popd_cmd(const cmd_info_t *cmd_info)
+{
+	if(popd() != 0)
+	{
+		status_bar_message("Directory stack empty");
+		return 1;
+	}
+	return 0;
+}
+
+static int
+pushd_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->argc == 0)
+	{
+		if(swap_dirs() != 0)
+		{
+			status_bar_error("No other directories");
+			return 1;
+		}
+		return 0;
+	}
+	if(pushd() != 0)
+	{
+		show_error_msg("Memory Error", "Unable to allocate enough memory");
+		return 0;
+	}
+	cd_cmd(cmd_info);
+	return 0;
+}
+
+/* Puts files from the register (default register unless otherwise specified)
+ * into current directory.  Can operate in background. */
+static int
+put_cmd(const cmd_info_t *cmd_info)
+{
+	int reg = DEFAULT_REG_NAME;
+
+	if(cmd_info->argc == 1)
+	{
+		const int error = get_reg(cmd_info->argv[0], &reg);
+		if(error != 0)
+		{
+			return error;
+		}
+	}
+
+	if(cmd_info->bg)
+	{
+		return put_files_bg(curr_view, reg, cmd_info->emark) != 0;
+	}
+
+	return put_files(curr_view, reg, cmd_info->emark) != 0;
+}
+
+static int
+pwd_cmd(const cmd_info_t *cmd_info)
+{
+	status_bar_message(curr_view->curr_dir);
+	return 1;
+}
+
+static int
+qmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "View", VIEW_MODE, 0) != 0;
+}
+
+static int
+qnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "View", VIEW_MODE, 1) != 0;
+}
+
+static int
+qunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], VIEW_MODE);
+}
+
+/* Immediately redraws the screen. */
+static int
+redraw_cmd(const cmd_info_t *cmd_info)
+{
+	update_screen(UT_FULL);
+	return 0;
+}
+
+static int
+registers_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[256];
+	int i, j;
+
+	if(cmd_info->argc == 0)
+		return show_register_menu(curr_view, valid_registers) != 0;
+
+	j = 0;
+	buf[0] = '\0';
+	for(i = 0; i < cmd_info->argc; i++)
+	{
+		const char *p = cmd_info->argv[i];
+		while(*p != '\0')
+		{
+			if(strchr(buf, *p) == NULL)
+			{
+				buf[j++] = *p;
+				buf[j] = '\0';
+			}
+			p++;
+		}
+	}
+	return show_register_menu(curr_view, buf) != 0;
+}
+
+/* Renames selected files of the current view. */
+static int
+rename_cmd(const cmd_info_t *cmd_info)
+{
+	check_marking(curr_view, 0, NULL);
+	return rename_files(curr_view, cmd_info->argv, cmd_info->argc,
+			cmd_info->emark) != 0;
+}
+
+/* Resets internal state and reloads configuration files. */
+static int
+restart_cmd(const cmd_info_t *cmd_info)
+{
+	vifm_restart();
+	return 0;
+}
+
+static int
+restore_cmd(const cmd_info_t *cmd_info)
+{
+	return restore_files(curr_view) != 0;
+}
+
+/* Creates symbolic links with relative paths to files. */
+static int
+rlink_cmd(const cmd_info_t *cmd_info)
+{
+	return link_cmd(cmd_info, 0);
+}
+
+/* Common part of alink and rlink commands interface implementation. */
+static int
+link_cmd(const cmd_info_t *cmd_info, int absolute)
+{
+	const CopyMoveLikeOp op = absolute ? CMLO_LINK_ABS : CMLO_LINK_REL;
+
+	check_marking(curr_view, 0, NULL);
+
+	if(cmd_info->qmark)
+	{
+		if(cmd_info->argc > 0)
+		{
+			status_bar_error("No arguments are allowed if you use \"?\"");
+			return 1;
+		}
+		return cpmv_files(curr_view, NULL, -1, op, 0) != 0;
+	}
+
+	return cpmv_files(curr_view, cmd_info->argv, cmd_info->argc, op,
+			cmd_info->emark) != 0;
+}
+
+/* Shows status of terminal multiplexers support or toggles it. */
+static int
+screen_cmd(const cmd_info_t *cmd_info)
+{
+	if(cmd_info->qmark)
+	{
+		if(cfg.use_term_multiplexer)
+		{
+			if(curr_stats.term_multiplexer != TM_NONE)
+			{
+				status_bar_messagef("Integration with %s is active",
+						(curr_stats.term_multiplexer == TM_SCREEN) ? "GNU screen" : "tmux");
+			}
+			else
+			{
+				status_bar_message("Integration with terminal multiplexers is enabled "
+						"but inactive");
+			}
+		}
+		else
+		{
+			status_bar_message("Integration with terminal multiplexers is disabled");
+		}
+		return 1;
+	}
+	cfg_set_use_term_multiplexer(!cfg.use_term_multiplexer);
+	return 0;
+}
+
+/* Updates/displays global and local options. */
+static int
+set_cmd(const cmd_info_t *cmd_info)
+{
+	const int result = process_set_args(cmd_info->args, 1, 1);
+	return (result < 0) ? CMDS_ERR_CUSTOM : (result != 0);
+}
+
+/* Updates/displays only global options. */
+static int
+setglobal_cmd(const cmd_info_t *cmd_info)
+{
+	const int result = process_set_args(cmd_info->args, 1, 0);
+	return (result < 0) ? CMDS_ERR_CUSTOM : (result != 0);
+}
+
+/* Updates/displays only local options. */
+static int
+setlocal_cmd(const cmd_info_t *cmd_info)
+{
+	const int result = process_set_args(cmd_info->args, 0, 1);
+	return (result < 0) ? CMDS_ERR_CUSTOM : (result != 0);
+}
+
+static int
+shell_cmd(const cmd_info_t *cmd_info)
+{
+	const char *sh = env_get_def("SHELL", cfg.shell);
+
+	/* Run shell with clean PATH environment variable. */
+	load_clean_path_env();
+	shellout(sh, PAUSE_NEVER, cmd_info->emark ? 0 : 1);
+	load_real_path_env();
+
+	return 0;
+}
+
+static int
+sort_cmd(const cmd_info_t *cmd_info)
+{
+	enter_sort_mode(curr_view);
+	cmds_preserve_selection();
+	return 0;
+}
+
+static int
+source_cmd(const cmd_info_t *cmd_info)
+{
+	int ret = 0;
+	char *path = expand_tilde(cmd_info->argv[0]);
+	if(!path_exists(path, DEREF))
+	{
+		status_bar_errorf("File doesn't exist: %s", cmd_info->argv[0]);
+		ret = 1;
+	}
+	if(os_access(path, R_OK) != 0)
+	{
+		status_bar_errorf("File isn't readable: %s", cmd_info->argv[0]);
+		ret = 1;
+	}
+	if(cfg_source_file(path) != 0)
+	{
+		status_bar_errorf("Error sourcing file: %s", cmd_info->argv[0]);
+		ret = 1;
+	}
+	free(path);
+	return ret;
+}
+
+static int
+split_cmd(const cmd_info_t *cmd_info)
+{
+	return do_split(cmd_info, HSPLIT);
+}
+
+/* :s[ubstitute]/[pat]/[subs]/[flags].  Replaces matches of regular expression
+ * in names of files.  Empty pattern is replaced with the latest search pattern.
+ * New pattern is saved in search pattern history.  Empty substitution part is
+ * replaced with the previously used one. */
+static int
+substitute_cmd(const cmd_info_t *cmd_info)
+{
+	/* TODO: Vim preserves these two values across sessions. */
+	static char *last_pattern;
+	static char *last_sub;
+
+	int ic = 0;
+	int glob = cfg.gdefault;
+
+	if(cmd_info->argc == 3)
+	{
+		/* TODO: maybe extract into a function to generalize code with
+		 * filter_cmd(). */
+		const char *flags = cmd_info->argv[2];
+		while(*flags != '\0')
+		{
+			switch(*flags)
+			{
+				case 'i': ic =  1; break;
+				case 'I': ic = -1; break;
+
+				case 'g': glob = !glob; break;
+
+				default:
+					return CMDS_ERR_TRAILING_CHARS;
+			};
+
+			++flags;
+		}
+	}
+
+	if(cmd_info->argc >= 1)
+	{
+		if(cmd_info->argv[0][0] == '\0')
+		{
+			(void)replace_string(&last_pattern, cfg_get_last_search_pattern());
+		}
+		else
+		{
+			(void)replace_string(&last_pattern, cmd_info->argv[0]);
+			cfg_save_search_history(last_pattern);
+		}
+	}
+
+	if(cmd_info->argc >= 2)
+	{
+		(void)replace_string(&last_sub, cmd_info->argv[1]);
+	}
+	else if(cmd_info->argc == 1)
+	{
+		(void)replace_string(&last_sub, "");
+	}
+
+	if(is_null_or_empty(last_pattern))
+	{
+		status_bar_error("No previous pattern");
+		return 1;
+	}
+
+	mark_selected(curr_view);
+	return substitute_in_names(curr_view, last_pattern, last_sub, ic, glob) != 0;
+}
+
+/* Synchronizes path/cursor position of the other pane with corresponding
+ * properties of the current one, possibly including some relative path
+ * changes. */
+static int
+sync_cmd(const cmd_info_t *cmd_info)
+{
+	char dst_path[PATH_MAX];
+
+	if(cmd_info->emark && cmd_info->argc != 0)
+	{
+		return sync_selectively(cmd_info);
+	}
+
+	if(cmd_info->argc > 1)
+	{
+		return CMDS_ERR_TRAILING_CHARS;
+	}
+
+	snprintf(dst_path, sizeof(dst_path), "%s/%s", flist_get_dir(curr_view),
+			(cmd_info->argc > 0) ? cmd_info->argv[0] : "");
+	sync_location(dst_path, cmd_info->emark, 0);
+
+	return 0;
+}
+
+/* Mirrors requested properties of current view with the other one.  Returns
+ * value to be returned by command handler. */
+static int
+sync_selectively(const cmd_info_t *cmd_info)
+{
+	int location = 0, cursor_pos = 0, local_options = 0, filters = 0;
+	if(parse_sync_properties(cmd_info, &location, &cursor_pos, &local_options,
+				&filters) != 0)
+	{
+		return 1;
+	}
+
+	if(filters)
+	{
+		sync_filters();
+	}
+	if(location)
+	{
+		sync_location(flist_get_dir(curr_view), cursor_pos, filters);
+	}
+	if(local_options)
+	{
+		sync_local_opts();
+	}
+
+	return 0;
+}
+
+/* Parses selective view synchronization properties.  Default values for
+ * arguments should be set before the call.  Returns zero on success, otherwise
+ * non-zero is returned and error message is displayed on the status bar. */
+static int
+parse_sync_properties(const cmd_info_t *cmd_info, int *location,
+		int *cursor_pos, int *local_options, int *filters)
+{
+	int i;
+	for(i = 0; i < cmd_info->argc; ++i)
+	{
+		const char *const property = cmd_info->argv[i];
+		if(strcmp(property, "location") == 0)
+		{
+			*location = 1;
+		}
+		else if(strcmp(property, "cursorpos") == 0)
+		{
+			*cursor_pos = 1;
+		}
+		else if(strcmp(property, "localopts") == 0)
+		{
+			*local_options = 1;
+		}
+		else if(strcmp(property, "filters") == 0)
+		{
+			*filters = 1;
+		}
+		else if(strcmp(property, "all") == 0)
+		{
+			*location = 1;
+			*cursor_pos = 1;
+			*local_options = 1;
+			*filters = 1;
+		}
+		else
+		{
+			status_bar_errorf("Unknown selective sync property: %s", property);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/* Mirrors location (directory and maybe cursor position plus local filter) of
+ * the current view to the other one. */
+static void
+sync_location(const char path[], int sync_cursor_pos, int sync_filters)
+{
+	if(!cd_is_possible(path) || change_directory(other_view, path) < 0)
+	{
+		return;
+	}
+
+	/* Normally changing location resets local filter.  Prevent this by
+	 * synchronizing it here (after directory changing, but before loading list of
+	 * files, hence no extra work). */
+	if(sync_filters)
+	{
+		local_filter_apply(other_view, curr_view->local_filter.filter.raw);
+	}
+
+	populate_dir_list(other_view, 0);
+
+	if(sync_cursor_pos)
+	{
+		const int offset = (curr_view->list_pos - curr_view->top_line);
+		const int shift = (offset*other_view->window_rows)/curr_view->window_rows;
+
+		ensure_file_is_selected(other_view, get_current_file_name(curr_view));
+		other_view->top_line = MAX(0, curr_view->list_pos - shift);
+		(void)consider_scroll_offset(other_view);
+
+		save_view_history(other_view, NULL, NULL, -1);
+	}
+
+	ui_view_schedule_redraw(other_view);
+}
+
+/* Sets local options of the other view to be equal to options of the current
+ * one. */
+static void
+sync_local_opts(void)
+{
+	clone_local_options(curr_view, other_view);
+	ui_view_schedule_redraw(other_view);
+}
+
+/* Sets filters of the other view to be equal to options of the current one. */
+static void
+sync_filters(void)
+{
+	other_view->prev_invert = curr_view->prev_invert;
+	other_view->invert = curr_view->invert;
+
+	(void)filter_assign(&other_view->local_filter.filter,
+			&curr_view->local_filter.filter);
+	(void)filter_assign(&other_view->manual_filter, &curr_view->manual_filter);
+	(void)filter_assign(&other_view->auto_filter, &curr_view->auto_filter);
+	ui_view_schedule_reload(other_view);
+}
+
+static int
+touch_cmd(const cmd_info_t *cmd_info)
+{
+	return make_files(curr_view, cmd_info->argv, cmd_info->argc) != 0;
+}
+
+/* Replaces letters in names of files according to character mapping. */
+static int
+tr_cmd(const cmd_info_t *cmd_info)
+{
+	char buf[strlen(cmd_info->argv[0]) + 1];
+	size_t pl, sl;
+
+	if(cmd_info->argv[0][0] == '\0' || cmd_info->argv[1][0] == '\0')
+	{
+		status_bar_error("Empty argument");
+		return 1;
+	}
+
+	pl = strlen(cmd_info->argv[0]);
+	sl = strlen(cmd_info->argv[1]);
+	strcpy(buf, cmd_info->argv[1]);
+	if(pl < sl)
+	{
+		status_bar_error("Second argument cannot be longer");
+		return 1;
+	}
+	else if(pl > sl)
+	{
+		while(sl < pl)
+		{
+			buf[sl] = buf[sl - 1];
+			++sl;
+		}
+		buf[sl] = '\0';
+	}
+
+	mark_selected(curr_view);
+	return tr_in_names(curr_view, cmd_info->argv[0], buf) != 0;
+}
+
+/* Lists all valid non-empty trash directories in a menu with optional size of
+ * each one. */
+static int
+trashes_cmd(const cmd_info_t *cmd_info)
+{
+	return show_trashes_menu(curr_view, cmd_info->qmark) != 0;
+}
+
+static int
+undolist_cmd(const cmd_info_t *cmd_info)
+{
+	return show_undolist_menu(curr_view, cmd_info->emark) != 0;
+}
+
+static int
+unmap_cmd(const cmd_info_t *cmd_info)
+{
+	int result;
+	wchar_t *subst;
+
+	subst = substitute_specs(cmd_info->argv[0]);
+	if(cmd_info->emark)
+	{
+		result = remove_user_keys(subst, CMDLINE_MODE) != 0;
+	}
+	else if(!has_user_keys(subst, NORMAL_MODE))
+	{
+		result = -1;
+	}
+	else if(!has_user_keys(subst, VISUAL_MODE))
+	{
+		result = -2;
+	}
+	else
+	{
+		result = remove_user_keys(subst, NORMAL_MODE) != 0;
+		result += remove_user_keys(subst, VISUAL_MODE) != 0;
+	}
+	free(subst);
+
+	if(result == -1)
+		status_bar_error("No such mapping in normal mode");
+	else if(result == -2)
+		status_bar_error("No such mapping in visual mode");
+	else
+		status_bar_error("Error");
+	return result != 0;
+}
+
+static int
+unlet_cmd(const cmd_info_t *cmd_info)
+{
+	vle_tb_clear(vle_err);
+	if(unlet_variables(cmd_info->args) != 0 && !cmd_info->emark)
+	{
+		status_bar_error(vle_tb_get_data(vle_err));
+		return 1;
+	}
+	return 0;
+}
+
+static int
+view_cmd(const cmd_info_t *cmd_info)
+{
+	if(curr_stats.number_of_windows == 1 && (!curr_stats.view || cmd_info->emark))
+	{
+		status_bar_error("Cannot view files in one window mode");
+		return 1;
+	}
+	if(other_view->explore_mode)
+	{
+		status_bar_error("Other view already is used for file viewing");
+		return 1;
+	}
+	if(curr_stats.view && cmd_info->emark)
+		return 0;
+	toggle_quick_view();
+	return 0;
+}
+
+static int
+vifm_cmd(const cmd_info_t *cmd_info)
+{
+	return show_vifm_menu(curr_view) != 0;
+}
+
+static int
+vmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Visual", VISUAL_MODE, 0) != 0;
+}
+
+static int
+vnoremap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_map(cmd_info, "Visual", VISUAL_MODE, 1) != 0;
+}
+
+static int
+do_map(const cmd_info_t *cmd_info, const char map_type[], int mode,
+		int no_remap)
+{
+	wchar_t *keys, *mapping;
+	char *raw_rhs, *rhs;
+	char t;
+	int result;
+
+	if(cmd_info->argc <= 1)
+	{
+		int save_msg;
+		keys = substitute_specs(cmd_info->args);
+		save_msg = show_map_menu(curr_view, map_type, list_cmds(mode), keys);
+		free(keys);
+		return save_msg != 0;
+	}
+
+	raw_rhs = vle_cmds_past_arg(cmd_info->args);
+	t = *raw_rhs;
+	*raw_rhs = '\0';
+
+	rhs = vle_cmds_at_arg(raw_rhs + 1);
+	keys = substitute_specs(cmd_info->args);
+	mapping = substitute_specs(rhs);
+	result = add_user_keys(keys, mapping, mode, no_remap);
+	free(mapping);
+	free(keys);
+
+	*raw_rhs = t;
+
+	if(result == -1)
+		show_error_msg("Mapping Error", "Unable to allocate enough memory");
+
+	return 0;
+}
+
+#ifdef _WIN32
+static int
+volumes_cmd(const cmd_info_t *cmd_info)
+{
+	return show_volumes_menu(curr_view) != 0;
+}
+#endif
+
+static int
+vsplit_cmd(const cmd_info_t *cmd_info)
+{
+	return do_split(cmd_info, VSPLIT);
+}
+
+static int
+do_split(const cmd_info_t *cmd_info, SPLIT orientation)
+{
+	if(cmd_info->emark && cmd_info->argc != 0)
+	{
+		status_bar_error("No arguments are allowed if you use \"!\"");
+		return 1;
+	}
+
+	if(cmd_info->emark)
+	{
+		if(curr_stats.number_of_windows == 1)
+			split_view(orientation);
+		else
+			only();
+	}
+	else
+	{
+		if(cmd_info->argc == 1)
+			cd(other_view, flist_get_dir(curr_view), cmd_info->argv[0]);
+		split_view(orientation);
+	}
+	return 0;
+}
+
+static int
+vunmap_cmd(const cmd_info_t *cmd_info)
+{
+	return do_unmap(cmd_info->argv[0], VISUAL_MODE);
+}
+
+static int
+do_unmap(const char *keys, int mode)
+{
+	int result;
+	wchar_t *subst;
+
+	subst = substitute_specs(keys);
+	result = remove_user_keys(subst, mode);
+	free(subst);
+
+	if(result != 0)
+	{
+		status_bar_error("No such mapping");
+		return 1;
+	}
+	return 0;
+}
+
+/* Executes Ctrl-W [count] {arg} normal mode command. */
+static int
+wincmd_cmd(const cmd_info_t *cmd_info)
+{
+	int count;
+	char *cmd;
+	wchar_t *wcmd;
+
+	if(cmd_info->count != NOT_DEF && cmd_info->count < 0)
+	{
+		return CMDS_ERR_INVALID_RANGE;
+	}
+	if(cmd_info->args[0] == '\0' || cmd_info->args[1] != '\0')
+	{
+		return CMDS_ERR_INVALID_ARG;
+	}
+
+	count = (cmd_info->count <= 1) ? 1 : cmd_info->count;
+	cmd = format_str("\x17%d%s", count, cmd_info->args);
+	wcmd = to_wide(cmd);
+	free(cmd);
+
+	(void)execute_keys_timed_out(wcmd);
+	free(wcmd);
+	return 0;
+}
+
+/* Prefix that execute same command-line command for both panes. */
+static int
+windo_cmd(const cmd_info_t *cmd_info)
+{
+	int result = 0;
+
+	if(cmd_info->argc == 0)
+		return 0;
+
+	result += winrun(&lwin, cmd_info->args) != 0;
+	result += winrun(&rwin, cmd_info->args) != 0;
+
+	update_screen(UT_FULL);
+
+	return result;
+}
+
+static int
+winrun_cmd(const cmd_info_t *cmd_info)
+{
+	int result = 0;
+	const char *cmd;
+
+	if(cmd_info->argc == 0)
+		return 0;
+
+	if(cmd_info->argv[0][1] != '\0' ||
+			!char_is_one_of("^$%.,", cmd_info->argv[0][0]))
+		return CMDS_ERR_INVALID_ARG;
+
+	if(cmd_info->argc == 1)
+		return 0;
+
+	cmd = cmd_info->args + 2;
+	switch(cmd_info->argv[0][0])
+	{
+		case '^':
+			result += winrun(&lwin, cmd) != 0;
+			break;
+		case '$':
+			result += winrun(&rwin, cmd) != 0;
+			break;
+		case '%':
+			result += winrun(&lwin, cmd) != 0;
+			result += winrun(&rwin, cmd) != 0;
+			break;
+		case '.':
+			result += winrun(curr_view, cmd) != 0;
+			break;
+		case ',':
+			result += winrun(other_view, cmd) != 0;
+			break;
+	}
+
+	curr_stats.need_update = UT_FULL;
+
+	return result;
+}
+
+/* Executes cmd command-line command for a specific view. */
+static int
+winrun(FileView *view, const char cmd[])
+{
+	const int prev_global_local_settings = curr_stats.global_local_settings;
+	int result;
+	FileView *tmp_curr, *tmp_other;
+
+	ui_view_pick(view, &tmp_curr, &tmp_other);
+
+	/* :winrun and :windo should be able to set settings separately for each
+	 * window. */
+	curr_stats.global_local_settings = 0;
+	result = exec_commands(cmd, curr_view, CIT_COMMAND);
+	curr_stats.global_local_settings = prev_global_local_settings;
+
+	ui_view_unpick(view, tmp_curr, tmp_other);
+
+	return result;
+}
+
+static int
+write_cmd(const cmd_info_t *cmd_info)
+{
+	write_info_file();
+	return 0;
+}
+
+/* Possibly exits vifm normally with or without saving state to vifminfo
+ * file. */
+static int
+quit_cmd(const cmd_info_t *cmd_info)
+{
+	vifm_try_leave(!cmd_info->emark, 0, cmd_info->emark);
+	return 0;
+}
+
+static int
+wq_cmd(const cmd_info_t *cmd_info)
+{
+	vifm_try_leave(1, 0, cmd_info->emark);
+	return 0;
+}
+
+/* Processes :[range]yank command followed by "{reg} [{count}]" or
+ * "{reg}|{count}". */
+static int
+yank_cmd(const cmd_info_t *cmd_info)
+{
+	int reg = DEFAULT_REG_NAME;
+	int result;
+
+	result = get_reg_and_count(cmd_info, &reg);
+	if(result == 0)
+	{
+		check_marking(curr_view, 0, NULL);
+		result = yank_files(curr_view, reg) != 0;
+	}
+
+	return result;
+}
+
+/* Processes arguments of form "{reg} [{count}]" or "{reg}|{count}".  On success
+ * *reg is set (so it should be initialized before the call) and zero is
+ * returned, otherwise cmds unit error code is returned. */
+static int
+get_reg_and_count(const cmd_info_t *cmd_info, int *reg)
+{
+	if(cmd_info->argc == 2)
+	{
+		int count;
+		int error;
+
+		error = get_reg(cmd_info->argv[0], reg);
+		if(error != 0)
+		{
+			return error;
+		}
+
+		if(!isdigit(cmd_info->argv[1][0]))
+			return CMDS_ERR_TRAILING_CHARS;
+
+		count = atoi(cmd_info->argv[1]);
+		if(count == 0)
+			return CMDS_ERR_ZERO_COUNT;
+		select_count(cmd_info, count);
+	}
+	else if(cmd_info->argc == 1)
+	{
+		if(isdigit(cmd_info->argv[0][0]))
+		{
+			int count = atoi(cmd_info->argv[0]);
+			if(count == 0)
+				return CMDS_ERR_ZERO_COUNT;
+			select_count(cmd_info, count);
+		}
+		else
+		{
+			return get_reg(cmd_info->argv[0], reg);
+		}
+	}
+	return 0;
+}
+
+/* Processes argument as register name.  On success *reg is set (so it should be
+ * initialized before the call) and zero is returned, otherwise cmds unit error
+ * code is returned. */
+static int
+get_reg(const char arg[], int *reg)
+{
+	if(arg[1] != '\0')
+	{
+		return CMDS_ERR_TRAILING_CHARS;
+	}
+	if(!register_exists(arg[0]))
+	{
+		return CMDS_ERR_TRAILING_CHARS;
+	}
+
+	*reg = arg[0];
+	return 0;
+}
+
+/* Special handler for user defined commands, which are defined using
+ * :command. */
+static int
+usercmd_cmd(const cmd_info_t *cmd_info)
+{
+	char *expanded_com = NULL;
+	MacroFlags flags;
+	int external = 1;
+	int bg;
+	int save_msg = 0;
+	int handled;
+
+	/* Expand macros in a binded command. */
+	expanded_com = expand_macros(cmd_info->cmd, cmd_info->args, &flags,
+			get_cmd_id(cmd_info->cmd) == COM_EXECUTE);
+
+	if(expanded_com[0] == ':')
+	{
+		int sm;
+
+		commands_scope_start();
+
+		sm = exec_commands(expanded_com, curr_view, CIT_COMMAND);
+		free(expanded_com);
+
+		if(commands_scope_finish() != 0)
+		{
+			status_bar_error("Unmatched if-else-endif");
+			return 1;
+		}
+
+		return sm != 0;
+	}
+
+	bg = parse_bg_mark(expanded_com);
+
+	clean_selected_files(curr_view);
+
+	handled = run_ext_command(expanded_com, flags, bg, &save_msg);
+	if(handled > 0)
+	{
+		/* Do nothing. */
+	}
+	else if(handled < 0)
+	{
+		/* XXX: is it intentional to skip adding such commands to undo list? */
+		free(expanded_com);
+		return save_msg;
+	}
+	else if(starts_with_lit(expanded_com, "filter") &&
+			char_is_one_of(" !/", expanded_com[6]))
+	{
+		save_msg = exec_command(expanded_com, curr_view, CIT_COMMAND);
+		external = 0;
+	}
+	else if(expanded_com[0] == '!')
+	{
+		char *com_beginning = expanded_com;
+		int pause = 0;
+		com_beginning++;
+		if(*com_beginning == '!')
+		{
+			pause = 1;
+			com_beginning++;
+		}
+		com_beginning = skip_whitespace(com_beginning);
+
+		if(*com_beginning != '\0' && bg)
+		{
+			start_background_job(com_beginning, 0);
+		}
+		else if(strlen(com_beginning) > 0)
+		{
+			shellout(com_beginning, pause ? PAUSE_ALWAYS : PAUSE_ON_ERROR,
+					flags != MF_NO_TERM_MUX);
+		}
+	}
+	else if(expanded_com[0] == '/')
+	{
+		exec_command(expanded_com + 1, curr_view, CIT_FSEARCH_PATTERN);
+		cmds_preserve_selection();
+		external = 0;
+	}
+	else if(expanded_com[0] == '=')
+	{
+		exec_command(expanded_com + 1, curr_view, CIT_FILTER_PATTERN);
+		ui_view_schedule_reload(curr_view);
+		cmds_preserve_selection();
+		external = 0;
+	}
+	else if(bg)
+	{
+		start_background_job(expanded_com, 0);
+	}
+	else
+	{
+		shellout(expanded_com, PAUSE_ON_ERROR, flags != MF_NO_TERM_MUX);
+	}
+
+	if(external)
+	{
+		cmd_group_continue();
+		add_operation(OP_USR, strdup(expanded_com), NULL, "", "");
+		cmd_group_end();
+	}
+
+	free(expanded_com);
+
+	return save_msg;
+}
+
+/* Checks for background mark and trims it from the command.  Returns non-zero
+ * if mark is found, and zero otherwise. */
+static int
+parse_bg_mark(char cmd[])
+{
+	/* Mark is: space, ampersand, any number of trailing separators. */
+
+	char *const amp = strrchr(cmd, '&');
+	if(amp == NULL || amp - 1 < cmd || *vle_cmds_at_arg(amp + 1) != '\0')
+	{
+		return 0;
+	}
+
+	amp[-1] = '\0';
+	return 1;
+}
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -20,32 +20,64 @@
 #ifndef VIFM__RUNNING_H__
 #define VIFM__RUNNING_H__
 
-#include "utils/test_helpers.h"
-#include "ui.h"
+#include "ui/ui.h"
+#include "macros.h"
 
-void handle_file(FileView *view, int dont_execute, int force_follow);
-/* Opens external editor to edit selected files of the current view.  Returns
- * non-zero on error, otherwise zero is returned. */
-int edit_selection(void);
-void run_using_prog(FileView *view, const char *program, int dont_execute,
-		int force_background);
-/* Negative line/column means ignore parameter.  First line/column number has
- * number one, while zero means don't change it.  Returns zero on success, on
- * error non-zero is returned. */
-int view_file(const char filename[], int line, int column, int allow_forking);
-void handle_dir(FileView *view);
-void cd_updir(FileView *view);
-/* Returns zero on success, otherwise non-zero is returned. */
-int shellout(const char *command, int pause, int use_term_multiplexer);
-void output_to_nowhere(const char *cmd);
+/* Kinds of executable file treatment on file handling. */
+typedef enum
+{
+	FHE_NO_RUN,          /* Don't run. */
+	FHE_RUN,             /* Run with rights of current user. */
+	FHE_ELEVATE_AND_RUN, /* Run with rights elevation (if available). */
+}
+FileHandleExec;
+
+/* When and why should we pause on shellout(). */
+typedef enum
+{
+	PAUSE_ALWAYS,   /* Execute command and pause. */
+	PAUSE_NEVER,    /* Don't pause after the command. */
+	PAUSE_ON_ERROR, /* Pause only on non-zero exit code from the command. */
+}
+ShellPause;
+
+/* Handles opening of current file/selection of the view. */
+void open_file(FileView *view, FileHandleExec exec);
+
+/* Follows file to find its true location (e.g. target of symbolic link) or just
+ * opens it. */
+void follow_file(FileView *view);
+
+/* Runs current file of the view guided by program specification with additional
+ * options. */
+void run_using_prog(FileView *view, const char prog_spec[], int dont_execute,
+		int force_bg);
+
+/* Handles opening of current file of the view as directory. */
+void open_dir(FileView *view);
+
+/* Moves the view to levels-th parent directory taking care of special cases
+ * like root of FUSE mount. */
+void cd_updir(FileView *view, int levels);
+
+/* Executes command in a shell.  Returns zero on success, otherwise non-zero is
+ * returned. */
+int shellout(const char command[], ShellPause pause, int use_term_multiplexer);
+
 /* Returns zero on successful running. */
 int run_with_filetype(FileView *view, const char beginning[], int background);
 
-TSTATIC_DEFS(
-	char * format_edit_selection_cmd(int *bg);
-)
+/* Handles most of command handling variants.  Returns:
+ *  - > 0 -- handled, good to go;
+ *  - = 0 -- not handled at all;
+ *  - < 0 -- handled, exit. */
+int run_ext_command(const char cmd[], MacroFlags flags, int bg, int *save_msg);
+
+/* Runs the cmd and parses its output as list of paths to compose custom view.
+ * Very custom view implies unsorted list. */
+void output_to_custom_flist(FileView *view, const char cmd[], int very);
 
 #endif /* VIFM__RUNNING_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

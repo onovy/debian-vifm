@@ -5,15 +5,25 @@ On *nix you need:
 
     A working version of ncursesw built as a shared library (*.so files,
     enabled by the --with-shared switch of ncurses' configure script) and
-    an ascii compliant terminal.
+    an ascii compliant terminal.  ncurses can be static, but that will
+    require providing appropriate options for linker (thus might not work
+    out of the box).
 
-    Hint for building on Debian-based systems: ncurses package you need to
-    build vifm is called libncursesw5-dev.
+    Hints for building on Debian-based systems (Debian/Ubuntu/Linux Mint):
+     * ncurses package you need to build vifm is called "libncursesw5-dev"
+     * additional (optional) tools used in sample vifmrc:
+       - sudo aptitude install sshfs curlftpfs fuse fuse-zip fusefat fuseiso
+       - for a support of .rar-archive files see:
+         https://gist.github.com/enberg/84710b619bdb0b10e945
 
     For best user-experience with Vim plugins availability of either perl
     interpreter or vim executable is needed to automatically generate tags.
 
-*nix Installation:
+*nix Installation (Cygwin emulates *nix environment, so follow these steps
+when building with Cygwin):
+
+    If you checkout sources from git, run fix-timestamps script first to
+    suppress any spurious build files regeneration.
 
     ./configure
     make
@@ -32,14 +42,18 @@ On *nix you need:
           *.desktop files found on your system to get a list of programs
           associated with mimetype of a file.
 
-      --[disable]/enable-remote-cmds - enable remote command sending
-          (insecure)
+      --disable/[enable]-remote-cmds - enable remote command sending.
 
       --[disable]/enable-developer - enables features of interest to
           developers:
            - debug information
            - debug-friendly optimizations
            - treating compilation warnings as errors
+
+      --[disable]/enable-coverage - enables code coverage generation.
+
+      --with-sanitize=basic|thread|leak - enables address and undefined, thread
+          or leaks sanitizers respecitively.
 
       --without/[with]-gtk - use GTK+ to determine mimetypes if available.
 
@@ -56,12 +70,11 @@ On *nix you need:
       --with-curses-name=[ncursesw] - name of the curses library
 
     You can install vifm in your ~/ directory if you prefer.  To do this
-    manually copy the vifm, vifmrc-converter and vifm-pause executables
-    from the src/ directory to where you want to run them.  Another
-    possibility is to pass --prefix argument to the ./configure script,
-    with path under the home directory, e.g. --prefix=$HOME/local.  You
-    will also need to copy vifm-help.txt and vifmrc files from the data/
-    directory to ~/.vifm/.
+    manually copy the vifm and vifm-pause executables from the src/ directory
+    to where you want to run them.  Another possibility is to pass --prefix
+    argument to the ./configure script, with path under the home directory,
+    e.g. --prefix=$HOME/local.  You will also need to copy vifm-help.txt and
+    vifmrc files from the data/ directory to ~/.vifm/.
 
     After you start vifm for the first time, you can edit the configuration
     file.  It will be at ~/.vifm/vifmrc.  See help for description of other
@@ -101,16 +114,15 @@ Cross-compiling for Windows using MXE (http://mxe.cc/):
      - cd src/
      - make -f Makefile.win CROSS=i686-pc-mingw32-
 
-Windows Installation:
+Windows Installation (using Windows native API, not Cygwin):
 
     cd src
     (uncomment some lines in Makefile.win below 'config:' if you want)
     make -f Makefile.win
 
-    Copy vifm.exe, vifmrc-converter.exe and win_helper.exe to where you
-    want to run them (but they all should be in the same directory).  You will
-    also need to copy vifm help files and vifmrc file to %HOME%/.vifm/ or
-    %APPDATA%/Vifm/.
+    Copy vifm.exe and win_helper.exe to where you want to run them (but they
+    all should be in the same directory).  You will also need to copy vifm help
+    files and vifmrc file to %HOME%/.vifm/ or APPDATA%/Vifm/.
 
     In case you want to be able to create symbolic links, you should set a
     "Run as Administrator" attribute for the win_helper.exe.

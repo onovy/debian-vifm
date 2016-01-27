@@ -18,22 +18,24 @@
 
 #include "trash.h"
 
-#include <sys/stat.h> /* stat */
-#include <unistd.h> /* lstat */
+#include <sys/stat.h> /* stat chmod() */
+#include <unistd.h> /* getuid() */
 
 #include <assert.h> /* assert() */
 #include <errno.h> /* errno */
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* free() */
+#include <stdlib.h> /* free() realloc() */
 #include <string.h> /* strchr() strcmp() strdup() strlen() strspn() */
 
 #include "cfg/config.h"
-#include "menus/menus.h"
+#include "compat/fs_limits.h"
+#include "compat/os.h"
+#include "compat/mntent.h"
+#include "compat/reallocarray.h"
+#include "modes/dialogs/msg_dialog.h"
 #include "utils/fs.h"
-#include "utils/fs_limits.h"
 #include "utils/log.h"
-#include "utils/mntent.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/string_array.h"
@@ -44,7 +46,7 @@
 #include "undo.h"
 
 #define ROOTED_SPEC_PREFIX "%r/"
-#define ROOTED_SPEC_PREFIX_LEN (sizeof(ROOTED_SPEC_PREFIX) - 1)
+#define ROOTED_SPEC_PREFIX_LEN (sizeof(ROOTED_SPEC_PREFIX) - 1U)
 
 /* Describes file location relative to one of registered trash directories.
  * Argument for get_resident_type_traverser().*/
@@ -58,8 +60,8 @@ TrashResidentType;
 
 /* Client of the traverse_specs() function.  Should return non-zero to stop
  * traversal. */
-typedef int (*traverser)(const char base_dir[], const char trash_dir[],
-		void *arg);
+typedef int (*traverser)(const char base_path[], const char trash_dir[],
+		int user_specific, void *arg);
 
 /* List of trash directories. */
 typedef struct
@@ -78,24 +80,27 @@ typedef struct
 get_list_of_trashes_traverser_state;
 
 static int validate_spec(const char spec[]);
-static int create_trash_dir(const char trash_dir[]);
+static int create_trash_dir(const char trash_dir[], int user_specific);
+static int try_create_trash_dir(const char trash_dir[], int user_specific);
 static void empty_trash_dirs(void);
 static void empty_trash_dir(const char trash_dir[]);
-static void empty_trash_in_bg(void *arg);
-static void empty_trash_list(void);
+static void empty_trash_in_bg(bg_op_t *bg_op, void *arg);
+static void remove_trash_entries(const char trash_dir[]);
 static trashes_list get_list_of_trashes(void);
 static int get_list_of_trashes_traverser(struct mntent *entry, void *arg);
 static int is_trash_valid(const char trash_dir[]);
-static int pick_trash_dir_traverser(const char base_dir[],
-		const char trash_dir[], void *arg);
+static void remove_from_trash(const char trash_name[]);
+static int pick_trash_dir_traverser(const char base_path[],
+		const char trash_dir[], int user_specific, void *arg);
 static int is_rooted_trash_dir(const char spec[]);
 static TrashResidentType get_resident_type(const char path[]);
 static int get_resident_type_traverser(const char path[],
-		const char trash_dir[], void *arg);
+		const char trash_dir[], int user_specific, void *arg);
 static int is_trash_directory_traverser(const char path[],
-		const char trash_dir[], void *arg);
-static void traverse_specs(const char base_dir[], traverser client, void *arg);
-static char * get_rooted_trash_dir(const char base_dir[], const char spec[]);
+		const char trash_dir[], int user_specific, void *arg);
+static void traverse_specs(const char base_path[], traverser client, void *arg);
+static char * expand_uid(const char spec[], int *expanded);
+static char * get_rooted_trash_dir(const char base_path[], const char spec[]);
 static char * format_root_spec(const char spec[], const char mount_point[]);
 
 static char **specs;
@@ -159,31 +164,37 @@ set_trash_dir(const char new_specs[])
 static int
 validate_spec(const char spec[])
 {
-	if(is_path_absolute(spec))
+	int valid = 1;
+	int with_uid;
+	char *const expanded_spec = expand_uid(spec, &with_uid);
+
+	if(is_path_absolute(expanded_spec))
 	{
-		if(create_trash_dir(spec) != 0)
+		if(create_trash_dir(expanded_spec, with_uid) != 0)
 		{
-			return 0;
+			valid = 0;
 		}
 	}
-	else if(!is_rooted_trash_dir(spec))
+	else if(!is_rooted_trash_dir(expanded_spec))
 	{
 		show_error_msgf("Error Setting Trash Directory",
-				"The path specification is of incorrect format: %s", spec);
-		return 0;
+				"The path specification is of incorrect format: %s", expanded_spec);
+		valid = 0;
 	}
-	return 1;
+
+	free(expanded_spec);
+	return valid;
 }
 
 /* Ensures existence of trash directory.  Displays error message dialog, if
  * directory creation failed.  Returns zero on success, otherwise non-zero value
  * is returned. */
 static int
-create_trash_dir(const char trash_dir[])
+create_trash_dir(const char trash_dir[], int user_specific)
 {
 	LOG_FUNC_ENTER;
 
-	if(try_create_trash_dir(trash_dir) != 0)
+	if(try_create_trash_dir(trash_dir, 0) != 0)
 	{
 		show_error_msgf("Error Setting Trash Directory",
 				"Could not set trash directory to %s: %s", trash_dir, strerror(errno));
@@ -193,26 +204,39 @@ create_trash_dir(const char trash_dir[])
 	return 0;
 }
 
-int
-try_create_trash_dir(const char trash_dir[])
+/* Tries to create trash directory.  Returns zero on success, otherwise non-zero
+ * value is returned. */
+static int
+try_create_trash_dir(const char trash_dir[], int user_specific)
 {
 	LOG_FUNC_ENTER;
 
-	if(is_dir_writable(trash_dir))
+	if(!is_dir_writable(trash_dir))
 	{
-		return 0;
+		if(make_path(trash_dir, 0777) != 0)
+		{
+			return 1;
+		}
 	}
 
-	return make_dir(trash_dir, 0777);
+	if(user_specific)
+	{
+		if(chmod(trash_dir, 0700) != 0)
+		{
+			return 1;
+		}
+	}
+
+	return 0;
 }
 
 void
-empty_trash(void)
+trash_empty_all(void)
 {
-	clean_regs_with_trash();
+	clean_regs_with_trash(NULL);
 	empty_trash_dirs();
-	clean_cmds_with_trash();
-	empty_trash_list();
+	clean_cmds_with_trash(NULL);
+	remove_trash_entries(NULL);
 }
 
 /* Empties all trash directories (all specifications on all mount points are
@@ -222,12 +246,21 @@ empty_trash_dirs(void)
 {
 	const trashes_list list = get_list_of_trashes();
 	int i;
-	for(i = 0; i < list.ntrashes; i++)
+	for(i = 0; i < list.ntrashes; ++i)
 	{
 		empty_trash_dir(list.trashes[i]);
 	}
 
 	free_string_array(list.trashes, list.ntrashes);
+}
+
+void
+trash_empty(const char trash_dir[])
+{
+	clean_regs_with_trash(trash_dir);
+	empty_trash_dir(trash_dir);
+	clean_cmds_with_trash(trash_dir);
+	remove_trash_entries(trash_dir);
 }
 
 /* Removes all files inside given trash directory (even those that this instance
@@ -236,22 +269,24 @@ static void
 empty_trash_dir(const char trash_dir[])
 {
 	char *const task_desc = format_str("Empty trash: %s", trash_dir);
+	char *const op_desc = format_str("Emptying %s", replace_home_part(trash_dir));
 
 	char *const trash_dir_copy = strdup(trash_dir);
 
-	if(bg_execute(task_desc, BG_UNDEFINED_TOTAL, &empty_trash_in_bg,
+	if(bg_execute(task_desc, op_desc, BG_UNDEFINED_TOTAL, 1, &empty_trash_in_bg,
 			trash_dir_copy) != 0)
 	{
 		free(trash_dir_copy);
 	}
 
+	free(op_desc);
 	free(task_desc);
 }
 
 /* Entry point for a background task that removes files in a single trash
  * directory. */
 static void
-empty_trash_in_bg(void *arg)
+empty_trash_in_bg(bg_op_t *bg_op, void *arg)
 {
 	char *const trash_dir = arg;
 
@@ -260,19 +295,46 @@ empty_trash_in_bg(void *arg)
 	free(trash_dir);
 }
 
+/* Removes entries that belong to specified trash directory.  Removes all if
+ * trash_dir is NULL. */
 static void
-empty_trash_list(void)
+remove_trash_entries(const char trash_dir[])
 {
 	int i;
+	int j = 0;
 
-	for(i = 0; i < nentries; i++)
+	for(i = 0; i < nentries; ++i)
 	{
-		free(trash_list[i].path);
-		free(trash_list[i].trash_name);
+		if(trash_dir == NULL ||
+				path_starts_with(trash_list[i].trash_name, trash_dir))
+		{
+			free(trash_list[i].path);
+			free(trash_list[i].trash_name);
+			continue;
+		}
+
+		trash_list[j++] = trash_list[i];
 	}
-	free(trash_list);
-	trash_list = NULL;
-	nentries = 0;
+
+	nentries = j;
+	if(nentries == 0)
+	{
+		free(trash_list);
+		trash_list = NULL;
+	}
+}
+
+void
+trash_file_moved(const char src[], const char dst[])
+{
+	if(is_under_trash(dst))
+	{
+		add_to_trash(src, dst);
+	}
+	else if(is_under_trash(src))
+	{
+		remove_from_trash(src);
+	}
 }
 
 int
@@ -290,7 +352,8 @@ add_to_trash(const char path[], const char trash_name[])
 		return 0;
 	}
 
-	if((p = realloc(trash_list, sizeof(*trash_list)*(nentries + 1))) == NULL)
+	p = reallocarray(trash_list, nentries + 1, sizeof(*trash_list));
+	if(p == NULL)
 	{
 		return -1;
 	}
@@ -335,20 +398,19 @@ list_trashes(int *ntrashes)
 static trashes_list
 get_list_of_trashes(void)
 {
-	trashes_list list =
-	{
+	trashes_list list = {
 		.trashes = NULL,
 		.ntrashes = 0,
 	};
 
 	int i;
-	for(i = 0; i < nspecs; i++)
+	for(i = 0; i < nspecs; ++i)
 	{
-		const char *const spec = specs[i];
+		int with_uid;
+		char *const spec = expand_uid(specs[i], &with_uid);
 		if(is_rooted_trash_dir(spec))
 		{
-			get_list_of_trashes_traverser_state state =
-			{
+			get_list_of_trashes_traverser_state state = {
 				.list = &list,
 				.spec = spec,
 			};
@@ -359,13 +421,14 @@ get_list_of_trashes(void)
 			list.ntrashes = add_to_string_array(&list.trashes, list.ntrashes, 1,
 					spec);
 		}
+		free(spec);
 	}
 
 	return list;
 }
 
 /* traverse_mount_points() client that collects valid trash directories into a
- * list the base_dir. */
+ * list of trash directories. */
 static int
 get_list_of_trashes_traverser(struct mntent *entry, void *arg)
 {
@@ -395,7 +458,7 @@ is_trash_valid(const char trash_dir[])
 int
 exists_in_trash(const char trash_name[])
 {
-	return path_exists(trash_name);
+	return path_exists(trash_name, NODEREF);
 }
 
 int
@@ -443,7 +506,9 @@ restore_from_trash(const char trash_name[])
 	return -1;
 }
 
-int
+/* Removes record about the file in the trash.  Does nothing if no such record
+ * found. */
+static void
 remove_from_trash(const char trash_name[])
 {
 	int i;
@@ -453,24 +518,25 @@ remove_from_trash(const char trash_name[])
 			break;
 	}
 	if(i >= nentries)
-		return -1;
+	{
+		return;
+	}
 
 	free(trash_list[i].path);
 	free(trash_list[i].trash_name);
 	memmove(trash_list + i, trash_list + i + 1,
 			sizeof(*trash_list)*((nentries - 1) - i));
 
-	nentries--;
-	return 0;
+	--nentries;
 }
 
 char *
-gen_trash_name(const char base_dir[], const char name[])
+gen_trash_name(const char base_path[], const char name[])
 {
 	struct stat st;
 	char buf[PATH_MAX];
 	int i;
-	char *const trash_dir = pick_trash_dir(base_dir);
+	char *const trash_dir = pick_trash_dir(base_path);
 
 	if(trash_dir == NULL)
 	{
@@ -483,7 +549,7 @@ gen_trash_name(const char base_dir[], const char name[])
 		snprintf(buf, sizeof(buf), "%s/%03d_%s", trash_dir, i++, name);
 		chosp(buf);
 	}
-	while(lstat(buf, &st) == 0);
+	while(os_lstat(buf, &st) == 0);
 
 	free(trash_dir);
 
@@ -491,20 +557,33 @@ gen_trash_name(const char base_dir[], const char name[])
 }
 
 char *
-pick_trash_dir(const char base_dir[])
+pick_trash_dir(const char base_path[])
 {
+	char real_path[PATH_MAX];
 	char *trash_dir = NULL;
-	traverse_specs(base_dir, &pick_trash_dir_traverser, &trash_dir);
+
+	/* We want all links resolved to do not mistakenly attribute removed files to
+	 * location of a symbolic link. */
+	if(os_realpath(base_path, real_path) == real_path)
+	{
+		/* If realpath() fails, just go with the original path. */
+#ifdef _WIN32
+		to_forward_slash(real_path);
+#endif
+		base_path = real_path;
+	}
+
+	traverse_specs(base_path, &pick_trash_dir_traverser, &trash_dir);
 	return trash_dir;
 }
 
 /* traverse_specs client that finds first available trash directory suitable for
- * the base_dir. */
+ * the base_path. */
 static int
-pick_trash_dir_traverser(const char base_dir[], const char trash_dir[],
-		void *arg)
+pick_trash_dir_traverser(const char base_path[], const char trash_dir[],
+		int user_specific, void *arg)
 {
-	if(try_create_trash_dir(trash_dir) == 0)
+	if(try_create_trash_dir(trash_dir, user_specific) == 0)
 	{
 		char **const result = arg;
 		*result = strdup(trash_dir);
@@ -528,6 +607,17 @@ is_under_trash(const char path[])
 	return get_resident_type(path) != TRT_OUT_OF_TRASH;
 }
 
+int
+trash_contains(const char trash_dir[], const char path[])
+{
+	if(trash_dir == NULL)
+	{
+		return is_under_trash(path);
+	}
+
+	return path_starts_with(path, trash_dir);
+}
+
 /* Gets status of file relative to trash directories.  Returns the status. */
 static TrashResidentType
 get_resident_type(const char path[])
@@ -541,7 +631,7 @@ get_resident_type(const char path[])
  * directories.  Accepts pointer to TrashResidentType as argument. */
 static int
 get_resident_type_traverser(const char path[], const char trash_dir[],
-		void *arg)
+		int user_specific, void *arg)
 {
 	if(path_starts_with(path, trash_dir))
 	{
@@ -572,7 +662,7 @@ is_trash_directory(const char path[])
  * directories. */
 static int
 is_trash_directory_traverser(const char path[], const char trash_dir[],
-		void *arg)
+		int user_specific, void *arg)
 {
 	if(stroscmp(path, trash_dir) == 0)
 	{
@@ -586,18 +676,19 @@ is_trash_directory_traverser(const char path[], const char trash_dir[],
 /* Calls client traverser for each trash directory specification defined by
  * specs array. */
 static void
-traverse_specs(const char base_dir[], traverser client, void *arg)
+traverse_specs(const char base_path[], traverser client, void *arg)
 {
 	int i;
-	for(i = 0; i < nspecs; i++)
+	for(i = 0; i < nspecs; ++i)
 	{
 		char *to_free = NULL;
 		const char *trash_dir;
+		int with_uid;
 
-		const char *const spec = specs[i];
+		char *const spec = expand_uid(specs[i], &with_uid);
 		if(is_rooted_trash_dir(spec))
 		{
-			to_free = get_rooted_trash_dir(base_dir, spec);
+			to_free = get_rooted_trash_dir(base_path, spec);
 			trash_dir = to_free;
 		}
 		else
@@ -605,24 +696,48 @@ traverse_specs(const char base_dir[], traverser client, void *arg)
 			trash_dir = spec;
 		}
 
-		if(trash_dir != NULL && client(base_dir, trash_dir, arg))
+		if(trash_dir != NULL && client(base_path, trash_dir, with_uid, arg))
 		{
 			free(to_free);
+			free(spec);
 			break;
 		}
 
 		free(to_free);
+		free(spec);
 	}
+}
+
+/* Expands trailing %u into real user ID.  Sets *expanded to reflect the fact
+ * whether expansion took place.  Returns newly allocated string. */
+static char *
+expand_uid(const char spec[], int *expanded)
+{
+#ifndef _WIN32
+	char *copy = strdup(spec);
+	*expanded = cut_suffix(copy, "%u");
+	if(*expanded)
+	{
+		char uid_str[32];
+		size_t len = strlen(copy);
+		snprintf(uid_str, sizeof(uid_str), "%lu", (unsigned long)getuid());
+		(void)strappend(&copy, &len, uid_str);
+	}
+	return copy;
+#else
+	*expanded = 0;
+	return strdup(spec);
+#endif
 }
 
 /* Expands rooted trash directory specification into a string.  Returns NULL on
  * error, otherwise newly allocated string that should be freed by the caller is
  * returned. */
 static char *
-get_rooted_trash_dir(const char base_dir[], const char spec[])
+get_rooted_trash_dir(const char base_path[], const char spec[])
 {
 	char full[PATH_MAX];
-	if(get_mount_point(base_dir, sizeof(full), full) == 0)
+	if(get_mount_point(base_path, sizeof(full), full) == 0)
 	{
 		return format_root_spec(spec, full);
 	}
@@ -635,7 +750,8 @@ get_rooted_trash_dir(const char base_dir[], const char spec[])
 static char *
 format_root_spec(const char spec[], const char mount_point[])
 {
-	return format_str("%s/%s", mount_point, spec + ROOTED_SPEC_PREFIX_LEN);
+	return format_str("%s%s%s", mount_point,
+			ends_with_slash(mount_point) ? "" : "/", spec + ROOTED_SPEC_PREFIX_LEN);
 }
 
 const char *
@@ -665,7 +781,7 @@ trash_prune_dead_entries(void)
 	j = 0;
 	for(i = 0; i < nentries; ++i)
 	{
-		if(!path_exists(trash_list[i].trash_name))
+		if(!path_exists(trash_list[i].trash_name, NODEREF))
 		{
 			free(trash_list[i].path);
 			free(trash_list[i].trash_name);
@@ -678,4 +794,4 @@ trash_prune_dead_entries(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -20,15 +20,15 @@
 
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* realloc() free() */
+#include <stdlib.h> /* free() */
 #include <string.h> /* memset() strcmp() strlen() */
 
+#include "../compat/reallocarray.h"
 #include "../utils/str.h"
 #include "completion.h"
 #include "text_buffer.h"
 #include "var.h"
 
-static int function_registered(const char func_name[]);
 static int add_function(const function_t *func_info);
 static function_t * find_function(const char func_name[]);
 
@@ -51,9 +51,7 @@ function_register(const function_t *func_info)
 	return 0;
 }
 
-/* Checks whether function with specified name exists or not.  Returns non-zero
- * if function with specified name is already registered. */
-static int
+int
 function_registered(const char func_name[])
 {
 	return find_function(func_name) != NULL;
@@ -64,7 +62,8 @@ function_registered(const char func_name[])
 static int
 add_function(const function_t *func_info)
 {
-	function_t *ptr = realloc(functions, sizeof(function_t)*(function_count + 1));
+	function_t *ptr;
+	ptr = reallocarray(functions, function_count + 1, sizeof(function_t));
 	if(ptr == NULL)
 	{
 		return 1;
@@ -81,17 +80,19 @@ function_call(const char func_name[], const call_info_t *call_info)
 	function_t *function = find_function(func_name);
 	if(function == NULL)
 	{
-		text_buffer_addf("%s: %s", "Unknown function", func_name);
+		vle_tb_append_linef(vle_err, "%s: %s", "Unknown function", func_name);
 		return var_error();
 	}
 	if(call_info->argc < function->arg_count)
 	{
-		text_buffer_addf("%s: %s", "Not enough arguments for function", func_name);
+		vle_tb_append_linef(vle_err, "%s: %s", "Not enough arguments for function",
+				func_name);
 		return var_error();
 	}
 	if(call_info->argc > function->arg_count)
 	{
-		text_buffer_addf("%s: %s", "Too many arguments for function", func_name);
+		vle_tb_append_linef(vle_err, "%s: %s", "Too many arguments for function",
+				func_name);
 		return var_error();
 	}
 	return function->ptr(call_info);
@@ -124,20 +125,18 @@ function_reset_all(void)
 void
 function_complete_name(const char str[], const char **start)
 {
-	int i;
+	size_t i;
 	size_t len;
 
 	*start = str;
 
 	len = strlen(str);
-	for(i = 0; i < function_count; ++i)
+	for(i = 0U; i < function_count; ++i)
 	{
 		const char *const name = functions[i].name;
 		if(starts_withn(name, str, len))
 		{
-			char name_with_quote[128];
-			snprintf(name_with_quote, sizeof(name_with_quote), "%s(", name);
-			vle_compl_add_match(name_with_quote);
+			vle_compl_put_match(format_str("%s(", name));
 		}
 	}
 	vle_compl_finish_group();
@@ -153,7 +152,8 @@ function_call_info_init(call_info_t *call_info)
 void
 function_call_info_add_arg(call_info_t *call_info, var_t var)
 {
-	var_t *ptr = realloc(call_info->argv, sizeof(var_t)*(call_info->argc + 1));
+	var_t *ptr;
+	ptr = reallocarray(call_info->argv, call_info->argc + 1, sizeof(var_t));
 	if(ptr == NULL)
 	{
 		return;
@@ -178,4 +178,4 @@ function_call_info_free(call_info_t *call_info)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

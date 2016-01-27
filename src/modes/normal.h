@@ -21,7 +21,7 @@
 #define VIFM__MODES__NORMAL_H__
 
 #include "../engine/keys.h"
-#include "../ui.h"
+#include "../ui/ui.h"
 
 /* Initializes normal mode. */
 void init_normal_mode(void);
@@ -32,6 +32,7 @@ void normal_cmd_zt(key_info_t key_info, keys_info_t *keys_info);
 
 void normal_cmd_zz(key_info_t key_info, keys_info_t *keys_info);
 
+/* Centers the splitter. */
 void normal_cmd_ctrl_wequal(key_info_t key_info, keys_info_t *keys_info);
 
 void normal_cmd_ctrl_wless(key_info_t key_info, keys_info_t *keys_info);
@@ -56,4 +57,4 @@ int find_npattern(FileView *view, const char pattern[], int backward,
 #endif /* VIFM__MODES__NORMAL_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

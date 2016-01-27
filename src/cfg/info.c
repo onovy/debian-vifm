@@ -19,36 +19,40 @@
 
 #include "info.h"
 
-#include <unistd.h> /* R_OK access() */
-
 #include <assert.h> /* assert() */
 #include <ctype.h> /* isdigit() */
 #include <stddef.h> /* NULL size_t */
-#include <stdio.h> /* fscanf() fgets() fputc() snprintf() */
-#include <stdlib.h> /* abs() free() realloc() */
-#include <string.h> /* memset() strtol() strcmp() strchr() strlen() */
+#include <stdio.h> /* fgets() fprintf() fputc() fscanf() snprintf() */
+#include <stdlib.h> /* abs() free() */
+#include <string.h> /* memcpy() memset() strtol() strcmp() strchr() strlen() */
 
+#include "../compat/fs_limits.h"
+#include "../compat/os.h"
+#include "../compat/reallocarray.h"
 #include "../engine/cmds.h"
+#include "../engine/options.h"
+#include "../ui/fileview.h"
+#include "../ui/ui.h"
 #include "../utils/file_streams.h"
 #include "../utils/filter.h"
 #include "../utils/fs.h"
-#include "../utils/fs_limits.h"
 #include "../utils/log.h"
 #include "../utils/macros.h"
+#include "../utils/matcher.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
 #include "../utils/utils.h"
-#include "../bookmarks.h"
-#include "../commands.h"
+#include "../bmarks.h"
+#include "../cmd_core.h"
 #include "../dir_stack.h"
 #include "../filelist.h"
 #include "../filetype.h"
+#include "../marks.h"
 #include "../opt_handlers.h"
 #include "../registers.h"
 #include "../status.h"
 #include "../trash.h"
-#include "../ui.h"
 #include "config.h"
 #include "hist.h"
 #include "info_chars.h"
@@ -63,14 +67,22 @@ static void set_view_property(FileView *view, char type, const char value[]);
 static int copy_file(const char src[], const char dst[]);
 static int copy_file_internal(FILE *const src, FILE *const dst);
 static void update_info_file(const char filename[]);
+static void process_hist_entry(FileView *view, const char dir[],
+		const char file[], int pos, char ***lh, int *nlh, int **lhp, size_t *nlhp);
 static char * convert_old_trash_path(const char trash_path[]);
+static int assoc_exists(assoc_list_t *assocs, const char pattern[],
+		const char cmd[]);
 static void write_options(FILE *const fp);
 static void write_assocs(FILE *fp, const char str[], char mark,
 		assoc_list_t *assocs, int prev_count, char *prev[]);
 static void write_commands(FILE *const fp, char *cmds_list[], char *cmds[],
 		int ncmds);
-static void write_bookmarks(FILE *const fp, const char non_conflicting_bmarks[],
+static void write_marks(FILE *const fp, const char non_conflicting_marks[],
 		char *marks[], const int timestamps[], int nmarks);
+static void write_bmarks(FILE *const fp, char *bmarks[], const int timestamps[],
+		int nbmarks);
+static void write_bmark(const char path[], const char tags[], time_t timestamp,
+		void *arg);
 static void write_tui_state(FILE *const fp);
 static void write_view_history(FILE *fp, FileView *view, const char str[],
 		char mark, int prev_count, char *prev[], int pos[]);
@@ -85,6 +97,7 @@ static void remove_leading_whitespace(char line[]);
 static const char * escape_spaces(const char *str);
 static void put_sort_info(FILE *fp, char leading_char, const FileView *view);
 static int read_optional_number(FILE *f);
+static int read_number(const char line[], long *value);
 static size_t add_to_int_array(int **array, size_t len, int what);
 
 void
@@ -98,7 +111,7 @@ read_info_file(int reread)
 
 	snprintf(info_file, sizeof(info_file), "%s/vifminfo", cfg.config_dir);
 
-	if((fp = fopen(info_file, "r")) == NULL)
+	if((fp = os_fopen(info_file, "r")) == NULL)
 		return;
 
 	while((line = read_vifminfo_line(fp, line)) != NULL)
@@ -115,39 +128,56 @@ read_info_file(int reread)
 			{
 				FileView *v = curr_view;
 				curr_view = (line_val[0] == '[') ? &lwin : &rwin;
-				process_set_args(line_val + 1);
+				process_set_args(line_val + 1, 1, 1);
 				curr_view = v;
 			}
 			else
 			{
-				process_set_args(line_val);
+				process_set_args(line_val, 1, 1);
 			}
 		}
-		else if(type == LINE_TYPE_FILETYPE)
+		else if(type == LINE_TYPE_FILETYPE || type == LINE_TYPE_XFILETYPE)
 		{
 			if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 			{
-				/* This is to prevent old builtin fake associations to be loaded. */
-				if(!ends_with(line2, "}" VIFM_PSEUDO_CMD))
+				char *error;
+				matcher_t *m;
+				const int x = (type == LINE_TYPE_XFILETYPE);
+
+				/* Prevent loading of old builtin fake associations. */
+				if(ends_with(line2, "}" VIFM_PSEUDO_CMD))
 				{
-					set_programs(line_val, line2, 0,
+					continue;
+				}
+
+				m = matcher_alloc(line_val, 0, 1, &error);
+				if(m == NULL)
+				{
+					/* Ignore error description. */
+					free(error);
+				}
+				else
+				{
+					ft_set_programs(m, line2, x,
 							curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
 				}
-			}
-		}
-		else if(type == LINE_TYPE_XFILETYPE)
-		{
-			if((line2 = read_vifminfo_line(fp, line2)) != NULL)
-			{
-				set_programs(line_val, line2, 1,
-						curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
 			}
 		}
 		else if(type == LINE_TYPE_FILEVIEWER)
 		{
 			if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 			{
-				set_fileviewer(line_val, line2);
+				char *error;
+				matcher_t *const m = matcher_alloc(line_val, 0, 1, &error);
+				if(m == NULL)
+				{
+					/* Ignore error description. */
+					free(error);
+				}
+				else
+				{
+					ft_set_viewers(m, line2);
+				}
 			}
 		}
 		else if(type == LINE_TYPE_COMMAND)
@@ -157,8 +187,19 @@ read_info_file(int reread)
 				char *cmdadd_cmd;
 				if((cmdadd_cmd = format_str("command %s %s", line_val, line2)) != NULL)
 				{
-					exec_commands(cmdadd_cmd, curr_view, GET_COMMAND);
+					exec_commands(cmdadd_cmd, curr_view, CIT_COMMAND);
 					free(cmdadd_cmd);
+				}
+			}
+		}
+		else if(type == LINE_TYPE_MARK)
+		{
+			if((line2 = read_vifminfo_line(fp, line2)) != NULL)
+			{
+				if((line3 = read_vifminfo_line(fp, line3)) != NULL)
+				{
+					const int timestamp = read_optional_number(fp);
+					setup_user_mark(line_val[0], line2, line3, timestamp);
 				}
 			}
 		}
@@ -166,16 +207,17 @@ read_info_file(int reread)
 		{
 			if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 			{
-				if((line3 = read_vifminfo_line(fp, line3)) != NULL)
+				long timestamp;
+				if((line3 = read_vifminfo_line(fp, line3)) != NULL &&
+						read_number(line3, &timestamp))
 				{
-					const int timestamp = read_optional_number(fp);
-					setup_user_bookmark(line_val[0], line2, line3, timestamp);
+					(void)bmarks_setup(line_val, line2, (size_t)timestamp);
 				}
 			}
 		}
 		else if(type == LINE_TYPE_ACTIVE_VIEW)
 		{
-			/* don't change active view on :restart command */
+			/* Don't change active view on :restart command. */
 			if(line_val[0] == 'r' && !reread)
 			{
 				ui_views_update_titles();
@@ -194,7 +236,6 @@ read_info_file(int reread)
 			if(!reread)
 			{
 				const int i = atoi(line_val);
-				cfg.show_one_window = (i == 1);
 				curr_stats.number_of_windows = (i == 1) ? 1 : 2;
 			}
 		}
@@ -233,19 +274,19 @@ read_info_file(int reread)
 		}
 		else if(type == LINE_TYPE_CMDLINE_HIST)
 		{
-			append_to_history(&cfg.cmd_hist, save_command_history, line_val);
+			append_to_history(&cfg.cmd_hist, cfg_save_command_history, line_val);
 		}
 		else if(type == LINE_TYPE_SEARCH_HIST)
 		{
-			append_to_history(&cfg.search_hist, save_search_history, line_val);
+			append_to_history(&cfg.search_hist, cfg_save_search_history, line_val);
 		}
 		else if(type == LINE_TYPE_PROMPT_HIST)
 		{
-			append_to_history(&cfg.prompt_hist, save_prompt_history, line_val);
+			append_to_history(&cfg.prompt_hist, cfg_save_prompt_history, line_val);
 		}
 		else if(type == LINE_TYPE_FILTER_HIST)
 		{
-			append_to_history(&cfg.filter_hist, save_filter_history, line_val);
+			append_to_history(&cfg.filter_hist, cfg_save_filter_history, line_val);
 		}
 		else if(type == LINE_TYPE_DIR_STACK)
 		{
@@ -296,7 +337,7 @@ read_info_file(int reread)
 		else if(type == LINE_TYPE_USE_SCREEN)
 		{
 			const int i = atoi(line_val);
-			set_use_term_multiplexer(i != 0);
+			cfg_set_use_term_multiplexer(i != 0);
 		}
 		else if(type == LINE_TYPE_COLORSCHEME)
 		{
@@ -323,6 +364,10 @@ read_info_file(int reread)
 static void
 get_sort_info(FileView *view, const char line[])
 {
+	char *const sort = curr_stats.restart_in_progress
+	                 ? ui_view_sort_list_get(view)
+	                 : view->sort;
+
 	int j = 0;
 	while(*line != '\0' && j < SK_COUNT)
 	{
@@ -331,7 +376,7 @@ get_sort_info(FileView *view, const char line[])
 		if(endptr != line)
 		{
 			line = endptr;
-			view->sort[j++] = MIN(SK_LAST, MAX(-SK_LAST, sort_opt));
+			view->sort_g[j++] = MIN(SK_LAST, MAX(-SK_LAST, sort_opt));
 		}
 		else
 		{
@@ -339,9 +384,14 @@ get_sort_info(FileView *view, const char line[])
 		}
 		line = skip_char(line, ',');
 	}
-	memset(&view->sort[j], SK_NONE, sizeof(view->sort) - j);
+	memset(&view->sort_g[j], SK_NONE, sizeof(view->sort_g) - j);
+	if(j == 0)
+	{
+		view->sort_g[0] = SK_DEFAULT;
+	}
+	memcpy(sort, view->sort_g, sizeof(view->sort));
 
-	reset_view_sort(view);
+	fview_sorting_updated(view);
 }
 
 /* Appends item to the hist extending the history to fit it if needed. */
@@ -360,25 +410,32 @@ ensure_history_not_full(hist_t *hist)
 {
 	if(hist->pos + 1 == cfg.history_len)
 	{
-		resize_history(MAX(0, cfg.history_len + 1));
+		cfg_resize_histories(cfg.history_len + 1);
 		assert(hist->pos + 1 != cfg.history_len && "Failed to resize history.");
 	}
 }
 
+/* Loads single history entry from vifminfo into the view. */
 static void
 get_history(FileView *view, int reread, const char *dir, const char *file,
 		int pos)
 {
+	const int list_rows = view->list_rows;
+
 	if(view->history_num == cfg.history_len)
 	{
-		resize_history(MAX(0, cfg.history_len + 1));
+		cfg_resize_histories(cfg.history_len + 1);
 	}
 
 	if(!reread)
+	{
 		view->list_rows = 1;
+	}
 	save_view_history(view, dir, file, pos);
 	if(!reread)
-		view->list_rows = 0;
+	{
+		view->list_rows = list_rows;
+	}
 }
 
 /* Sets view property specified by the type to the value. */
@@ -413,7 +470,7 @@ write_info_file(void)
 	(void)snprintf(info_file, sizeof(info_file), "%s/vifminfo", cfg.config_dir);
 	(void)snprintf(tmp_file, sizeof(tmp_file), "%s_%u", info_file, get_pid());
 
-	if(access(info_file, R_OK) != 0 || copy_file(info_file, tmp_file) == 0)
+	if(os_access(info_file, R_OK) != 0 || copy_file(info_file, tmp_file) == 0)
 	{
 		update_info_file(tmp_file);
 
@@ -429,8 +486,8 @@ write_info_file(void)
 static int
 copy_file(const char src[], const char dst[])
 {
-	FILE *const src_fp = fopen(src, "rb");
-	FILE *const dst_fp = fopen(dst, "wb");
+	FILE *const src_fp = os_fopen(src, "rb");
+	FILE *const dst_fp = os_fopen(dst, "wb");
 	int result;
 
 	result = copy_file_internal(src_fp, dst_fp);
@@ -488,13 +545,15 @@ update_info_file(const char filename[])
 	int ncmds_list = -1;
 	char **ft = NULL, **fx = NULL, **fv = NULL, **cmds = NULL, **marks = NULL;
 	char **lh = NULL, **rh = NULL, **cmdh = NULL, **srch = NULL, **regs = NULL;
-	int *lhp = NULL, *rhp = NULL, *bt = NULL;
+	int *lhp = NULL, *rhp = NULL, *bt = NULL, *bmt = NULL;
 	char **prompt = NULL, **filter = NULL, **trash = NULL;
+	char **bmarks = NULL;
 	int nft = 0, nfx = 0, nfv = 0, ncmds = 0, nmarks = 0, nlh = 0, nrh = 0;
 	int ncmdh = 0, nsrch = 0, nregs = 0, nprompt = 0, nfilter = 0, ntrash = 0;
+	int nbmarks = 0;
 	char **dir_stack = NULL;
 	int ndir_stack = 0;
-	char *non_conflicting_bmarks;
+	char *non_conflicting_marks;
 
 	if(cfg.vifm_info == 0)
 		return;
@@ -502,11 +561,11 @@ update_info_file(const char filename[])
 	cmds_list = list_udf();
 	while(cmds_list[++ncmds_list] != NULL);
 
-	non_conflicting_bmarks = strdup(valid_bookmarks);
+	non_conflicting_marks = strdup(valid_marks);
 
-	if((fp = fopen(filename, "r")) != NULL)
+	if((fp = os_fopen(filename, "r")) != NULL)
 	{
-		size_t nlhp = 0UL, nrhp = 0UL, nbt = 0UL;
+		size_t nlhp = 0UL, nrhp = 0UL, nbt = 0UL, nbmt = 0UL;
 		char *line = NULL, *line2 = NULL, *line3 = NULL, *line4 = NULL;
 		while((line = read_vifminfo_line(fp, line)) != NULL)
 		{
@@ -520,44 +579,30 @@ update_info_file(const char filename[])
 			{
 				if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 				{
-					assoc_record_t prog;
-					if(get_default_program_for_file(line_val, &prog))
+					if(!assoc_exists(&filetypes, line_val, line2))
 					{
-						free_assoc_record(&prog);
-						continue;
+						nft = add_to_string_array(&ft, nft, 2, line_val, line2);
 					}
-					nft = add_to_string_array(&ft, nft, 2, line_val, line2);
 				}
 			}
 			else if(type == LINE_TYPE_XFILETYPE)
 			{
 				if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 				{
-					assoc_record_t x_prog;
-					if(get_default_program_for_file(line_val, &x_prog))
+					if(!assoc_exists(&xfiletypes, line_val, line2))
 					{
-						assoc_record_t console_prog;
-						if(get_default_program_for_file(line_val, &console_prog))
-						{
-							if(strcmp(x_prog.command, console_prog.command) == 0)
-							{
-								free_assoc_record(&console_prog);
-								free_assoc_record(&x_prog);
-								continue;
-							}
-						}
-						free_assoc_record(&x_prog);
+						nfx = add_to_string_array(&fx, nfx, 2, line_val, line2);
 					}
-					nfx = add_to_string_array(&fx, nfx, 2, line_val, line2);
 				}
 			}
 			else if(type == LINE_TYPE_FILEVIEWER)
 			{
 				if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 				{
-					if(get_viewer_for_file(line_val) != NULL)
-						continue;
-					nfv = add_to_string_array(&fv, nfv, 2, line_val, line2);
+					if(!assoc_exists(&fileviewers, line_val, line2))
+					{
+						nfv = add_to_string_array(&fv, nfv, 2, line_val, line2);
+					}
 				}
 			}
 			else if(type == LINE_TYPE_COMMAND)
@@ -582,51 +627,27 @@ update_info_file(const char filename[])
 					ncmds = add_to_string_array(&cmds, ncmds, 2, line_val, line2);
 				}
 			}
-			else if(type == LINE_TYPE_LWIN_HIST)
+			else if(type == LINE_TYPE_LWIN_HIST || type == LINE_TYPE_RWIN_HIST)
 			{
 				if(line_val[0] == '\0')
 					continue;
 				if((line2 = read_vifminfo_line(fp, line2)) != NULL)
 				{
-					int pos;
+					const int pos = read_optional_number(fp);
 
-					if(lwin.history_pos + nlh/2 == cfg.history_len - 1)
-						continue;
-					if(is_in_view_history(&lwin, line_val))
-						continue;
-
-					pos = read_optional_number(fp);
-					nlh = add_to_string_array(&lh, nlh, 2, line_val, line2);
-					if(nlh/2 > nlhp)
+					if(type == LINE_TYPE_LWIN_HIST)
 					{
-						nlhp = add_to_int_array(&lhp, nlhp, pos);
-						nlhp = MIN(nlh/2, nlhp);
+						process_hist_entry(&lwin, line_val, line2, pos, &lh, &nlh, &lhp,
+								&nlhp);
+					}
+					else
+					{
+						process_hist_entry(&rwin, line_val, line2, pos, &rh, &nrh, &rhp,
+								&nrhp);
 					}
 				}
 			}
-			else if(type == LINE_TYPE_RWIN_HIST)
-			{
-				if(line_val[0] == '\0')
-					continue;
-				if((line2 = read_vifminfo_line(fp, line2)) != NULL)
-				{
-					int pos;
-
-					if(rwin.history_pos + nrh/2 == cfg.history_len - 1)
-						continue;
-					if(is_in_view_history(&rwin, line_val))
-						continue;
-
-					pos = read_optional_number(fp);
-					nrh = add_to_string_array(&rh, nrh, 2, line_val, line2);
-					if(nrh/2 > nrhp)
-					{
-						nrhp = add_to_int_array(&rhp, nrhp, pos);
-						nrhp = MIN(nrh/2, nrhp);
-					}
-				}
-			}
-			else if(type == LINE_TYPE_BOOKMARK)
+			else if(type == LINE_TYPE_MARK)
 			{
 				const char mark = line_val[0];
 				if(line_val[1] != '\0')
@@ -640,14 +661,14 @@ update_info_file(const char filename[])
 						const int timestamp = read_optional_number(fp);
 						const char mark_str[] = { mark, '\0' };
 
-						if(!char_is_one_of(valid_bookmarks, mark))
+						if(!char_is_one_of(valid_marks, mark))
 						{
 							continue;
 						}
 
-						if(is_bookmark_older(mark, timestamp))
+						if(is_mark_older(mark, timestamp))
 						{
-							char *const pos = strchr(non_conflicting_bmarks, mark);
+							char *const pos = strchr(non_conflicting_marks, mark);
 							if(pos != NULL)
 							{
 								nmarks = add_to_string_array(&marks, nmarks, 3, mark_str, line2,
@@ -656,6 +677,23 @@ update_info_file(const char filename[])
 
 								*pos = '\xff';
 							}
+						}
+					}
+				}
+			}
+			else if(type == LINE_TYPE_BOOKMARK)
+			{
+				if((line2 = read_vifminfo_line(fp, line2)) != NULL)
+				{
+					if((line3 = read_vifminfo_line(fp, line3)) != NULL)
+					{
+						long timestamp;
+						if(read_number(line3, &timestamp) &&
+								bmark_is_older(line_val, timestamp))
+						{
+							nbmarks = add_to_string_array(&bmarks, nbmarks, 2, line_val,
+									line2);
+							nbmt = add_to_int_array(&bmt, nbmt, timestamp);
 						}
 					}
 				}
@@ -728,7 +766,7 @@ update_info_file(const char filename[])
 		fclose(fp);
 	}
 
-	if((fp = fopen(filename, "w")) != NULL)
+	if((fp = os_fopen(filename, "w")) != NULL)
 	{
 		fprintf(fp, "# You can edit this file by hand, but it's recommended not to "
 				"do that.\n");
@@ -752,9 +790,14 @@ update_info_file(const char filename[])
 			write_commands(fp, cmds_list, cmds, ncmds);
 		}
 
+		if(cfg.vifm_info & VIFMINFO_MARKS)
+		{
+			write_marks(fp, non_conflicting_marks, marks, bt, nmarks);
+		}
+
 		if(cfg.vifm_info & VIFMINFO_BOOKMARKS)
 		{
-			write_bookmarks(fp, non_conflicting_bmarks, marks, bt, nmarks);
+			write_bmarks(fp, bmarks, bmt, nbmarks);
 		}
 
 		if(cfg.vifm_info & VIFMINFO_TUI)
@@ -829,13 +872,35 @@ update_info_file(const char filename[])
 	free(lhp);
 	free(rhp);
 	free(bt);
+	free(bmt);
 	free_string_array(cmdh, ncmdh);
 	free_string_array(srch, nsrch);
 	free_string_array(regs, nregs);
 	free_string_array(prompt, nprompt);
+	free_string_array(filter, nfilter);
 	free_string_array(trash, ntrash);
+	free_string_array(bmarks, nbmarks);
 	free_string_array(dir_stack, ndir_stack);
-	free(non_conflicting_bmarks);
+	free(non_conflicting_marks);
+}
+
+/* Handles single directory history entry, possibly skipping merging it in. */
+static void
+process_hist_entry(FileView *view, const char dir[], const char file[], int pos,
+		char ***lh, int *nlh, int **lhp, size_t *nlhp)
+{
+	if(view->history_pos + *nlh/2 == cfg.history_len - 1 ||
+			is_in_view_history(view, dir) || !is_dir(dir))
+	{
+		return;
+	}
+
+	*nlh = add_to_string_array(lh, *nlh, 2, dir, file);
+	if(*nlh/2U > *nlhp)
+	{
+		*nlhp = add_to_int_array(lhp, *nlhp, pos);
+		*nlhp = MIN(*nlh/2U, *nlhp);
+	}
 }
 
 /* Performs conversions on files in trash required for partial backward
@@ -847,13 +912,41 @@ convert_old_trash_path(const char trash_path[])
 	if(!is_path_absolute(trash_path) && is_dir_writable(cfg.trash_dir))
 	{
 		char *const full_path = format_str("%s/%s", cfg.trash_dir, trash_path);
-		if(path_exists(full_path))
+		if(path_exists(full_path, DEREF))
 		{
 			return full_path;
 		}
 		free(full_path);
 	}
 	return strdup(trash_path);
+}
+
+/* Checks that given pair of pattern and command exists in specified list of
+ * associations.  Returns non-zero if so, otherwise zero is returned. */
+static int
+assoc_exists(assoc_list_t *assocs, const char pattern[], const char cmd[])
+{
+	int i;
+	for(i = 0; i < assocs->count; ++i)
+	{
+		int j;
+
+		const assoc_t assoc = assocs->list[i];
+		if(strcmp(matcher_get_expr(assoc.matcher), pattern) == 0)
+		{
+			continue;
+		}
+
+		for(j = 0; j < assoc.records.count; ++j)
+		{
+			const assoc_record_t ft_record = assoc.records.list[j];
+			if(strcmp(ft_record.command, cmd) == 0)
+			{
+				return 1;
+			}
+		}
+	}
+	return 0;
 }
 
 /* Writes current values of all options into vifminfo file. */
@@ -864,12 +957,14 @@ write_options(FILE *const fp)
 	fprintf(fp, "=aproposprg=%s\n", escape_spaces(cfg.apropos_prg));
 	fprintf(fp, "=%sautochpos\n", cfg.auto_ch_pos ? "" : "no");
 	fprintf(fp, "=cdpath=%s\n", cfg.cd_path);
+	fprintf(fp, "=%schaselinks\n", cfg.chase_links ? "" : "no");
 	fprintf(fp, "=columns=%d\n", cfg.columns);
 	fprintf(fp, "=%sconfirm\n", cfg.confirm ? "" : "no");
 	fprintf(fp, "=cpoptions=%s%s%s\n",
 			cfg.filter_inverted_by_default ? "f" : "",
 			cfg.selection_is_primary ? "s" : "",
 			cfg.tab_switches_pane ? "t" : "");
+	fprintf(fp, "=deleteprg=%s\n", escape_spaces(cfg.delete_prg));
 	fprintf(fp, "=%sfastrun\n", cfg.fast_run ? "" : "no");
 	if(strcmp(cfg.border_filler, " ") != 0)
 	{
@@ -885,15 +980,18 @@ write_options(FILE *const fp)
 	fprintf(fp, "=%siec\n", cfg.use_iec_prefixes ? "" : "no");
 	fprintf(fp, "=%signorecase\n", cfg.ignore_case ? "" : "no");
 	fprintf(fp, "=%sincsearch\n", cfg.inc_search ? "" : "no");
-	fprintf(fp, "=%slaststatus\n", cfg.last_status ? "" : "no");
+	fprintf(fp, "=%slaststatus\n", cfg.display_statusline ? "" : "no");
+	fprintf(fp, "=%stitle\n", cfg.set_title ? "" : "no");
 	fprintf(fp, "=lines=%d\n", cfg.lines);
 	fprintf(fp, "=locateprg=%s\n", escape_spaces(cfg.locate_prg));
+	fprintf(fp, "=mintimeoutlen=%d\n", cfg.min_timeout_len);
 	fprintf(fp, "=rulerformat=%s\n", escape_spaces(cfg.ruler_format));
 	fprintf(fp, "=%srunexec\n", cfg.auto_execute ? "" : "no");
 	fprintf(fp, "=%sscrollbind\n", cfg.scroll_bind ? "" : "no");
 	fprintf(fp, "=scrolloff=%d\n", cfg.scroll_off);
 	fprintf(fp, "=shell=%s\n", escape_spaces(cfg.shell));
-	fprintf(fp, "=shortmess=%s\n", cfg.trunc_normal_sb_msgs ? "T" : "");
+	fprintf(fp, "=shortmess=%s\n",
+			escape_spaces(get_option_value("shortmess", OPT_GLOBAL)));
 #ifndef _WIN32
 	fprintf(fp, "=slowfs=%s\n", escape_spaces(cfg.slow_fs_list));
 #endif
@@ -905,7 +1003,7 @@ write_options(FILE *const fp)
 	fprintf(fp, "=timeoutlen=%d\n", cfg.timeout_len);
 	fprintf(fp, "=%strash\n", cfg.use_trash ? "" : "no");
 	fprintf(fp, "=tuioptions=%s%s\n",
-			cfg.filelist_col_padding ? "p" : "",
+			cfg.extra_padding ? "p" : "",
 			cfg.side_borders_visible ? "s" : "");
 	fprintf(fp, "=undolevels=%d\n", cfg.undo_levels);
 	fprintf(fp, "=vicmd=%s%s\n", escape_spaces(cfg.vi_command),
@@ -913,16 +1011,18 @@ write_options(FILE *const fp)
 	fprintf(fp, "=vixcmd=%s%s\n", escape_spaces(cfg.vi_x_command),
 			cfg.vi_cmd_bg ? " &" : "");
 	fprintf(fp, "=%swrapscan\n", cfg.wrap_scan ? "" : "no");
-	fprintf(fp, "=[viewcolumns=%s\n", escape_spaces(lwin.view_columns));
-	fprintf(fp, "=]viewcolumns=%s\n", escape_spaces(rwin.view_columns));
-	fprintf(fp, "=[%slsview\n", lwin.ls_view ? "" : "no");
-	fprintf(fp, "=]%slsview\n", rwin.ls_view ? "" : "no");
-	fprintf(fp, "=[%snumber\n", (lwin.num_type & NT_SEQ) ? "" : "no");
-	fprintf(fp, "=]%snumber\n", (rwin.num_type & NT_SEQ) ? "" : "no");
-	fprintf(fp, "=[numberwidth=%d\n", lwin.num_width);
-	fprintf(fp, "=]numberwidth=%d\n", rwin.num_width);
-	fprintf(fp, "=[%srelativenumber\n", (lwin.num_type & NT_REL) ? "" : "no");
-	fprintf(fp, "=]%srelativenumber\n", (rwin.num_type & NT_REL) ? "" : "no");
+	fprintf(fp, "=[viewcolumns=%s\n", escape_spaces(lwin.view_columns_g));
+	fprintf(fp, "=]viewcolumns=%s\n", escape_spaces(rwin.view_columns_g));
+	fprintf(fp, "=[sortgroups=%s\n", escape_spaces(lwin.sort_groups_g));
+	fprintf(fp, "=]sortgroups=%s\n", escape_spaces(rwin.sort_groups_g));
+	fprintf(fp, "=[%slsview\n", lwin.ls_view_g ? "" : "no");
+	fprintf(fp, "=]%slsview\n", rwin.ls_view_g ? "" : "no");
+	fprintf(fp, "=[%snumber\n", (lwin.num_type_g & NT_SEQ) ? "" : "no");
+	fprintf(fp, "=]%snumber\n", (rwin.num_type_g & NT_SEQ) ? "" : "no");
+	fprintf(fp, "=[numberwidth=%d\n", lwin.num_width_g);
+	fprintf(fp, "=]numberwidth=%d\n", rwin.num_width_g);
+	fprintf(fp, "=[%srelativenumber\n", (lwin.num_type_g & NT_REL) ? "" : "no");
+	fprintf(fp, "=]%srelativenumber\n", (rwin.num_type_g & NT_REL) ? "" : "no");
 
 	fprintf(fp, "%s", "=dotdirs=");
 	if(cfg.dot_dirs & DD_ROOT_PARENT)
@@ -931,6 +1031,13 @@ write_options(FILE *const fp)
 		fprintf(fp, "%s", "nonrootparent,");
 	fprintf(fp, "\n");
 
+	fprintf(fp, "%s", "=iooptions=");
+	if(cfg.fast_file_cloning)
+		fprintf(fp, "%s", "fastfilecloning,");
+	fprintf(fp, "\n");
+
+	fprintf(fp, "=dirsize=%s", cfg.view_dir_size == VDS_SIZE ? "size" : "nitems");
+
 	fprintf(fp, "=classify=%s\n", escape_spaces(classify_to_str()));
 
 	fprintf(fp, "=vifminfo=options");
@@ -938,7 +1045,7 @@ write_options(FILE *const fp)
 		fprintf(fp, ",filetypes");
 	if(cfg.vifm_info & VIFMINFO_COMMANDS)
 		fprintf(fp, ",commands");
-	if(cfg.vifm_info & VIFMINFO_BOOKMARKS)
+	if(cfg.vifm_info & VIFMINFO_MARKS)
 		fprintf(fp, ",bookmarks");
 	if(cfg.vifm_info & VIFMINFO_TUI)
 		fprintf(fp, ",tui");
@@ -966,6 +1073,8 @@ write_options(FILE *const fp)
 
 	fprintf(fp, "=%svimhelp\n", cfg.use_vim_help ? "" : "no");
 	fprintf(fp, "=%swildmenu\n", cfg.wild_menu ? "" : "no");
+	fprintf(fp, "=wordchars=%s\n",
+			escape_spaces(get_option_value("wordchars", OPT_GLOBAL)));
 	fprintf(fp, "=%swrap\n", cfg.wrap_quick_view ? "" : "no");
 }
 
@@ -975,30 +1084,39 @@ write_assocs(FILE *fp, const char str[], char mark, assoc_list_t *assocs,
 		int prev_count, char *prev[])
 {
 	int i;
+
 	fprintf(fp, "\n# %s:\n", str);
-	for(i = 0; i < assocs->count; i++)
+
+	for(i = 0; i < assocs->count; ++i)
 	{
 		int j;
+
 		assoc_t assoc = assocs->list[i];
-		for(j = 0; j < assoc.records.count; j++)
+
+		for(j = 0; j < assoc.records.count; ++j)
 		{
 			assoc_record_t ft_record = assoc.records.list[j];
+
 			/* The type check is to prevent builtin fake associations to be written
 			 * into vifminfo file. */
-			if(ft_record.command[0] != '\0' && ft_record.type != ART_BUILTIN)
+			if(ft_record.command[0] == '\0' || ft_record.type == ART_BUILTIN)
 			{
-				if(ft_record.description[0] == '\0')
-				{
-					fprintf(fp, "%c%s\n\t%s\n", mark, assoc.pattern, ft_record.command);
-				}
-				else
-				{
-					fprintf(fp, "%c%s\n\t{%s}%s\n", mark, assoc.pattern,
-							ft_record.description, ft_record.command);
-				}
+				continue;
+			}
+
+			if(ft_record.description[0] == '\0')
+			{
+				fprintf(fp, "%c%s\n\t%s\n", mark, matcher_get_expr(assoc.matcher),
+						ft_record.command);
+			}
+			else
+			{
+				fprintf(fp, "%c%s\n\t{%s}%s\n", mark, matcher_get_expr(assoc.matcher),
+						ft_record.description, ft_record.command);
 			}
 		}
 	}
+
 	for(i = 0; i < prev_count; i += 2)
 	{
 		fprintf(fp, "%c%s\n\t%s\n", mark, prev[i], prev[i + 1]);
@@ -1024,38 +1142,68 @@ write_commands(FILE *const fp, char *cmds_list[], char *cmds[], int ncmds)
 	}
 }
 
-/* Writes bookmarks to vifminfo file.  marks is a list of length nmarks
- * bookmarks read from vifminfo. */
+/* Writes marks to vifminfo file.  marks is a list of length nmarks marks read
+ * from vifminfo. */
 static void
-write_bookmarks(FILE *const fp, const char non_conflicting_bmarks[],
+write_marks(FILE *const fp, const char non_conflicting_marks[],
 		char *marks[], const int timestamps[], int nmarks)
 {
-	int active_bookmarks[NUM_BOOKMARKS];
-	const int len = init_active_bookmarks(valid_bookmarks, active_bookmarks);
+	int active_marks[NUM_MARKS];
+	const int len = init_active_marks(valid_marks, active_marks);
 	int i;
 
-	fputs("\n# Bookmarks:\n", fp);
-	for(i = 0; i < len; i++)
+	fputs("\n# Marks:\n", fp);
+	for(i = 0; i < len; ++i)
 	{
-		const int index = active_bookmarks[i];
-		const char mark = index2mark(index);
-		if(!is_spec_bookmark(index) && char_is_one_of(non_conflicting_bmarks, mark))
+		const int index = active_marks[i];
+		const char m = index2mark(index);
+		if(!is_spec_mark(index) && char_is_one_of(non_conflicting_marks, m))
 		{
-			const bookmark_t *const bookmark = get_bookmark(index);
+			const mark_t *const mark = get_mark(index);
 
-			fprintf(fp, "'%c\n", mark);
-			fprintf(fp, "\t%s\n", bookmark->directory);
-			fprintf(fp, "\t%s\n", bookmark->file);
-			fprintf(fp, TIME_T "\n", bookmark->timestamp);
+			fprintf(fp, "%c%c\n", LINE_TYPE_MARK, m);
+			fprintf(fp, "\t%s\n", mark->directory);
+			fprintf(fp, "\t%s\n", mark->file);
+			fprintf(fp, "%lld\n", (long long)mark->timestamp);
 		}
 	}
 	for(i = 0; i < nmarks; i += 3)
 	{
-		fprintf(fp, "'%c\n", marks[i][0]);
+		fprintf(fp, "%c%c\n", LINE_TYPE_MARK, marks[i][0]);
 		fprintf(fp, "\t%s\n", marks[i + 1]);
 		fprintf(fp, "\t%s\n", marks[i + 2]);
 		fprintf(fp, "%d\n", timestamps[i/3]);
 	}
+}
+
+/* Writes bookmarks to vifminfo file.  bmarks is a list of length nbmarks marks
+ * read from vifminfo. */
+static void
+write_bmarks(FILE *const fp, char *bmarks[], const int timestamps[],
+		int nbmarks)
+{
+	int i;
+
+	fputs("\n# Bookmarks:\n", fp);
+
+	bmarks_list(&write_bmark, fp);
+
+	for(i = 0; i < nbmarks; i += 2)
+	{
+		fprintf(fp, "%c%s\n", LINE_TYPE_BOOKMARK, bmarks[i]);
+		fprintf(fp, "\t%s\n", bmarks[i + 1]);
+		fprintf(fp, "\t%d\n", timestamps[i/2]);
+	}
+}
+
+/* bmarks_list() callback that writes a bookmark into vifminfo. */
+static void
+write_bmark(const char path[], const char tags[], time_t timestamp, void *arg)
+{
+	FILE *const fp = arg;
+	fprintf(fp, "%c%s\n", LINE_TYPE_BOOKMARK, path);
+	fprintf(fp, "\t%s\n", tags);
+	fprintf(fp, "\t%d\n", (int)timestamp);
 }
 
 /* Writes state of the TUI to vifminfo file. */
@@ -1113,7 +1261,7 @@ write_history(FILE *fp, const char str[], char mark, int prev_count,
 	}
 }
 
-/* Writes bookmarks to vifminfo file.  regs is a list of length nregs registers
+/* Writes registers to vifminfo file.  regs is a list of length nregs registers
  * read from vifminfo. */
 static void
 write_registers(FILE *const fp, char *regs[], int nregs)
@@ -1150,8 +1298,8 @@ write_dir_stack(FILE *const fp, char *dir_stack[], int ndir_stack)
 	fputs("\n# Directory stack (oldest to newest):\n", fp);
 	if(dir_stack_changed())
 	{
-		int i;
-		for(i = 0; i < stack_top; i++)
+		unsigned int i;
+		for(i = 0U; i < stack_top; ++i)
 		{
 			fprintf(fp, "S%s\n\t%s\n", stack[i].lpane_dir, stack[i].lpane_file);
 			fprintf(fp, "S%s\n\t%s\n", stack[i].rpane_dir, stack[i].rpane_file);
@@ -1252,11 +1400,13 @@ static void
 put_sort_info(FILE *fp, char leading_char, const FileView *view)
 {
 	int i = -1;
+	const char *const sort = ui_view_sort_list_get(view);
+
 	fputc(leading_char, fp);
-	while(++i < SK_COUNT && abs(view->sort[i]) <= SK_LAST)
+	while(++i < SK_COUNT && abs(sort[i]) <= SK_LAST)
 	{
-		int is_last_option = i >= SK_COUNT - 1 || abs(view->sort[i + 1]) > SK_LAST;
-		fprintf(fp, "%d%s", view->sort[i], is_last_option ? "" : ",");
+		int is_last_option = i >= SK_COUNT - 1 || abs(sort[i + 1]) > SK_LAST;
+		fprintf(fp, "%d%s", sort[i], is_last_option ? "" : ",");
 	}
 	fputc('\n', fp);
 }
@@ -1283,12 +1433,21 @@ read_optional_number(FILE *f)
 	return num;
 }
 
+/* Converts line to number.  Returns non-zero on success and zero otherwise. */
+static int
+read_number(const char line[], long *value)
+{
+	char *endptr;
+	*value = strtol(line, &endptr, 10);
+	return *line != '\0' && *endptr == '\0';
+}
+
 static size_t
 add_to_int_array(int **array, size_t len, int what)
 {
 	int *p;
 
-	p = realloc(*array, sizeof(int)*(len + 1));
+	p = reallocarray(*array, len + 1, sizeof(*p));
 	if(p != NULL)
 	{
 		*array = p;
@@ -1299,4 +1458,4 @@ add_to_int_array(int **array, size_t len, int what)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

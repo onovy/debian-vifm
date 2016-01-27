@@ -20,9 +20,9 @@
 #ifndef VIFM__UTILS__UTILS_WIN_H__
 #define VIFM__UTILS__UTILS_WIN_H__
 
-#include <windef.h>
-
 #include <stddef.h> /* size_t */
+#include <stdint.h> /* uint32_t */
+#include <stdio.h> /* FILE */
 #include <wchar.h> /* wchar_t */
 
 #include "macros.h"
@@ -42,13 +42,15 @@
 
 int wcwidth(wchar_t c);
 
-int wcswidth(const wchar_t str[], size_t max_len);
-
 /* Executes a command (cmd) using CreateProcess() API function.  Expects path
  * that contain spaces to be enclosed in double quotes.  On internal error
  * returns last error code and sets *returned_exit_code to zero, otherwise sets
  * *returned_exit_code to non-zero and returns exit code of a process. */
 int win_exec_cmd(char cmd[], int *const returned_exit_code);
+
+/* Turns command into the one suitable to be run by a shell.  Returns the
+ * string. */
+char * win_make_sh_cmd(const char cmd[]);
 
 int is_win_executable(const char name[]);
 
@@ -56,16 +58,22 @@ int is_vista_and_above(void);
 
 /* Converts Windows attributes to a string.
  * Returns pointer to a statically allocated buffer. */
-const char * attr_str(DWORD attr);
+const char * attr_str(uint32_t attr);
 
 /* Converts Windows attributes to a long string containing all attribute values.
  * Returns pointer to a statically allocated buffer. */
-const char * attr_str_long(DWORD attr);
+const char * attr_str_long(uint32_t attr);
 
 /* Returns pointer to a statically allocated buffer. */
 const char * escape_for_cd(const char str[]);
 
+/* tmpfile() for Windows, the way it should have been implemented.  Returns file
+ * handler opened for read and write that is automatically removed on
+ * application close.  Don't use tmpfile(), they utterly failed to implement
+ * it. */
+FILE * win_tmpfile();
+
 #endif /* VIFM__UTILS__UTILS_WIN_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

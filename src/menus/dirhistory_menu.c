@@ -23,10 +23,11 @@
 #include <string.h> /* strdup() */
 
 #include "../cfg/config.h"
+#include "../ui/ui.h"
 #include "../utils/fs.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
-#include "../ui.h"
+#include "../filelist.h"
 #include "menus.h"
 
 static int execute_dirhistory_cb(FileView *view, menu_info *m);
@@ -38,9 +39,9 @@ show_history_menu(FileView *view)
 	int need_cleanup;
 
 	static menu_info m;
-	init_menu_info(&m, DIRHISTORY_MENU, strdup("History disabled or empty"));
+	init_menu_info(&m, strdup("Directory History"),
+			strdup("History disabled or empty"));
 
-	m.title = strdup(" Directory History ");
 	m.execute_handler = &execute_dirhistory_cb;
 
 	need_cleanup = 0;
@@ -66,8 +67,7 @@ show_history_menu(FileView *view)
 		/* Change the current dir to reflect the current file. */
 		if(stroscmp(view->history[i].dir, view->curr_dir) == 0)
 		{
-			(void)replace_string(&view->history[i].file,
-					view->dir_entry[view->list_pos].name);
+			(void)replace_string(&view->history[i].file, get_current_file_name(view));
 			m.pos = m.len;
 		}
 
@@ -124,9 +124,9 @@ show_history_menu(FileView *view)
 static int
 execute_dirhistory_cb(FileView *view, menu_info *m)
 {
-	goto_selected_directory(view, m);
+	goto_selected_directory(view, m->items[m->pos]);
 	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -23,10 +23,10 @@
 #include <string.h> /* strlen() strdup() */
 
 #include "../modes/menu.h"
+#include "../ui/ui.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
 #include "../background.h"
-#include "../ui.h"
 #include "menus.h"
 
 static int execute_jobs_cb(FileView *view, menu_info *m);
@@ -38,8 +38,8 @@ show_jobs_menu(FileView *view)
 	int i;
 
 	static menu_info m;
-	init_menu_info(&m, JOBS_MENU, strdup("No jobs currently running"));
-	m.title = strdup(" Pid --- Command ");
+	init_menu_info(&m, strdup("Pid --- Command"),
+			strdup("No jobs currently running"));
 	m.execute_handler = &execute_jobs_cb;
 
 	check_background_jobs();
@@ -53,24 +53,25 @@ show_jobs_menu(FileView *view)
 	{
 		if(p->running)
 		{
-			char item_buf[strlen(p->cmd) + 24];
-			if(p->pid == BG_INTERNAL_TASK_PID)
+			char info_buf[24];
+			char item_buf[sizeof(info_buf) + strlen(p->cmd)];
+
+			if(p->type == BJT_COMMAND)
 			{
-				if(p->total == BG_UNDEFINED_TOTAL)
-				{
-					snprintf(item_buf, sizeof(item_buf), " N/A %s ", p->cmd);
-				}
-				else
-				{
-					snprintf(item_buf, sizeof(item_buf), " %d/%d %s ", p->done + 1,
-							p->total, p->cmd);
-				}
+				snprintf(info_buf, sizeof(info_buf), "%" PRINTF_ULL,
+						(unsigned long long)p->pid);
+			}
+			else if(p->bg_op.total == BG_UNDEFINED_TOTAL)
+			{
+				snprintf(info_buf, sizeof(info_buf), "n/a");
 			}
 			else
 			{
-				snprintf(item_buf, sizeof(item_buf), " " PRINTF_PID_T " %s ", p->pid,
-						p->cmd);
+				snprintf(info_buf, sizeof(info_buf), "%d/%d", p->bg_op.done + 1,
+						p->bg_op.total);
 			}
+
+			snprintf(item_buf, sizeof(item_buf), "%-8s  %s", info_buf, p->cmd);
 			i = add_to_string_array(&m.items, i, 1, item_buf);
 		}
 
@@ -94,4 +95,4 @@ execute_jobs_cb(FileView *view, menu_info *m)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

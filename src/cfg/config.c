@@ -26,35 +26,41 @@
 #define LOG "log"
 #define VIFMRC "vifmrc"
 
-#ifndef _WIN32
-#define CP_HELP "cp " PACKAGE_DATA_DIR "/" VIFM_HELP " ~/.vifm"
-#define CP_RC "cp " PACKAGE_DATA_DIR "/" VIFMRC " ~/.vifm"
+#ifndef __APPLE__
+#define SAMPLE_VIFMRC "vifmrc"
+#else
+#define SAMPLE_VIFMRC "vifmrc-osx"
 #endif
 
 #include <assert.h> /* assert() */
 #include <limits.h> /* INT_MIN */
 #include <stddef.h> /* size_t */
 #include <stdio.h> /* FILE snprintf() */
-#include <stdlib.h>
+#include <stdlib.h> /* free() */
 #include <string.h> /* memmove() memset() strdup() */
 
-#include "../menus/menus.h"
+#include "../compat/fs_limits.h"
+#include "../compat/os.h"
+#include "../compat/reallocarray.h"
+#include "../int/term_title.h"
+#include "../io/iop.h"
+#include "../modes/dialogs/msg_dialog.h"
+#include "../ui/ui.h"
 #include "../utils/env.h"
 #include "../utils/file_streams.h"
 #include "../utils/fs.h"
-#include "../utils/fs_limits.h"
 #include "../utils/log.h"
 #include "../utils/macros.h"
 #include "../utils/str.h"
 #include "../utils/path.h"
 #include "../utils/utils.h"
-#include "../bookmarks.h"
-#include "../commands.h"
+#include "../cmd_core.h"
 #include "../filelist.h"
+#include "../marks.h"
 #include "../opt_handlers.h"
 #include "../status.h"
 #include "../types.h"
-#include "../ui.h"
+#include "../vifm.h"
 #include "hist.h"
 
 /* Maximum supported by the implementation length of line in vifmrc file. */
@@ -63,7 +69,7 @@
 /* Default value of shell command used if $SHELL environment variable isn't
  * set. */
 #ifndef _WIN32
-#define DEFAULT_SHELL_CMD "sh"
+#define DEFAULT_SHELL_CMD "/bin/sh"
 #else
 #define DEFAULT_SHELL_CMD "cmd"
 #endif
@@ -80,35 +86,33 @@ static int try_homepath_envvar_for_home(void);
 static void find_config_dir(void);
 static int try_vifm_envvar_for_conf(void);
 static int try_exe_directory_for_conf(void);
-static int try_home_envvar_for_conf(void);
+static int try_home_envvar_for_conf(int force);
 static int try_appdata_for_conf(void);
+static int try_xdg_for_conf(void);
+static void find_data_dir(void);
 static void find_config_file(void);
 static int try_myvifmrc_envvar_for_vifmrc(void);
 static int try_exe_directory_for_vifmrc(void);
 static int try_vifm_vifmrc_for_vifmrc(void);
 static void store_config_paths(void);
-static void create_config_dir(void);
-#ifndef _WIN32
-static void create_help_file(void);
-static void create_rc_file(void);
-#endif
-static void add_default_bookmarks(void);
+static void setup_dirs(void);
+static void copy_help_file(void);
+static void create_scripts_dir(void);
+static void copy_rc_file(void);
+static void add_default_marks(void);
 static int source_file_internal(FILE *fp, const char filename[]);
 static void show_sourcing_error(const char filename[], int line_num);
-static const char * get_tmpdir(void);
-static int is_conf_file(const char file[]);
 static void disable_history(void);
 static void free_view_history(FileView *view);
 static void decrease_history(size_t new_len, size_t removed_count);
-static void reduce_view_history(FileView *view, size_t size);
+static void reduce_view_history(FileView *view, int size);
 static void reallocate_history(size_t new_len);
 static void zero_new_history_items(size_t old_len, size_t delta);
 static void save_into_history(const char item[], hist_t *hist, int len);
 
 void
-init_config(void)
+cfg_init(void)
 {
-	cfg.show_one_window = 0;
 	cfg.history_len = 15;
 
 	(void)hist_init(&cfg.cmd_hist, cfg.history_len);
@@ -130,46 +134,30 @@ init_config(void)
 	cfg.vi_x_command = strdup("");
 	cfg.vi_x_cmd_bg = 0;
 	cfg.use_trash = 1;
-
-	{
-		char fuse_home[PATH_MAX];
-		int update_stat;
-		snprintf(fuse_home, sizeof(fuse_home), "%s/vifm_FUSE", get_tmpdir());
-		update_stat = set_fuse_home(fuse_home);
-		assert(update_stat == 0);
-	}
-
 	cfg.use_term_multiplexer = 0;
 	cfg.use_vim_help = 0;
 	cfg.wild_menu = 0;
 	cfg.ignore_case = 0;
 	cfg.smart_case = 0;
 	cfg.hl_search = 1;
-	cfg.vifm_info = VIFMINFO_BOOKMARKS;
+	cfg.vifm_info = VIFMINFO_MARKS | VIFMINFO_BOOKMARKS;
 	cfg.auto_ch_pos = 1;
-	cfg.timeout_len = 1000;
 	cfg.scroll_off = 0;
 	cfg.gdefault = 0;
-#ifndef _WIN32
-	cfg.slow_fs_list = strdup("");
-#endif
 	cfg.scroll_bind = 0;
 	cfg.wrap_scan = 1;
 	cfg.inc_search = 0;
 	cfg.selection_is_primary = 1;
 	cfg.tab_switches_pane = 1;
 	cfg.use_system_calls = 0;
-	cfg.last_status = 1;
 	cfg.tab_stop = 8;
-	cfg.ruler_format = strdup("%=%l/%S ");
+	cfg.ruler_format = strdup("%l/%S ");
 	cfg.status_line = strdup("");
 
 	cfg.lines = INT_MIN;
 	cfg.columns = INT_MIN;
 
 	cfg.dot_dirs = DD_NONROOT_PARENT;
-
-	cfg.trunc_normal_sb_msgs = 0;
 
 	cfg.filter_inverted_by_default = 1;
 
@@ -178,62 +166,76 @@ init_config(void)
 			"-type d \\( ! -readable -o ! -executable \\) -prune");
 	cfg.grep_prg = strdup("grep -n -H -I -r %i %a %s");
 	cfg.locate_prg = strdup("locate %a");
+	cfg.delete_prg = strdup("");
+
+	cfg.trunc_normal_sb_msgs = 0;
+	cfg.shorten_title_paths = 1;
+
+	cfg.slow_fs_list = strdup("");
 
 	cfg.cd_path = strdup(env_get_def("CDPATH", DEFAULT_CD_PATH));
 	replace_char(cfg.cd_path, ':', ',');
 
-	cfg.filelist_col_padding = 1;
+	cfg.extra_padding = 1;
 	cfg.side_borders_visible = 1;
+	cfg.display_statusline = 1;
 
 	cfg.border_filler = strdup(" ");
 
-#ifndef _WIN32
-	copy_str(cfg.log_file, sizeof(cfg.log_file), "/var/log/vifm-startup-log");
-#else
-	{
-		char exe_dir[PATH_MAX];
-		(void)get_exe_dir(exe_dir, sizeof(exe_dir));
-		snprintf(cfg.log_file, sizeof(cfg.log_file), "%s/startup-log", exe_dir);
-	}
-#endif
+	cfg.set_title = term_title_restorable();
+
+	cfg.chase_links = 0;
+
+	cfg.timeout_len = 1000;
+	cfg.min_timeout_len = 150;
+
+	/* Fill cfg.word_chars as if it was initialized from isspace() fuction. */
+	memset(&cfg.word_chars, 1, sizeof(cfg.word_chars));
+	cfg.word_chars['\x00'] = 0; cfg.word_chars['\x09'] = 0;
+	cfg.word_chars['\x0a'] = 0; cfg.word_chars['\x0b'] = 0;
+	cfg.word_chars['\x0c'] = 0; cfg.word_chars['\x0d'] = 0;
+	cfg.word_chars['\x20'] = 0;
+
+	cfg.view_dir_size = VDS_SIZE;
+
+	cfg.log_file[0] = '\0';
 
 	cfg_set_shell(env_get_def("SHELL", DEFAULT_SHELL_CMD));
 
 	memset(&cfg.decorations, '\0', sizeof(cfg.decorations));
-	cfg.decorations[DIRECTORY][DECORATION_SUFFIX] = '/';
+	cfg.decorations[FT_DIR][DECORATION_SUFFIX] = '/';
+
+	cfg.fast_file_cloning = 0;
 }
 
-/* searches for configuration file and directories, stores them and ensures
- * existence of some of them */
 void
-set_config_paths(void)
+cfg_discover_paths(void)
 {
 	LOG_FUNC_ENTER;
 
 	find_home_dir();
 	find_config_dir();
+	find_data_dir();
 	find_config_file();
 
 	store_config_paths();
 
-	create_config_dir();
+	setup_dirs();
 }
 
-/* tries to find home directory */
+/* Tries to find home directory. */
 static void
 find_home_dir(void)
 {
 	LOG_FUNC_ENTER;
 
-	if(try_home_envvar_for_home())
-		return;
-	if(try_userprofile_envvar_for_home())
-		return;
-	if(try_homepath_envvar_for_home())
-		return;
+	if(try_home_envvar_for_home()) return;
+	if(try_userprofile_envvar_for_home()) return;
+	if(try_homepath_envvar_for_home()) return;
 }
 
-/* tries to use HOME environment variable to find home directory */
+/* Tries to use HOME environment variable to find home directory.  Returns
+ * non-zero on success, otherwise zero is returned. */
 static int
 try_home_envvar_for_home(void)
 {
@@ -243,7 +245,8 @@ try_home_envvar_for_home(void)
 	return home != NULL && is_dir(home);
 }
 
-/* tries to use USERPROFILE environment variable to find home directory */
+/* Tries to use USERPROFILE environment variable to find home directory.
+ * Returns non-zero on success, otherwise zero is returned. */
 static int
 try_userprofile_envvar_for_home(void)
 {
@@ -263,6 +266,8 @@ try_userprofile_envvar_for_home(void)
 #endif
 }
 
+/* Tries to use $HOMEDRIVE/$HOMEPATH as home directory.  Returns non-zero on
+ * success, otherwise zero is returned. */
 static int
 try_homepath_envvar_for_home(void)
 {
@@ -286,23 +291,26 @@ try_homepath_envvar_for_home(void)
 #endif
 }
 
-/* tries to find configuration directory */
+/* Tries to find configuration directory. */
 static void
 find_config_dir(void)
 {
 	LOG_FUNC_ENTER;
 
-	if(try_vifm_envvar_for_conf())
-		return;
-	if(try_exe_directory_for_conf())
-		return;
-	if(try_home_envvar_for_conf())
-		return;
-	if(try_appdata_for_conf())
-		return;
+	if(try_vifm_envvar_for_conf()) return;
+	if(try_exe_directory_for_conf()) return;
+	if(try_home_envvar_for_conf(0)) return;
+	if(try_appdata_for_conf()) return;
+	if(try_xdg_for_conf()) return;
+
+	if(!try_home_envvar_for_conf(1))
+	{
+		vifm_finish("Failed to determine location of configuration files.");
+	}
 }
 
-/* tries to use VIFM environment variable to find configuration directory */
+/* Tries to use VIFM environment variable to find configuration directory.
+ * Returns non-zero on success, otherwise zero is returned. */
 static int
 try_vifm_envvar_for_conf(void)
 {
@@ -312,7 +320,8 @@ try_vifm_envvar_for_conf(void)
 	return vifm != NULL && is_dir(vifm);
 }
 
-/* tries to use directory of executable file as configuration directory */
+/* Tries to use directory of executable file as configuration directory.
+ * Returns non-zero on success, otherwise zero is returned. */
 static int
 try_exe_directory_for_conf(void)
 {
@@ -325,7 +334,7 @@ try_exe_directory_for_conf(void)
 		return 0;
 	}
 
-	if(!path_exists_at(exe_dir, VIFMRC))
+	if(!path_exists_at(exe_dir, VIFMRC, DEREF))
 	{
 		return 0;
 	}
@@ -334,26 +343,33 @@ try_exe_directory_for_conf(void)
 	return 1;
 }
 
-/* tries to use $HOME/.vifm as configuration directory */
+/* Tries to use $HOME/.vifm as configuration directory.  Tries harder on force.
+ * Returns non-zero on success, otherwise zero is returned. */
 static int
-try_home_envvar_for_conf(void)
+try_home_envvar_for_conf(int force)
 {
 	LOG_FUNC_ENTER;
 
 	char vifm[PATH_MAX];
+
 	const char *home = env_get(HOME_EV);
 	if(home == NULL || !is_dir(home))
+	{
 		return 0;
+	}
+
 	snprintf(vifm, sizeof(vifm), "%s/.vifm", home);
-#ifdef _WIN32
-	if(!is_dir(vifm))
+	if(!force && !is_dir(vifm))
+	{
 		return 0;
-#endif
+	}
+
 	env_set(VIFM_EV, vifm);
 	return 1;
 }
 
-/* tries to use $APPDATA/Vifm as configuration directory */
+/* Tries to use $APPDATA/Vifm as configuration directory.  Returns non-zero on
+ * success, otherwise zero is returned. */
 static int
 try_appdata_for_conf(void)
 {
@@ -373,31 +389,79 @@ try_appdata_for_conf(void)
 #endif
 }
 
-/* tries to find configuration file */
+/* Tries to use $XDG_CONFIG_HOME/vifm as configuration directory.  Returns
+ * non-zero on success, otherwise zero is returned. */
+static int
+try_xdg_for_conf(void)
+{
+	LOG_FUNC_ENTER;
+
+	char *config_dir;
+
+	const char *const config_home = env_get("XDG_CONFIG_HOME");
+	if(!is_null_or_empty(config_home) && is_path_absolute(config_home))
+	{
+		config_dir = format_str("%s/vifm", config_home);
+	}
+	else if(path_exists_at(env_get(HOME_EV), ".config", DEREF))
+	{
+		config_dir = format_str("%s/.config/vifm", env_get(HOME_EV));
+	}
+	else
+	{
+		return 0;
+	}
+
+	env_set(VIFM_EV, config_dir);
+	free(config_dir);
+
+	return 1;
+}
+
+/* Tries to find directory for data files. */
+static void
+find_data_dir(void)
+{
+	LOG_FUNC_ENTER;
+
+	const char *const data_home = env_get("XDG_DATA_HOME");
+	if(is_null_or_empty(data_home) || !is_path_absolute(data_home))
+	{
+		snprintf(cfg.data_dir, sizeof(cfg.data_dir) - 4, "%s/.local/share/",
+				env_get(HOME_EV));
+	}
+	else
+	{
+		snprintf(cfg.data_dir, sizeof(cfg.data_dir) - 4, "%s/", data_home);
+	}
+
+	strcat(cfg.data_dir, "vifm");
+}
+
+/* Tries to find configuration file. */
 static void
 find_config_file(void)
 {
 	LOG_FUNC_ENTER;
 
-	if(try_myvifmrc_envvar_for_vifmrc())
-		return;
-	if(try_exe_directory_for_vifmrc())
-		return;
-	if(try_vifm_vifmrc_for_vifmrc())
-		return;
+	if(try_myvifmrc_envvar_for_vifmrc()) return;
+	if(try_exe_directory_for_vifmrc()) return;
+	if(try_vifm_vifmrc_for_vifmrc()) return;
 }
 
-/* tries to use $MYVIFMRC as configuration file */
+/* Tries to use $MYVIFMRC as configuration file.  Returns non-zero on success,
+ * otherwise zero is returned. */
 static int
 try_myvifmrc_envvar_for_vifmrc(void)
 {
 	LOG_FUNC_ENTER;
 
 	const char *myvifmrc = env_get(MYVIFMRC_EV);
-	return myvifmrc != NULL && path_exists(myvifmrc);
+	return myvifmrc != NULL && path_exists(myvifmrc, DEREF);
 }
 
-/* tries to use vifmrc in directory of executable file as configuration file */
+/* Tries to use vifmrc in directory of executable file as configuration file.
+ * Returns non-zero on success, otherwise zero is returned. */
 static int
 try_exe_directory_for_vifmrc(void)
 {
@@ -412,7 +476,7 @@ try_exe_directory_for_vifmrc(void)
 	}
 
 	snprintf(vifmrc, sizeof(vifmrc), "%s/" VIFMRC, exe_dir);
-	if(!path_exists(vifmrc))
+	if(!path_exists(vifmrc, DEREF))
 	{
 		return 0;
 	}
@@ -421,7 +485,8 @@ try_exe_directory_for_vifmrc(void)
 	return 1;
 }
 
-/* tries to use $VIFM/vifmrc as configuration file */
+/* Tries to use $VIFM/vifmrc as configuration file.  Returns non-zero on
+ * success, otherwise zero is returned. */
 static int
 try_vifm_vifmrc_for_vifmrc(void)
 {
@@ -432,116 +497,201 @@ try_vifm_vifmrc_for_vifmrc(void)
 	if(vifm == NULL || !is_dir(vifm))
 		return 0;
 	snprintf(vifmrc, sizeof(vifmrc), "%s/" VIFMRC, vifm);
-	if(!path_exists(vifmrc))
+	if(!path_exists(vifmrc, DEREF))
 		return 0;
 	env_set(MYVIFMRC_EV, vifmrc);
 	return 1;
 }
 
-/* writes path configuration file and directories for further usage */
+/* Writes path configuration file and directories for further usage. */
 static void
 store_config_paths(void)
 {
 	LOG_FUNC_ENTER;
 
-	snprintf(cfg.home_dir, sizeof(cfg.home_dir), "%s/", env_get(HOME_EV));
-	snprintf(cfg.config_dir, sizeof(cfg.config_dir), "%s", env_get(VIFM_EV));
-	snprintf(cfg.trash_dir, sizeof(cfg.trash_dir), "%s/" TRASH, cfg.config_dir);
-	snprintf(cfg.log_file, sizeof(cfg.log_file), "%s/" LOG, cfg.config_dir);
-}
-
-/* ensures existence of configuration directory */
-static void
-create_config_dir(void)
-{
-	LOG_FUNC_ENTER;
-
-	/* ensure existence of configuration directory */
-	if(!is_dir(cfg.config_dir))
-	{
+	const char *const trash_dir_fmt =
 #ifndef _WIN32
-		FILE *f;
-		char help_file[PATH_MAX];
-		char rc_file[PATH_MAX];
-
-		if(make_dir(cfg.config_dir, 0777) != 0)
-			return;
-
-		snprintf(help_file, sizeof(help_file), "%s/" VIFM_HELP, cfg.config_dir);
-		if((f = fopen(help_file, "r")) == NULL)
-			create_help_file();
-		else
-			fclose(f);
-
-		snprintf(rc_file, sizeof(rc_file), "%s/" VIFMRC, cfg.config_dir);
-		if((f = fopen(rc_file, "r")) == NULL)
-			create_rc_file();
-		else
-			fclose(f);
-
-		/* This should be first start of Vifm, ensure that newly created sample
-		 * vifmrc file is used right away. */
-		env_set(MYVIFMRC_EV, rc_file);
+			"%%r/.vifm-Trash-%%u,%s/" TRASH ",%%r/.vifm-Trash";
 #else
-		if(make_dir(cfg.config_dir, 0777) != 0)
-			return;
+			"%%r/.vifm-Trash,%s/" TRASH;
 #endif
 
-		add_default_bookmarks();
-	}
+	char *fuse_home;
+	const char *trash_base = path_exists_at(env_get(VIFM_EV), TRASH, DEREF)
+	                       ? cfg.config_dir
+	                       : cfg.data_dir;
+	const char *base = path_exists(cfg.data_dir, DEREF)
+	                 ? cfg.data_dir
+	                 : cfg.config_dir;
+
+	snprintf(cfg.home_dir, sizeof(cfg.home_dir), "%s/", env_get(HOME_EV));
+	copy_str(cfg.config_dir, sizeof(cfg.config_dir), env_get(VIFM_EV));
+	snprintf(cfg.colors_dir, sizeof(cfg.colors_dir), "%s/colors/",
+			cfg.config_dir);
+	snprintf(cfg.trash_dir, sizeof(cfg.trash_dir), trash_dir_fmt, trash_base);
+	snprintf(cfg.log_file, sizeof(cfg.log_file), "%s/" LOG, base);
+
+	fuse_home = format_str("%s/fuse/", base);
+	(void)cfg_set_fuse_home(fuse_home);
+	free(fuse_home);
 }
 
-#ifndef _WIN32
-/* Copies help file from shared files to the ~/.vifm directory. */
+/* Ensures existence of configuration and data directories.  Performs first run
+ * initialization. */
 static void
-create_help_file(void)
+setup_dirs(void)
 {
 	LOG_FUNC_ENTER;
 
-	char command[] = CP_HELP;
-	(void)vifm_system(command);
+	char rc_file[PATH_MAX];
+
+	if(is_dir(cfg.config_dir))
+	{
+		/* We rely on this file for :help, so make sure it's there on every run. */
+		copy_help_file();
+
+		create_scripts_dir();
+		return;
+	}
+
+	if(make_path(cfg.config_dir, S_IRWXU) != 0)
+	{
+		return;
+	}
+
+	/* This must be first run of Vifm in this environment. */
+
+	copy_help_file();
+	copy_rc_file();
+
+	/* Ensure that just copied sample vifmrc file is used right away. */
+	snprintf(rc_file, sizeof(rc_file), "%s/" VIFMRC, cfg.config_dir);
+	env_set(MYVIFMRC_EV, rc_file);
+
+	add_default_marks();
+}
+
+/* Copies help file from shared files to the ~/.vifm directory if it's not
+ * already there. */
+static void
+copy_help_file(void)
+{
+	LOG_FUNC_ENTER;
+
+	char src[PATH_MAX];
+	char dst[PATH_MAX];
+
+	io_args_t args = {
+		.arg1.src = src,
+		.arg2.dst = dst,
+		.arg3.crs = IO_CRS_FAIL,
+	};
+
+	snprintf(src, sizeof(src), "%s/" VIFM_HELP, get_installed_data_dir());
+	snprintf(dst, sizeof(dst), "%s/" VIFM_HELP, cfg.config_dir);
+
+	/* Don't care if it fails, also don't overwrite if file exists. */
+	(void)iop_cp(&args);
+}
+
+/* Responsible for creation of scripts/ directory if it doesn't exist (in which
+ * case a README file is created as well). */
+static void
+create_scripts_dir(void)
+{
+	char scripts[PATH_MAX];
+	char readme[PATH_MAX];
+	FILE *fp;
+
+	snprintf(scripts, sizeof(scripts), "%s/" SCRIPTS_DIR, cfg.config_dir);
+	if(create_path(scripts, S_IRWXU) != 0)
+	{
+		return;
+	}
+
+	snprintf(readme, sizeof(readme), "%s/README", scripts);
+	fp = os_fopen(readme, "w");
+	if(fp == NULL)
+	{
+		return;
+	}
+
+	fputs("This directory is dedicated for user-supplied scripts/executables.\n"
+				"vifm modifies its PATH environment variable to let user run those\n"
+				"scripts without specifying full path.  All subdirectories are added\n"
+				"as well.  File in a subdirectory overrules file with the same name\n"
+				"in parent directories.  Restart might be needed to recognize files\n"
+				"in newly created or renamed subdirectories.", fp);
+
+	fclose(fp);
 }
 
 /* Copies example vifmrc file from shared files to the ~/.vifm directory. */
 static void
-create_rc_file(void)
+copy_rc_file(void)
 {
 	LOG_FUNC_ENTER;
 
-	char command[] = CP_RC;
-	(void)vifm_system(command);
+	char src[PATH_MAX];
+	char dst[PATH_MAX];
+
+	io_args_t args = {
+		.arg1.src = src,
+		.arg2.dst = dst,
+	};
+
+	snprintf(src, sizeof(src), "%s/" SAMPLE_VIFMRC, get_installed_data_dir());
+	snprintf(dst, sizeof(dst), "%s/" VIFMRC, cfg.config_dir);
+
+	(void)iop_cp(&args);
 }
-#endif
 
-/* Adds 'H' and 'z' default bookmarks. */
+/* Adds 'H' and 'z' default marks. */
 static void
-add_default_bookmarks(void)
+add_default_marks(void)
 {
 	LOG_FUNC_ENTER;
 
-	set_user_bookmark('H', cfg.home_dir, "../");
-	set_user_bookmark('z', cfg.config_dir, "../");
+	set_user_mark('H', cfg.home_dir, NO_MARK_FILE);
+	set_user_mark('z', cfg.config_dir, NO_MARK_FILE);
 }
 
 void
-source_config(void)
+cfg_load(void)
 {
-	const char *const myvifmrc = env_get(MYVIFMRC_EV);
-	if(myvifmrc != NULL)
+	const char *rc;
+	const int prev_global_local_settings = curr_stats.global_local_settings;
+
+	/* Make changes of usually local settings during configuration affect all
+	 * views. */
+	curr_stats.global_local_settings = 1;
+
+	/* Try to load global configuration. */
+	(void)cfg_source_file(PACKAGE_SYSCONF_DIR "/" VIFMRC);
+
+	/* Try to load local configuration. */
+	rc = env_get(MYVIFMRC_EV);
+	if(!is_null_or_empty(rc))
 	{
-		(void)source_file(myvifmrc);
+		(void)cfg_source_file(rc);
 	}
+
+	curr_stats.global_local_settings = prev_global_local_settings;
 }
 
 int
-source_file(const char filename[])
+cfg_source_file(const char filename[])
 {
+	/* TODO: maybe move this to commands.c or separate unit eventually. */
+
 	FILE *fp;
 	int result;
 	SourcingState sourcing_state;
 
-	if((fp = fopen(filename, "r")) == NULL)
+	if((fp = os_fopen(filename, "r")) == NULL)
+	{
 		return 1;
+	}
 
 	sourcing_state = curr_stats.sourcing_state;
 	curr_stats.sourcing_state = SOURCING_PROCESSING;
@@ -570,6 +720,8 @@ source_file_internal(FILE *fp, const char filename[])
 	}
 	chomp(line);
 
+	commands_scope_start();
+
 	line_num = 1;
 	for(;;)
 	{
@@ -587,7 +739,7 @@ source_file_internal(FILE *fp, const char filename[])
 			else
 				break;
 		}
-		if(exec_commands(line, curr_view, GET_COMMAND) < 0)
+		if(exec_commands(line, curr_view, CIT_COMMAND) < 0)
 		{
 			show_sourcing_error(filename, line_num);
 			encoutered_errors = 1;
@@ -609,7 +761,7 @@ source_file_internal(FILE *fp, const char filename[])
 
 	free(next_line);
 
-	if(commands_block_finished() != 0)
+	if(commands_scope_finish() != 0)
 	{
 		show_sourcing_error(filename, line_num);
 		encoutered_errors = 1;
@@ -623,50 +775,12 @@ static void
 show_sourcing_error(const char filename[], int line_num)
 {
 	/* User choice is saved by prompt_error_msgf internally. */
-	(void)prompt_error_msgf("File Sourcing Error", "Error in %s at %d line",
+	(void)prompt_error_msgf("File Sourcing Error", "Error in %s at line %d",
 			filename, line_num);
 }
 
-int
-is_old_config(void)
-{
-	const char *const myvifmrc = env_get(MYVIFMRC_EV);
-	return (myvifmrc != NULL) && is_conf_file(myvifmrc);
-}
-
-/* Checks whether file is configuration file (has at least one line which starts
- * with a hash symbol).  Returns non-zero if yes, otherwise zero is returned. */
-static int
-is_conf_file(const char file[])
-{
-	FILE *const fp = fopen(file, "r");
-	char *line = NULL;
-
-	if(fp != NULL)
-	{
-		while((line = read_line(fp, line)) != NULL)
-		{
-			if(skip_whitespace(line)[0] == '#')
-			{
-				break;
-			}
-		}
-		fclose(fp);
-		free(line);
-	}
-	return line != NULL;
-}
-
-int
-are_old_color_schemes(void)
-{
-	char colors_dir[PATH_MAX];
-	snprintf(colors_dir, sizeof(colors_dir), "%s/colors", cfg.config_dir);
-	return !is_dir(colors_dir) && path_exists_at(cfg.config_dir, "colorschemes");
-}
-
 const char *
-get_vicmd(int *bg)
+cfg_get_vicmd(int *bg)
 {
 	if(curr_stats.exec_env_type != EET_EMULATOR_WITH_X)
 	{
@@ -686,30 +800,12 @@ get_vicmd(int *bg)
 }
 
 void
-generate_tmp_file_name(const char prefix[], char buf[], size_t buf_len)
-{
-	snprintf(buf, buf_len, "%s/%s", get_tmpdir(), prefix);
-#ifdef _WIN32
-	to_forward_slash(buf);
-#endif
-	copy_str(buf, buf_len, make_name_unique(buf));
-}
-
-/* Returns path to tmp directory.  Uses environment variables to determine the
- * correct place. */
-const char *
-get_tmpdir(void)
-{
-	return env_get_one_of_def("/tmp/", "TMPDIR", "TEMP", "TEMPDIR", "TMP", NULL);
-}
-
-void
-resize_history(size_t new_len)
+cfg_resize_histories(int new_len)
 {
 	const int old_len = MAX(cfg.history_len, 0);
-	const int delta = (int)new_len - old_len;
+	const int delta = new_len - old_len;
 
-	if(new_len == 0)
+	if(new_len <= 0)
 	{
 		disable_history();
 		return;
@@ -755,7 +851,7 @@ disable_history(void)
 static void
 free_view_history(FileView *view)
 {
-	free_history_items(view->history, view->history_num);
+	cfg_free_history_items(view->history, view->history_num);
 	free(view->history);
 	view->history = NULL;
 
@@ -769,8 +865,8 @@ free_view_history(FileView *view)
 static void
 decrease_history(size_t new_len, size_t removed_count)
 {
-	reduce_view_history(&lwin, new_len);
-	reduce_view_history(&rwin, new_len);
+	reduce_view_history(&lwin, (int)new_len);
+	reduce_view_history(&rwin, (int)new_len);
 
 	hist_trunc(&cfg.search_hist, new_len, removed_count);
 	hist_trunc(&cfg.cmd_hist, new_len, removed_count);
@@ -780,18 +876,22 @@ decrease_history(size_t new_len, size_t removed_count)
 
 /* Moves items of directory history when size of history becomes smaller. */
 static void
-reduce_view_history(FileView *view, size_t size)
+reduce_view_history(FileView *view, int size)
 {
-	const int delta = MIN(view->history_num - (int)size, view->history_pos);
+	const int delta = MIN(view->history_num - size, view->history_pos);
 	if(delta <= 0)
+	{
 		return;
+	}
 
-	free_history_items(view->history, MIN(size, delta));
+	cfg_free_history_items(view->history, MIN(size, delta));
 	memmove(view->history, view->history + delta,
 			sizeof(history_t)*(view->history_num - delta));
 
 	if(view->history_num >= size)
+	{
 		view->history_num = size - 1;
+	}
 	view->history_pos -= delta;
 }
 
@@ -800,16 +900,17 @@ reduce_view_history(FileView *view, size_t size)
 static void
 reallocate_history(size_t new_len)
 {
-	const size_t hist_item_len = sizeof(history_t)*new_len;
-	const size_t str_item_len = sizeof(char *)*new_len;
+	lwin.history = reallocarray(lwin.history, new_len, sizeof(history_t));
+	rwin.history = reallocarray(rwin.history, new_len, sizeof(history_t));
 
-	lwin.history = realloc(lwin.history, hist_item_len);
-	rwin.history = realloc(rwin.history, hist_item_len);
-
-	cfg.cmd_hist.items = realloc(cfg.cmd_hist.items, str_item_len);
-	cfg.search_hist.items = realloc(cfg.search_hist.items, str_item_len);
-	cfg.prompt_hist.items = realloc(cfg.prompt_hist.items, str_item_len);
-	cfg.filter_hist.items = realloc(cfg.filter_hist.items, str_item_len);
+	cfg.cmd_hist.items = reallocarray(cfg.cmd_hist.items, new_len,
+			sizeof(char *));
+	cfg.search_hist.items = reallocarray(cfg.search_hist.items, new_len,
+			sizeof(char *));
+	cfg.prompt_hist.items = reallocarray(cfg.prompt_hist.items, new_len,
+			sizeof(char *));
+	cfg.filter_hist.items = reallocarray(cfg.filter_hist.items, new_len,
+			sizeof(char *));
 }
 
 /* Zeroes new elements of the history.  The old_len specifies old history size,
@@ -830,7 +931,7 @@ zero_new_history_items(size_t old_len, size_t delta)
 }
 
 int
-set_fuse_home(const char new_value[])
+cfg_set_fuse_home(const char new_value[])
 {
 	char canonicalized[PATH_MAX];
 #ifdef _WIN32
@@ -852,14 +953,14 @@ set_fuse_home(const char new_value[])
 }
 
 void
-set_use_term_multiplexer(int use_term_multiplexer)
+cfg_set_use_term_multiplexer(int use_term_multiplexer)
 {
 	cfg.use_term_multiplexer = use_term_multiplexer;
 	set_using_term_multiplexer(use_term_multiplexer);
 }
 
 void
-free_history_items(const history_t history[], size_t len)
+cfg_free_history_items(const history_t history[], size_t len)
 {
 	size_t i;
 	for(i = 0; i < len; i++)
@@ -870,7 +971,7 @@ free_history_items(const history_t history[], size_t len)
 }
 
 void
-save_command_history(const char command[])
+cfg_save_command_history(const char command[])
 {
 	if(is_history_command(command))
 	{
@@ -880,19 +981,19 @@ save_command_history(const char command[])
 }
 
 void
-save_search_history(const char pattern[])
+cfg_save_search_history(const char pattern[])
 {
 	save_into_history(pattern, &cfg.search_hist, cfg.history_len);
 }
 
 void
-save_prompt_history(const char input[])
+cfg_save_prompt_history(const char input[])
 {
 	save_into_history(input, &cfg.prompt_hist, cfg.history_len);
 }
 
 void
-save_filter_history(const char input[])
+cfg_save_filter_history(const char input[])
 {
 	save_into_history(input, &cfg.filter_hist, cfg.history_len);
 }
@@ -907,6 +1008,12 @@ save_into_history(const char item[], hist_t *hist, int len)
 	}
 }
 
+const char *
+cfg_get_last_search_pattern(void)
+{
+	return hist_is_empty(&cfg.search_hist) ? "" : cfg.search_hist.items[0];
+}
+
 void
 cfg_set_shell(const char shell[])
 {
@@ -916,5 +1023,18 @@ cfg_set_shell(const char shell[])
 	}
 }
 
+int
+cfg_is_word_wchar(wchar_t c)
+{
+	return c >= 256 || cfg.word_chars[c];
+}
+
+int
+cfg_parent_dir_is_visible(int in_root)
+{
+	return ((in_root && (cfg.dot_dirs & DD_ROOT_PARENT)) ||
+			(!in_root && (cfg.dot_dirs & DD_NONROOT_PARENT)));
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

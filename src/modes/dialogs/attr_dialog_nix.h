@@ -20,7 +20,7 @@
 #ifndef VIFM__MODES__DIALOGS__ATTR_DIALOG_NIX_H__
 #define VIFM__MODES__DIALOGS__ATTR_DIALOG_NIX_H__
 
-#include "../../ui.h"
+#include "../../ui/ui.h"
 
 /* Initializes attributes dialog mode. */
 void init_attr_dialog_mode(void);
@@ -34,4 +34,4 @@ void files_chmod(FileView *view, const char *mode, int recurse_dirs);
 #endif /* VIFM__MODES__DIALOGS__ATTR_DIALOG_NIX_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

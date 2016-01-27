@@ -24,53 +24,129 @@
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* realloc() free() calloc() */
-#include <string.h> /* memset() strchr() strncat() strcpy() strlen() strcat()
-                       strdup() */
+#include <string.h> /* memset() strncat() strcpy() strlen() strdup() */
 
 #include "cfg/config.h"
-#include "menus/menus.h"
-#include "utils/fs_limits.h"
+#include "compat/fs_limits.h"
+#include "modes/dialogs/msg_dialog.h"
+#include "ui/ui.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/test_helpers.h"
 #include "utils/utils.h"
+#include "filelist.h"
 #include "filename_modifiers.h"
 #include "registers.h"
 #include "status.h"
-#include "ui.h"
 
+/* Type of path to use during entry path expansion. */
+typedef enum
+{
+	PT_NAME, /* Last path component, i.e. file name. */
+	PT_REL,  /* Relative path. */
+	PT_FULL, /* Full path. */
+}
+PathType;
+
+/* Should return the same character if processing of the macro is allowed or
+ * '\0' if it's not allowed. */
+typedef char (*macro_filter_func)(int *quoted, char c, char data);
+
+static char filter_all(int *quoted, char c, char data);
+static char filter_single(int *quoted, char c, char data);
+static char * expand_macros_i(const char command[], const char args[],
+		MacroFlags *flags, int for_shell, macro_filter_func filter);
+static void set_flags(MacroFlags *flags, MacroFlags value);
 TSTATIC char * append_selected_files(FileView *view, char expanded[],
 		int under_cursor, int quotes, const char mod[], int for_shell);
-static char * append_selected_file(FileView *view, char *expanded,
-		int dir_name_len, int pos, int quotes, const char *mod, int for_shell);
+static char * append_entry(FileView *view, char expanded[], PathType type,
+		dir_entry_t *entry, int quotes, const char mod[], int for_shell);
 static char * expand_directory_path(FileView *view, char *expanded, int quotes,
 		const char *mod, int for_shell);
 static char * expand_register(const char curr_dir[], char expanded[],
 		int quotes, const char mod[], int key, int *well_formed, int for_shell);
+static char * expand_preview(char expanded[], int key, int *well_formed);
+static FileView * get_preview_view(FileView *view);
 static char * append_path_to_expanded(char expanded[], int quotes,
 		const char path[]);
-static char * append_to_expanded(char *expanded, const char* str);
+static char * append_to_expanded(char expanded[], const char str[]);
 static char * add_missing_macros(char expanded[], size_t len, size_t nmacros,
 		custom_macro_t macros[]);
 
 char *
-expand_macros(const char *command, const char *args, MacroFlags *flags,
+expand_macros(const char command[], const char args[], MacroFlags *flags,
 		int for_shell)
 {
+	return expand_macros_i(command, args, flags, for_shell, &filter_all);
+}
+
+/* macro_filter_func instantiation that allows all macros.  Returns the
+ * argument. */
+static char
+filter_all(int *quoted, char c, char data)
+{
+	return c;
+}
+
+char *
+ma_expand_single(const char command[])
+{
+	char *const res = expand_macros_i(command, NULL, NULL, 0, &filter_single);
+	unescape(res, 0);
+	return res;
+}
+
+/* macro_filter_func instantiation that filters out non-single element macros.
+ * Returns the argument on allowed macro and '\0' otherwise. */
+static char
+filter_single(int *quoted, char c, char data)
+{
+	if(strchr("cCdD", c) != NULL)
+	{
+		*quoted = 0;
+		return c;
+	}
+
+	if(c == 'f' && curr_view->selected_files <= 1)
+	{
+		return c;
+	}
+
+	if(c == 'F' && other_view->selected_files <= 1)
+	{
+		return c;
+	}
+
+	if(c == 'r')
+	{
+		registers_t *reg = find_register(tolower(data));
+		if(reg != NULL && reg->num_files == 1)
+		{
+			return c;
+		}
+	}
+
+	return '\0';
+}
+
+/* args and flags parameters can equal NULL. The string returned needs to be
+ * freed in the calling function. After executing flags is one of MF_*
+ * values. */
+static char *
+expand_macros_i(const char command[], const char args[], MacroFlags *flags,
+		int for_shell, macro_filter_func filter)
+{
 	/* TODO: refactor this function expand_macros() */
+	/* FIXME: repetitive len = strlen(expanded) could be optimized. */
 
 	static const char MACROS_WITH_QUOTING[] = "cCfFbdDr";
 
 	size_t cmd_len;
 	char *expanded;
 	size_t x;
-	int y = 0;
 	int len = 0;
 
-	if(flags != NULL)
-	{
-		*flags = MACRO_NONE;
-	}
+	set_flags(flags, MF_NONE);
 
 	cmd_len = strlen(command);
 
@@ -90,32 +166,29 @@ expand_macros(const char *command, const char *args, MacroFlags *flags,
 
 	do
 	{
+		size_t y;
+		char *p;
+
 		int quotes = 0;
 		if(command[x] == '"' && char_is_one_of(MACROS_WITH_QUOTING, command[x + 1]))
 		{
 			quotes = 1;
-			x++;
+			++x;
 		}
-		switch(command[x])
+		switch(filter(&quotes, command[x],
+					command[x] == '\0' ? '\0' : command[x + 1]))
 		{
 			case 'a': /* user arguments */
 				if(args != NULL)
 				{
-					char arg_buf[strlen(args) + 2];
-
-					expanded = (char *)realloc(expanded,
-							strlen(expanded) + strlen(args) + 3);
-					snprintf(arg_buf, sizeof(arg_buf), "%s", args);
-					strcat(expanded, arg_buf);
+					expanded = append_to_expanded(expanded, args);
 					len = strlen(expanded);
 				}
 				break;
 			case 'b': /* selected files of both dirs */
 				expanded = append_selected_files(curr_view, expanded, 0, quotes,
 						command + x + 1, for_shell);
-				len = strlen(expanded);
-				expanded = realloc(expanded, len + 1 + 1);
-				strcat(expanded, " ");
+				expanded = append_to_expanded(expanded, " ");
 				expanded = append_selected_files(other_view, expanded, 0, quotes,
 						command + x + 1, for_shell);
 				len = strlen(expanded);
@@ -145,51 +218,39 @@ expand_macros(const char *command, const char *args, MacroFlags *flags,
 						command + x + 1, for_shell);
 				len = strlen(expanded);
 				break;
-			case 'D': /* other directory */
+			case 'D': /* Directory of the other view. */
 				expanded = expand_directory_path(other_view, expanded, quotes,
 						command + x + 1, for_shell);
 				len = strlen(expanded);
 				break;
 			case 'n': /* Forbid using of terminal multiplexer, even if active. */
-				if(flags != NULL)
-				{
-					*flags = MACRO_NO_TERM_MUX;
-				}
+				set_flags(flags, MF_NO_TERM_MUX);
 				break;
-			case 'm': /* use menu */
-				if(flags != NULL)
-				{
-					*flags = MACRO_MENU_OUTPUT;
-				}
+			case 'm': /* Use menu. */
+				set_flags(flags, MF_MENU_OUTPUT);
 				break;
-			case 'M': /* use menu like with :locate and :find */
-				if(flags != NULL)
-				{
-					*flags = MACRO_MENU_NAV_OUTPUT;
-				}
+			case 'M': /* Use menu like with :locate and :find. */
+				set_flags(flags, MF_MENU_NAV_OUTPUT);
 				break;
-			case 'S': /* show command output in the status bar */
-				if(flags != NULL)
-				{
-					*flags = MACRO_STATUSBAR_OUTPUT;
-				}
+			case 'S': /* Show command output in the status bar */
+				set_flags(flags, MF_STATUSBAR_OUTPUT);
 				break;
-			case 's': /* split in new screen region */
-				if(flags != NULL)
-				{
-					*flags = MACRO_SPLIT;
-				}
+			case 's': /* Split in new screen region and execute command there. */
+				set_flags(flags, MF_SPLIT);
 				break;
-			case 'i': /* ignore output */
-				if(flags != NULL)
-				{
-					*flags = MACRO_IGNORE;
-				}
+			case 'u': /* Parse output as list of files and compose custom view. */
+				set_flags(flags, MF_CUSTOMVIEW_OUTPUT);
 				break;
-			case 'r': /* register's content */
+			case 'U': /* Parse output as list of files and compose unsorted view. */
+				set_flags(flags, MF_VERYCUSTOMVIEW_OUTPUT);
+				break;
+			case 'i': /* Ignore output. */
+				set_flags(flags, MF_IGNORE);
+				break;
+			case 'r': /* Registers' content. */
 				{
 					int well_formed;
-					expanded = expand_register(curr_view->curr_dir, expanded, quotes,
+					expanded = expand_register(flist_get_dir(curr_view), expanded, quotes,
 							command + x + 2, command[x + 1], &well_formed, for_shell);
 					len = strlen(expanded);
 					if(well_formed)
@@ -198,13 +259,33 @@ expand_macros(const char *command, const char *args, MacroFlags *flags,
 					}
 				}
 				break;
+			case 'p': /* Preview pane properties. */
+				{
+					int well_formed;
+					const char key = command[x + 1];
+					if(key == 'c')
+					{
+						return expanded;
+					}
+
+					expanded = expand_preview(expanded, key, &well_formed);
+					len = strlen(expanded);
+					if(well_formed)
+					{
+						++x;
+					}
+				}
+				break;
 			case '%':
-				expanded = (char *)realloc(expanded, len + 2);
-				strcat(expanded, "%");
-				len++;
+				expanded = append_to_expanded(expanded, "%");
+				len = strlen(expanded);
 				break;
 
-			default:
+			case '\0':
+				if(char_is_one_of("pr", command[x]) && command[x + 1] != '\0')
+				{
+					++x;
+				}
 				break;
 		}
 		if(command[x] != '\0')
@@ -229,42 +310,58 @@ expand_macros(const char *command, const char *args, MacroFlags *flags,
 			if(command[x] != '\0')
 				x++;
 		}
+
 		assert(x >= y);
 		assert(y <= cmd_len);
-		expanded = realloc(expanded, len + (x - y) + 1);
+
+		p = realloc(expanded, len + (x - y) + 1);
+		if(p == NULL)
+		{
+			free(expanded);
+			return NULL;
+		}
+		expanded = p;
 		strncat(expanded, command + y, x - y);
 		len = strlen(expanded);
-		x++;
+
+		++x;
 	}
 	while(x < cmd_len);
 
 	return expanded;
 }
 
+/* Sets *flags to the value, if flags isn't NULL. */
+static void
+set_flags(MacroFlags *flags, MacroFlags value)
+{
+	if(flags != NULL)
+	{
+		*flags = value;
+	}
+}
+
 TSTATIC char *
 append_selected_files(FileView *view, char expanded[], int under_cursor,
 		int quotes, const char mod[], int for_shell)
 {
-	int dir_name_len = 0;
+	const PathType type = (view == other_view)
+	                    ? PT_FULL
+	                    : (flist_custom_active(view) ? PT_REL : PT_NAME);
 #ifdef _WIN32
 	size_t old_len = strlen(expanded);
 #endif
 
-	if(view == other_view)
-		dir_name_len = strlen(other_view->curr_dir) + 1;
-
 	if(view->selected_files && !under_cursor)
 	{
-		int y, x = 0;
-		for(y = 0; y < view->list_rows; y++)
+		int n = 0;
+		dir_entry_t *entry = NULL;
+		while(iter_selected_entries(view, &entry))
 		{
-			if(!view->dir_entry[y].selected)
-				continue;
+			expanded = append_entry(view, expanded, type, entry, quotes, mod,
+					for_shell);
 
-			expanded = append_selected_file(view, expanded, dir_name_len, y, quotes,
-					mod, for_shell);
-
-			if(++x != view->selected_files)
+			if(++n != view->selected_files)
 			{
 				expanded = append_to_expanded(expanded, " ");
 			}
@@ -272,8 +369,8 @@ append_selected_files(FileView *view, char expanded[], int under_cursor,
 	}
 	else
 	{
-		expanded = append_selected_file(view, expanded, dir_name_len,
-				view->list_pos, quotes, mod, for_shell);
+		expanded = append_entry(view, expanded, type, get_current_entry(view),
+				quotes, mod, for_shell);
 	}
 
 #ifdef _WIN32
@@ -286,19 +383,34 @@ append_selected_files(FileView *view, char expanded[], int under_cursor,
 	return expanded;
 }
 
+/* Appends path to the entry to the expanded string.  Returns new value of
+ * expanded string. */
 static char *
-append_selected_file(FileView *view, char *expanded, int dir_name_len, int pos,
-		int quotes, const char *mod, int for_shell)
+append_entry(FileView *view, char expanded[], PathType type, dir_entry_t *entry,
+		int quotes, const char mod[], int for_shell)
 {
-	char buf[PATH_MAX];
+	char path[PATH_MAX];
 	const char *modified;
 
-	snprintf(buf, sizeof(buf), "%s%s%s",
-			(dir_name_len != 0) ? view->curr_dir : "", (dir_name_len != 0) ? "/" : "",
-			view->dir_entry[pos].name);
-	chosp(buf);
+	switch(type)
+	{
+		case PT_NAME:
+			copy_str(path, sizeof(path), entry->name);
+			break;
+		case PT_REL:
+			get_short_path_of(view, entry, 0, sizeof(path), path);
+			break;
+		case PT_FULL:
+			get_full_path_of(entry, sizeof(path), path);
+			break;
 
-	modified = apply_mods(buf, view->curr_dir, mod, for_shell);
+		default:
+			assert(0 && "Unexpected path type");
+			path[0] = '\0';
+			break;
+	}
+
+	modified = apply_mods(path, flist_get_dir(view), mod, for_shell);
 	expanded = append_path_to_expanded(expanded, quotes, modified);
 
 	return expanded;
@@ -308,7 +420,7 @@ static char *
 expand_directory_path(FileView *view, char *expanded, int quotes,
 		const char *mod, int for_shell)
 {
-	const char *const modified = apply_mods(view->curr_dir, "/", mod, for_shell);
+	const char *const modified = apply_mods(flist_get_dir(view), "/", mod, for_shell);
 	char *const result = append_path_to_expanded(expanded, quotes, modified);
 
 #ifdef _WIN32
@@ -330,9 +442,10 @@ expand_register(const char curr_dir[], char expanded[], int quotes,
 		const char mod[], int key, int *well_formed, int for_shell)
 {
 	int i;
+	registers_t *reg;
 
 	*well_formed = 1;
-	registers_t *reg = find_register(tolower(key));
+	reg = find_register(tolower(key));
 	if(reg == NULL)
 	{
 		*well_formed = 0;
@@ -362,6 +475,72 @@ expand_register(const char curr_dir[], char expanded[], int quotes,
 	return expanded;
 }
 
+/* Expands preview parameter macros specified by the key argument.  If key is
+ * unknown, skips the macro.  Sets *well_formed to non-zero for valid value of
+ * the key.  Reallocates the expanded string and returns result (possibly
+ * NULL). */
+static char *
+expand_preview(char expanded[], int key, int *well_formed)
+{
+	FileView *view;
+	char num_str[32];
+	int h, w, x, y;
+	int param;
+	const int with_margin = (curr_stats.clear_preview == 0) && cfg.extra_padding;
+
+	if(!char_is_one_of("hwxy", key))
+	{
+		*well_formed = 0;
+		return expanded;
+	}
+
+	*well_formed = 1;
+
+	view = get_preview_view(curr_view);
+
+	getbegyx(view->win, y, x);
+	getmaxyx(view->win, h, w);
+
+	switch(key)
+	{
+		case 'h': param = h - 2*with_margin; break;
+		case 'w': param = w - 2*with_margin; break;
+		case 'x': param = x + 1*with_margin; break;
+		case 'y': param = y + 1*with_margin; break;
+
+		default:
+			assert(0 && "Unhandled preview property type");
+			param = 0;
+			break;
+	}
+
+	snprintf(num_str, sizeof(num_str), "%d", param);
+
+	return append_to_expanded(expanded, num_str);
+}
+
+/* Applies heuristics to determine which view is going to be used for preview.
+ * Returns the view. */
+static FileView *
+get_preview_view(FileView *view)
+{
+	FileView *const other = (view == curr_view) ? other_view : curr_view;
+
+	if(curr_stats.preview_hint != NULL)
+	{
+		return curr_stats.preview_hint;
+	}
+
+	if(curr_stats.view || (!view->explore_mode && other->explore_mode))
+	{
+		return other;
+	}
+	else
+	{
+		return view;
+	}
+}
+
 /* Appends the path to the expanded string with either proper escaping or
  * quoting.  Returns NULL on not enough memory error. */
 static char *
@@ -374,7 +553,7 @@ append_path_to_expanded(char expanded[], int quotes, const char path[])
 	}
 	else
 	{
-		char *const escaped = escape_filename(path, 0);
+		char *const escaped = shell_like_escape(path, 0);
 		if(escaped == NULL)
 		{
 			show_error_msg("Memory Error", "Unable to allocate enough memory");
@@ -389,20 +568,37 @@ append_path_to_expanded(char expanded[], int quotes, const char path[])
 	return expanded;
 }
 
+/* Appends str to expanded with reallocation.  Returns address of the new
+ * string or NULL on reallocation error. */
 static char *
-append_to_expanded(char *expanded, const char* str)
+append_to_expanded(char expanded[], const char str[])
 {
 	char *t;
+	const size_t len = strlen(expanded);
 
-	t = realloc(expanded, strlen(expanded) + strlen(str) + 1);
+	t = realloc(expanded, len + strlen(str) + 1);
 	if(t == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory");
 		free(expanded);
 		return NULL;
 	}
-	strcat(t, str);
+	strcpy(t + len, str);
 	return t;
+}
+
+const char *
+ma_get_clean_cmd(const char cmd[])
+{
+	const char *clean_cmd;
+	const char *const break_point = strstr(cmd, "%pc");
+	if(break_point == NULL)
+	{
+		return NULL;
+	}
+
+	clean_cmd = break_point + 3;
+	return is_null_or_empty(clean_cmd) ? NULL : clean_cmd;
 }
 
 char *
@@ -425,16 +621,17 @@ expand_custom_macros(const char pattern[], size_t nmacros,
 		}
 		else
 		{
-			int i = 0;
-			pattern++;
+			size_t i = 0U;
+			++pattern;
 			while(i < nmacros && macros[i].letter != *pattern)
 			{
-				i++;
+				++i;
 			}
 			if(i < nmacros)
 			{
 				expanded = extend_string(expanded, macros[i].value, &len);
-				macros[i].uses_left--;
+				--macros[i].uses_left;
+				macros[i].explicit_use = 1;
 			}
 		}
 		pattern++;
@@ -452,10 +649,10 @@ add_missing_macros(char expanded[], size_t len, size_t nmacros,
 		custom_macro_t macros[])
 {
 	int groups[nmacros];
-	int i;
+	size_t i;
 
 	memset(&groups, 0, sizeof(groups));
-	for(i = 0; i < nmacros; i++)
+	for(i = 0U; i < nmacros; ++i)
 	{
 		custom_macro_t *const macro = &macros[i];
 		const int group = macro->group;
@@ -465,20 +662,46 @@ add_missing_macros(char expanded[], size_t len, size_t nmacros,
 		}
 	}
 
-	for(i = 0; i < nmacros; i++)
+	for(i = 0U; i < nmacros; ++i)
 	{
 		custom_macro_t *const macro = &macros[i];
 		const int group = macro->group;
 		int *const uses_left = (group >= 0) ? &groups[group] : &macro->uses_left;
 		while(*uses_left > 0)
 		{
-			expanded = extend_string(expanded, " ", &len);
-			expanded = extend_string(expanded, macro->value, &len);
+			/* Make sure we don't add spaces for nothing. */
+			if(macro->value[0] != '\0')
+			{
+				expanded = extend_string(expanded, " ", &len);
+				expanded = extend_string(expanded, macro->value, &len);
+			}
 			--*uses_left;
 		}
 	}
 	return expanded;
 }
 
+const char *
+macros_to_str(MacroFlags flags)
+{
+	switch(flags)
+	{
+		case MF_NONE: return "";
+
+		case MF_MENU_OUTPUT: return "%m";
+		case MF_MENU_NAV_OUTPUT: return "%M";
+		case MF_STATUSBAR_OUTPUT: return "%S";
+		case MF_CUSTOMVIEW_OUTPUT: return "%u";
+		case MF_VERYCUSTOMVIEW_OUTPUT: return "%U";
+
+		case MF_SPLIT: return "%s";
+		case MF_IGNORE: return "%i";
+		case MF_NO_TERM_MUX: return "%n";
+	}
+
+	assert(0 && "Unhandled MacroFlags item.");
+	return "";
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

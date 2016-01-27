@@ -53,6 +53,7 @@ from fork of wsdookadr (Petrea Stefan Corneliu):
 - %b
 - unmount all FUSE mounts on exit
 - functional keys in user mappings
+- idea of temporary blocking inotify events from very active files
 
 seatest is written by Keith Nicholas
 
@@ -84,3 +85,23 @@ Vetter (a.k.a. jubalh).
 
 Some build system fixes/updates/best practices by Hendrik Jaeger (a.k.a.
 henk).
+
+Patches for Vim plugin, vifm-screen-split and documentation by filterfalse.
+
+Christian Fillion (a.k.a. cfillion) fixed crash on navigation to end of line
+in command-line mode.
+
+%FOREGROUND FUSE mount flag by Johannes (a.k.a. johannesmeng).
+
+Brian Callahan (a.k.a. ibara) fixed build on OpenBSD.
+
+Cosmin Popescu (a.k.a. cosminadrianpopescu) added "*" to 'slowfs', match numbers
+to search messages, :shell!, extension sorting fix, fileext sorting key, dynamic
+view column alignment.
+
+Michel Normand fixed compilation for PowerPC where PAGE_SIZE isn't defined.
+
+Dennis Hamester fixed interaction with emacsclient due to reopening terminal as
+/dev/tty.
+
+Svyatoslav Mishyn (a.k.a. juef) aligned options in conflict resolution dialog.

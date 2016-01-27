@@ -23,14 +23,20 @@
 #include <string.h> /* strdup() */
 #include <wchar.h> /* wcscmp() */
 
+#include "../io/ior.h"
+#include "../modes/dialogs/msg_dialog.h"
+#include "../ui/cancellation.h"
+#include "../ui/statusbar.h"
+#include "../ui/ui.h"
 #include "../utils/string_array.h"
 #include "../status.h"
 #include "../trash.h"
-#include "../ui.h"
 #include "../undo.h"
 #include "menus.h"
 
 static KHandlerResponse trash_khandler(menu_info *m, const wchar_t keys[]);
+static KHandlerResponse restore_current(menu_info *m);
+static KHandlerResponse delete_current(menu_info *m);
 
 int
 show_trash_menu(FileView *view)
@@ -38,10 +44,9 @@ show_trash_menu(FileView *view)
 	int i;
 
 	static menu_info m;
-	init_menu_info(&m, TRASH_MENU, strdup("No files in trash"));
+	init_menu_info(&m, strdup("Original paths of files in trash"),
+			strdup("No files in trash"));
 	m.key_handler = &trash_khandler;
-
-	m.title = strdup(" Original paths of files in trash ");
 
 	trash_prune_dead_entries();
 
@@ -64,26 +69,74 @@ trash_khandler(menu_info *m, const wchar_t keys[])
 {
 	if(wcscmp(keys, L"r") == 0)
 	{
-		char *const trash_path = strdup(trash_list[m->pos].trash_name);
-
-		cmd_group_begin("restore: ");
-		cmd_group_end();
-
-		if(restore_from_trash(trash_path) != 0)
-		{
-			const char *const orig_path = m->items[m->pos];
-			status_bar_errorf("Failed to restore %s", orig_path);
-			curr_stats.save_msg = 1;
-			free(trash_path);
-			return KHR_UNHANDLED;
-		}
-		free(trash_path);
-
-		remove_current_item(m);
-		return KHR_REFRESH_WINDOW;
+		return restore_current(m);
+	}
+	else if(wcscmp(keys, L"dd") == 0)
+	{
+		return delete_current(m);
 	}
 	return KHR_UNHANDLED;
 }
 
+/* Restores current item from the trash. */
+static KHandlerResponse
+restore_current(menu_info *m)
+{
+	char *trash_path;
+	int err;
+
+	cmd_group_begin("restore: ");
+	cmd_group_end();
+
+	/* The string is freed in restore_from_trash(), thus must be cloned. */
+	trash_path = strdup(trash_list[m->pos].trash_name);
+	err = restore_from_trash(trash_path);
+	free(trash_path);
+
+	if(err != 0)
+	{
+		const char *const orig_path = m->items[m->pos];
+		status_bar_errorf("Failed to restore %s", orig_path);
+		curr_stats.save_msg = 1;
+		return KHR_UNHANDLED;
+	}
+
+	remove_current_item(m);
+	return KHR_REFRESH_WINDOW;
+}
+
+/* Deletes current item from the trash. */
+static KHandlerResponse
+delete_current(menu_info *m)
+{
+	int ret;
+
+	io_args_t args = {
+		.arg1.path = trash_list[m->pos].trash_name,
+
+		.cancellable = 1,
+	};
+	ioe_errlst_init(&args.result.errors);
+
+	ui_cancellation_enable();
+	ret = ior_rm(&args);
+	ui_cancellation_disable();
+
+	if(ret != 0)
+	{
+		char *const errors = ioe_errlst_to_str(&args.result.errors);
+		ioe_errlst_free(&args.result.errors);
+
+		show_error_msg("File deletion error", errors);
+
+		free(errors);
+		return KHR_UNHANDLED;
+	}
+
+	ioe_errlst_free(&args.result.errors);
+	remove_current_item(m);
+	return KHR_REFRESH_WINDOW;
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

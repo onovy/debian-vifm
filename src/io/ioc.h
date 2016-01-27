@@ -45,14 +45,26 @@ typedef enum
 }
 IoCrs;
 
+/* Forward declaration for io_confirm. */
+typedef struct io_args_t io_args_t;
+
+/* Type for file overwrite confirmation requests.  Should return non-zero on
+ * positive response and zero otherwise. */
+typedef int (*io_confirm)(io_args_t *args, const char src[], const char dst[]);
+
+/* Type of I/O operation result. */
 typedef struct
 {
-	io_err_cb errors_cb;
-	io_errlst_t errors;
+	/* Pointer to a function that gets called when operation fails due to
+	 * unexpected error. */
+	ioerr_cb errors_cb;
+	/* Output list of errors, which should be initialized by the caller to make
+	 * use of it.  Must be released afterwards. */
+	ioe_errlst_t errors;
 }
 io_result_t;
 
-typedef struct
+struct io_args_t
 {
 	union
 	{
@@ -84,16 +96,29 @@ typedef struct
 	}
 	arg3;
 
+	union
+	{
+		/* Whether try to use O(1) file cloning feature of btrfs. */
+		int fast_file_cloning;
+	}
+	arg4;
+
+	/* Whether this operation should expect cancellation requests from the
+	 * outside. */
 	int cancellable;
+
+	/* File overwrite confirmation callback.  Set to NULL to silently
+	 * overwrite. */
+	io_confirm confirm;
 
 	/* Set to NULL to do not use estimates. */
 	ioeta_estim_t *estim;
 
-	io_result_t result; /* TODO: use this. */
-}
-io_args_t;
+	/* Output of the operation after it finishes. */
+	io_result_t result;
+};
 
 #endif /* VIFM__IO__IOC_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

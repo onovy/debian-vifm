@@ -20,12 +20,14 @@
 #ifndef VIFM__SORT_H__
 #define VIFM__SORT_H__
 
+#include "ui/ui.h"
 #include "utils/test_helpers.h"
-#include "ui.h"
 
 void sort_view(FileView *view);
-/* Maps primary sort key to second column type. */
-int get_secondary_key(int primary_key);
+
+/* Maps primary sort key to second column type.  Returns secondary key that
+ * corresponds to the primary one. */
+SortingKey get_secondary_key(SortingKey primary_key);
 
 TSTATIC_DEFS(
 	int strnumcmp(const char s[], const char t[]);
@@ -34,4 +36,4 @@ TSTATIC_DEFS(
 #endif /* VIFM__SORT_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

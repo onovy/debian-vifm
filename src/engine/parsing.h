@@ -24,11 +24,13 @@
 /* An enumeration of possible parsing errors. */
 typedef enum
 {
-	PE_NO_ERROR,
-	PE_INVALID_EXPRESSION,
-	PE_INVALID_SUBEXPRESSION,
-	PE_MISSING_QUOTE,
-}ParsingErrors;
+	PE_NO_ERROR,              /* No error occurred. */
+	PE_INVALID_EXPRESSION,    /* Wrong expression construct. */
+	PE_INVALID_SUBEXPRESSION, /* Wrong subexpression construct. */
+	PE_MISSING_QUOTE,         /* Missing closing quote. */
+	PE_INTERNAL,              /* Internal error (e.g. not enough memory). */
+}
+ParsingErrors;
 
 /* A type of function that will be used to resolve environment variable
  * value. If variable doesn't exist the function should return an empty
@@ -38,8 +40,7 @@ typedef const char * (*getenv_func)(const char *envname);
 /* A type of function that will be used to print error messages. */
 typedef void (*print_error_func)(const char msg[]);
 
-/* Can be called several times. */
-/* getenv_f can be NULL */
+/* Can be called several times.  getenv_f can be NULL. */
 void init_parser(getenv_func getenv_f);
 
 /* Returns logical (e.g. beginning of wrong expression) position in a string,
@@ -63,4 +64,4 @@ int is_prev_token_whitespace(void);
 #endif /* VIFM__ENGINE__PARSING_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

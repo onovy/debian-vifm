@@ -19,13 +19,12 @@
 
 #include "registers.h"
 
-#include <sys/stat.h>
-
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* free() realloc() */
+#include <stdlib.h> /* free() */
 #include <string.h>
 
+#include "compat/reallocarray.h"
 #include "utils/fs.h"
 #include "utils/macros.h"
 #include "utils/str.h"
@@ -109,25 +108,30 @@ check_for_duplicate_file_names(registers_t *reg, const char file[])
 	return 0;
 }
 
-void
+int
 append_to_register(int key, const char file[])
 {
 	registers_t *reg;
-	struct stat st;
 
 	if(key == BLACKHOLE_REG_NAME)
-		return;
-
+	{
+		return 0;
+	}
 	if((reg = find_register(key)) == NULL)
-		return;
-
-	if(lstat(file, &st) != 0)
-		return;
-
+	{
+		return 1;
+	}
+	if(!path_exists(file, NODEREF))
+	{
+		return 1;
+	}
 	if(check_for_duplicate_file_names(reg, file))
-		return;
+	{
+		return 1;
+	}
 
 	reg->num_files = add_to_string_array(&reg->files, reg->num_files, 1, file);
+	return 0;
 }
 
 void
@@ -221,7 +225,7 @@ rename_in_registers(const char old[], const char new[])
 }
 
 void
-clean_regs_with_trash(void)
+clean_regs_with_trash(const char trash_dir[])
 {
 	int x;
 	for(x = 0; x < NUM_REGISTERS; x++)
@@ -230,9 +234,9 @@ clean_regs_with_trash(void)
 		n = registers[x].num_files;
 		for(y = 0; y < n; y++)
 		{
-			if(!is_under_trash(registers[x].files[y]))
+			if(!trash_contains(trash_dir, registers[x].files[y]))
 				continue;
-			if(!path_exists(registers[x].files[y]))
+			if(!path_exists(registers[x].files[y], DEREF))
 				continue;
 
 			free(registers[x].files[y]);
@@ -262,11 +266,13 @@ update_unnamed_reg(int key)
 	clear_register(UNNAMED_REG_NAME);
 
 	unnamed->num_files = reg->num_files;
-	unnamed->files = (char **)realloc(unnamed->files,
-			unnamed->num_files*sizeof(char *));
-	for(i = 0; i < unnamed->num_files; i++)
+	unnamed->files = reallocarray(unnamed->files, unnamed->num_files,
+			sizeof(char *));
+	for(i = 0; i < unnamed->num_files; ++i)
+	{
 		unnamed->files[i] = strdup(reg->files[i]);
+	}
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

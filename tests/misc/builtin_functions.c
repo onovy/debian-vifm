@@ -1,56 +1,198 @@
+#include <stic.h>
+
+#include <unistd.h> /* chdir() */
+
+#include <stddef.h> /* NULL */
 #include <stdlib.h> /* free() */
-#include <string.h>
+#include <string.h> /* strdup() */
 
-#include "seatest.h"
-
-#include "../parsing/asserts.h"
+#include "../../src/cfg/config.h"
 #include "../../src/engine/functions.h"
 #include "../../src/engine/parsing.h"
 #include "../../src/utils/env.h"
+#include "../../src/utils/str.h"
 #include "../../src/builtin_functions.h"
+#include "../../src/filelist.h"
+#include "../../src/status.h"
+#include "../parsing/asserts.h"
 
-static void
-test_executable_true_for_executable(void)
+#include "utils.h"
+
+SETUP()
 {
-	ASSERT_INT_OK("executable('bin/misc')", 1);
+	assert_success(chdir(TEST_DATA_PATH "/.."));
+
+	update_string(&cfg.shell, "sh");
+
+	init_builtin_functions();
+	init_parser(NULL);
+
+	view_setup(&lwin);
 }
 
-static void
-test_executable_false_for_regular_file(void)
+TEARDOWN()
+{
+	function_reset_all();
+	update_string(&cfg.shell, NULL);
+
+	view_teardown(&lwin);
+}
+
+TEST(executable_true_for_executable)
+{
+	ASSERT_INT_OK("executable('" SANDBOX_PATH "/../../../src/vifm')", 1);
+}
+
+TEST(executable_false_for_regular_file)
 {
 	ASSERT_INT_OK("executable('Makefile')", 0);
 }
 
-static void
-test_executable_false_for_dir(void)
+TEST(executable_false_for_dir)
 {
 	ASSERT_INT_OK("executable('.')", 0);
 }
 
-static void
-test_expand_expands_environment_variables(void)
+TEST(expand_expands_environment_variables)
 {
 	env_set("OPEN_ME", "Found something interesting?");
 	ASSERT_OK("expand('$OPEN_ME')", "Found something interesting?");
 }
 
-void
-builtin_functions_tests(void)
+TEST(system_catches_stdout)
 {
-	test_fixture_start();
+	ASSERT_OK("system('echo a')", "a");
+}
 
-	init_builtin_functions();
+TEST(system_catches_stderr)
+{
+#ifndef _WIN32
+	ASSERT_OK("system('echo a 1>&2')", "a");
+#else
+	/* "echo" implemented by cmd.exe is kinda disabled, and doesn't ignore
+	 * spaces. */
+	ASSERT_OK("system('echo a 1>&2')", "a ");
+#endif
+}
 
-	run_test(test_executable_true_for_executable);
-	run_test(test_executable_false_for_regular_file);
-	run_test(test_executable_false_for_dir);
+TEST(system_catches_stdout_and_err)
+{
+#ifndef _WIN32
+	ASSERT_OK("system('echo a && echo b 1>&2')", "a\nb");
+#else
+	/* "echo" implemented by cmd.exe is kinda disabled, and doesn't ignore
+	 * spaces. */
+	ASSERT_OK("system('echo a && echo b 1>&2')", "a \nb ");
+#endif
+}
 
-	run_test(test_expand_expands_environment_variables);
+TEST(layoutis_is_correct_for_single_pane)
+{
+	curr_stats.number_of_windows = 1;
+	curr_stats.split = VSPLIT;
+	curr_stats.split = HSPLIT;
+	ASSERT_OK("layoutis('only')", "1");
+	ASSERT_OK("layoutis('split')", "0");
+	ASSERT_OK("layoutis('hsplit')", "0");
+	ASSERT_OK("layoutis('vsplit')", "0");
+}
 
-	function_reset_all();
+TEST(layoutis_is_correct_for_hsplit)
+{
+	curr_stats.number_of_windows = 2;
+	curr_stats.split = HSPLIT;
+	ASSERT_OK("layoutis('only')", "0");
+	ASSERT_OK("layoutis('split')", "1");
+	ASSERT_OK("layoutis('hsplit')", "1");
+	ASSERT_OK("layoutis('vsplit')", "0");
+}
 
-	test_fixture_end();
+TEST(layoutis_is_correct_for_vsplit)
+{
+	curr_stats.number_of_windows = 2;
+	curr_stats.split = VSPLIT;
+	ASSERT_OK("layoutis('only')", "0");
+	ASSERT_OK("layoutis('split')", "1");
+	ASSERT_OK("layoutis('hsplit')", "0");
+	ASSERT_OK("layoutis('vsplit')", "1");
+}
+
+TEST(paneisat_is_correct_for_single_pane)
+{
+	curr_stats.number_of_windows = 1;
+	curr_stats.split = VSPLIT;
+	curr_stats.split = HSPLIT;
+	ASSERT_OK("paneisat('top')", "1");
+	ASSERT_OK("paneisat('bottom')", "1");
+	ASSERT_OK("paneisat('left')", "1");
+	ASSERT_OK("paneisat('right')", "1");
+}
+
+TEST(paneisat_is_correct_for_hsplit)
+{
+	curr_stats.number_of_windows = 2;
+	curr_stats.split = HSPLIT;
+
+	curr_view = &lwin;
+	ASSERT_OK("paneisat('top')", "1");
+	ASSERT_OK("paneisat('bottom')", "0");
+	ASSERT_OK("paneisat('left')", "1");
+	ASSERT_OK("paneisat('right')", "1");
+
+	curr_view = &rwin;
+	ASSERT_OK("paneisat('top')", "0");
+	ASSERT_OK("paneisat('bottom')", "1");
+	ASSERT_OK("paneisat('left')", "1");
+	ASSERT_OK("paneisat('right')", "1");
+}
+
+TEST(paneisat_is_correct_for_vsplit)
+{
+	curr_stats.number_of_windows = 2;
+	curr_stats.split = VSPLIT;
+
+	curr_view = &lwin;
+	ASSERT_OK("paneisat('top')", "1");
+	ASSERT_OK("paneisat('bottom')", "1");
+	ASSERT_OK("paneisat('left')", "1");
+	ASSERT_OK("paneisat('right')", "0");
+
+	curr_view = &rwin;
+	ASSERT_OK("paneisat('top')", "1");
+	ASSERT_OK("paneisat('bottom')", "1");
+	ASSERT_OK("paneisat('left')", "0");
+	ASSERT_OK("paneisat('right')", "1");
+}
+
+TEST(getpanetype_for_regular_view)
+{
+	curr_view = &lwin;
+	ASSERT_OK("getpanetype()", "regular");
+}
+
+TEST(getpanetype_for_custom_view)
+{
+	flist_custom_start(&lwin, "test");
+	flist_custom_add(&lwin, TEST_DATA_PATH "/existing-files/a");
+	assert_true(flist_custom_finish(&lwin, 0) == 0);
+
+	curr_view = &lwin;
+	ASSERT_OK("getpanetype()", "custom");
+}
+
+TEST(getpanetype_for_very_custom_view)
+{
+	opt_handlers_setup();
+
+	flist_custom_start(&lwin, "test");
+	flist_custom_add(&lwin, TEST_DATA_PATH "/existing-files/a");
+	assert_true(flist_custom_finish(&lwin, 1) == 0);
+
+	curr_view = &lwin;
+	ASSERT_OK("getpanetype()", "very-custom");
+
+	opt_handlers_teardown();
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

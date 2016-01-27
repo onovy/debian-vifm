@@ -24,16 +24,24 @@
 #include <stdarg.h> /* va_list va_start() va_copy() va_end() */
 #include <stddef.h> /* NULL size_t wchar_t */
 #include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* free() malloc() mbstowcs() realloc() strtol()
-                       wcstombs() */
-#include <string.h> /* strncmp() strlen() strcmp() strchr() strrchr()
+#include <stdlib.h> /* free() malloc() mbstowcs() memmove() memset() realloc()
+                       strtol() wcstombs() */
+#include <string.h> /* strdup() strncmp() strlen() strcmp() strchr() strrchr()
                        strncpy() */
-#include <wchar.h> /* vswprintf() */
-#include <wctype.h> /* towlower() iswupper() */
+#include <wchar.h> /* wint_t vswprintf() */
+#include <wctype.h> /* iswprint() iswupper() towlower() towupper() */
 
+#include "../compat/reallocarray.h"
 #include "macros.h"
+#include "test_helpers.h"
 #include "utf8.h"
 #include "utils.h"
+
+static int transform_ascii_str(const char str[], int (*f)(int), char buf[],
+		size_t buf_len);
+static int transform_wide_str(const char str[], wint_t (*f)(wint_t), char buf[],
+		size_t buf_len);
+TSTATIC void squash_double_commas(char str[]);
 
 void
 chomp(char str[])
@@ -48,44 +56,77 @@ chomp(char str[])
 	}
 }
 
-size_t
-trim_right(char *text)
-{
-	size_t len;
-
-	len = strlen(text);
-	while(len > 0 && isspace(text[len - 1]))
-	{
-		text[--len] = '\0';
-	}
-
-	return len;
-}
-
 wchar_t *
 to_wide(const char s[])
 {
+#ifndef _WIN32
 	wchar_t *result = NULL;
 	size_t len;
 
 	len = mbstowcs(NULL, s, 0);
 	if(len != (size_t)-1)
 	{
-		result = malloc((len + 1)*sizeof(wchar_t));
+		result = reallocarray(NULL, len + 1, sizeof(wchar_t));
 		if(result != NULL)
 		{
 			(void)mbstowcs(result, s, len + 1);
 		}
 	}
 	return result;
+#else
+	return utf8_to_utf16(s);
+#endif
 }
 
-/* I'm really worry about the portability... */
+wchar_t *
+to_wide_force(const char s[])
+{
+	wchar_t *w = to_wide(s);
+	wchar_t *p;
+
+	if(w != NULL)
+	{
+		return w;
+	}
+
+	w = reallocarray(NULL, strlen(s) + 1U, sizeof(*w));
+	if(w == NULL)
+	{
+		return NULL;
+	}
+
+	/* There must be broken multi-byte sequence, do our best to convert string to
+	 * something meaningful rather than just failing. */
+
+	p = w;
+	while(*s != '\0')
+	{
+		const wchar_t wc = get_first_wchar(s++);
+		if(iswprint(wc))
+		{
+			*p++ = wc;
+		}
+	}
+	*p = L'\0';
+
+	return w;
+}
+
+size_t
+wide_len(const char s[])
+{
+#ifndef _WIN32
+	return mbstowcs(NULL, s, 0);
+#else
+	return utf8_widen_len(s);
+#endif
+}
+
 wchar_t *
 vifm_wcsdup(const wchar_t ws[])
 {
 	const size_t len = wcslen(ws) + 1;
-	wchar_t * const result = malloc(len*sizeof(wchar_t));
+	wchar_t * const result = reallocarray(NULL, len, sizeof(wchar_t));
 	if(result == NULL)
 	{
 		return NULL;
@@ -97,8 +138,31 @@ vifm_wcsdup(const wchar_t ws[])
 int
 starts_with(const char str[], const char prefix[])
 {
-	size_t prefix_len = strlen(prefix);
+	const size_t prefix_len = strlen(prefix);
 	return starts_withn(str, prefix, prefix_len);
+}
+
+int
+skip_prefix(const char **str, const char prefix[])
+{
+	const size_t prefix_len = strlen(prefix);
+	if(starts_withn(*str, prefix, prefix_len))
+	{
+		*str += prefix_len;
+		return 1;
+	}
+	return 0;
+}
+
+int
+cut_suffix(char str[], const char suffix[])
+{
+	if(ends_with(str, suffix))
+	{
+		str[strlen(str) - strlen(suffix)] = '\0';
+		return 1;
+	}
+	return 0;
 }
 
 int
@@ -108,7 +172,7 @@ starts_withn(const char str[], const char prefix[], size_t prefix_len)
 }
 
 int
-ends_with(const char *str, const char *suffix)
+ends_with(const char str[], const char suffix[])
 {
 	size_t str_len = strlen(str);
 	size_t suffix_len = strlen(suffix);
@@ -120,37 +184,121 @@ ends_with(const char *str, const char *suffix)
 	return strcmp(suffix, str + str_len - suffix_len) == 0;
 }
 
+int
+surrounded_with(const char str[], char left, char right)
+{
+	const size_t len = strlen(str);
+	return len > 2 && str[0] == left && str[len - 1] == right;
+}
+
 char *
 to_multibyte(const wchar_t *s)
 {
+#ifndef _WIN32
 	size_t len;
 	char *result;
 
 	len = wcstombs(NULL, s, 0) + 1;
-	if((result = malloc(len*sizeof(char))) == NULL)
+	if((result = malloc(len)) == NULL)
 		return NULL;
 
 	wcstombs(result, s, len);
 	return result;
+#else
+	return utf8_from_utf16(s);
+#endif
 }
 
-void
-strtolower(char *s)
+int
+str_to_lower(const char str[], char buf[], size_t buf_len)
 {
-	while(*s != '\0')
+	if(utf8_stro(str) == 0U)
 	{
-		*s = tolower(*s);
-		s++;
+		return transform_ascii_str(str, &tolower, buf, buf_len);
+	}
+	else
+	{
+		return transform_wide_str(str, &towlower, buf, buf_len);
 	}
 }
 
-void
-wcstolower(wchar_t s[])
+int
+str_to_upper(const char str[], char buf[], size_t buf_len)
 {
-	while(*s != L'\0')
+	if(utf8_stro(str) == 0U)
 	{
-		*s = towlower(*s);
-		s++;
+		return transform_ascii_str(str, &toupper, buf, buf_len);
+	}
+	else
+	{
+		return transform_wide_str(str, &towupper, buf, buf_len);
+	}
+}
+
+/* Transforms characters of the string to while they fit in the buffer by
+ * calling specified function on them.  Returns zero on success or non-zero if
+ * output buffer is too small. */
+static int
+transform_ascii_str(const char str[], int (*f)(int), char buf[], size_t buf_len)
+{
+	if(buf_len == 0U)
+	{
+		return 1;
+	}
+
+	while(*str != '\0' && buf_len > 1U)
+	{
+		*buf++ = f(*str++);
+		--buf_len;
+	}
+	*buf = '\0';
+	return *str != '\0';
+}
+
+/* Transforms characters of the string to while they fit in the buffer by
+ * calling specified function on them.  Returns zero on success or non-zero if
+ * output buffer is too small. */
+static int
+transform_wide_str(const char str[], wint_t (*f)(wint_t), char buf[],
+		size_t buf_len)
+{
+	size_t copied;
+	int error;
+	wchar_t *wstring;
+	wchar_t *p;
+	char *narrow;
+
+	wstring = to_wide(str);
+	if(wstring == NULL)
+	{
+		(void)utf8_strcpy(buf, str, buf_len);
+		return 1;
+	}
+
+	p = wstring;
+	while(*p != L'\0')
+	{
+		*p = f(*p);
+		++p;
+	}
+
+	narrow = to_multibyte(wstring);
+	copied = utf8_strcpy(buf, narrow, buf_len);
+	error = copied == 0U || narrow[copied - 1U] != '\0';
+
+	free(wstring);
+	free(narrow);
+
+	return error;
+}
+
+void
+wcstolower(wchar_t str[])
+{
+	while(*str != L'\0')
+	{
+		*str = towlower(*str);
+		++str;
 	}
 }
 
@@ -174,20 +322,13 @@ break_atr(char str[], char c)
 	}
 }
 
-/* Skips consecutive non-whitespace characters. */
 char *
-skip_non_whitespace(const char *str)
-{
-	while(!isspace(*str) && *str != '\0')
-		str++;
-	return (char *)str;
-}
-
-char *
-skip_whitespace(const char *str)
+skip_whitespace(const char str[])
 {
 	while(isspace(*str))
-		str++;
+	{
+		++str;
+	}
 	return (char *)str;
 }
 
@@ -260,11 +401,211 @@ replace_string(char **str, const char with[])
 	return 0;
 }
 
+int
+update_string(char **str, const char to[])
+{
+	if(to == NULL)
+	{
+		free(*str);
+		*str = NULL;
+		return 0;
+	}
+	return replace_string(str, to);
+}
+
 char *
-strcatch(char *str, char c)
+strcatch(char str[], char c)
 {
 	const char buf[2] = { c, '\0' };
 	return strcat(str, buf);
+}
+
+int
+strprepend(char **str, size_t *len, const char prefix[])
+{
+	const size_t prefix_len = strlen(prefix);
+	char *const new = realloc(*str, prefix_len + *len + 1);
+	if(new == NULL)
+	{
+		return 1;
+	}
+
+	memmove(new + prefix_len, new, *len + 1);
+	strncpy(new + *len, prefix, prefix_len);
+	*str = new;
+	*len += prefix_len;
+
+	return 0;
+}
+
+int
+strappendch(char **str, size_t *len, char c)
+{
+	const char suffix[] = {c, '\0'};
+	return strappend(str, len, suffix);
+}
+
+int
+strappend(char **str, size_t *len, const char suffix[])
+{
+	const size_t suffix_len = strlen(suffix);
+	char *const new = realloc(*str, *len + suffix_len + 1);
+	if(new == NULL)
+	{
+		return 1;
+	}
+
+	strcpy(new + *len, suffix);
+	*str = new;
+	*len += suffix_len;
+
+	return 0;
+}
+
+int
+sstrappendch(char str[], size_t *len, size_t size, char c)
+{
+	const char suffix[] = {c, '\0'};
+	return sstrappend(str, len, size, suffix);
+}
+
+int
+sstrappend(char str[], size_t *len, size_t size, const char suffix[])
+{
+	const size_t free_space = size - *len;
+	const size_t suffix_len = snprintf(str + *len, free_space, "%s", suffix);
+	*len += strlen(str + *len);
+	return suffix_len > free_space - 1;
+}
+
+void
+stralign(char str[], size_t width, char pad, int left_align)
+{
+	const size_t len = strlen(str);
+	const int pad_width = width - len;
+
+	if(pad_width <= 0)
+	{
+		return;
+	}
+
+	if(left_align)
+	{
+		memset(str + len, pad, pad_width);
+		str[width] = '\0';
+	}
+	else
+	{
+		memmove(str + pad_width, str, len + 1);
+		memset(str, pad, pad_width);
+	}
+}
+
+char *
+left_ellipsis(char str[], size_t max_width)
+{
+	size_t width;
+	size_t len;
+	const char *tail;
+
+	if(max_width == 0U)
+	{
+		return NULL;
+	}
+
+	width = utf8_strsw(str);
+	if(width <= max_width)
+	{
+		return str;
+	}
+
+	len = strlen(str);
+	if(max_width <= 3U)
+	{
+		copy_str(str, len + 1U, "...");
+		str[max_width] = '\0';
+		return str;
+	}
+
+	tail = str;
+	while(width > max_width - 3U)
+	{
+		width -= utf8_chrsw(tail);
+		tail += utf8_chrw(tail);
+	}
+	strcpy(str, "...");
+	memmove(str + 3U, tail, len - (tail - str) + 1U);
+
+	return str;
+}
+
+char *
+right_ellipsis(char str[], size_t max_width)
+{
+	size_t width;
+	size_t prefix;
+
+	if(max_width == 0U)
+	{
+		return NULL;
+	}
+
+	width = utf8_strsw(str);
+	if(width <= max_width)
+	{
+		return str;
+	}
+
+	if(max_width <= 3U)
+	{
+		copy_str(str, strlen(str) + 1U, "...");
+		str[max_width] = '\0';
+		return str;
+	}
+
+	prefix = utf8_nstrsnlen(str, max_width - 3U);
+	strcpy(&str[prefix], "...");
+	return str;
+}
+
+char *
+break_in_two(char str[], size_t max)
+{
+	int i;
+	size_t len, size;
+	char *result;
+	char *break_point = strstr(str, "%=");
+	if(break_point == NULL)
+		return str;
+
+	len = utf8_strsw(str) - 2;
+	size = strlen(str);
+	size = MAX(size, max);
+	result = malloc(size*4 + 2);
+
+	snprintf(result, break_point - str + 1, "%s", str);
+
+	if(len > max)
+	{
+		const int l = utf8_strsw(result) - (len - max);
+		break_point = str + utf8_strsnlen(str, MAX(l, 0));
+	}
+
+	snprintf(result, break_point - str + 1, "%s", str);
+	i = break_point - str;
+	while(max > len)
+	{
+		result[i++] = ' ';
+		max--;
+	}
+	result[i] = '\0';
+
+	if(len > max)
+		break_point = strstr(str, "%=");
+	strcat(result, break_point + 2);
+
+	free(str);
+	return result;
 }
 
 int
@@ -275,10 +616,10 @@ vifm_swprintf(wchar_t str[], size_t len, const wchar_t format[], ...)
 
 	va_start(ap, format);
 
-#if !defined(_WIN32) || defined(_WIN64)
-	result = vswprintf(str, len, format, ap);
-#else
+#ifdef BROKEN_SWPRINTF
 	result = vswprintf(str, format, ap);
+#else
+	result = vswprintf(str, len, format, ap);
 #endif
 
 	va_end(ap);
@@ -316,6 +657,12 @@ skip_char(const char str[], char c)
 char *
 escape_chars(const char string[], const char chars[])
 {
+	return escape_chars_with(string, chars, '\\');
+}
+
+char *
+escape_chars_with(const char string[], const char chars[], char with)
+{
 	size_t len;
 	size_t i;
 	char *ret, *dup;
@@ -324,16 +671,37 @@ escape_chars(const char string[], const char chars[])
 
 	dup = ret = malloc(len*2 + 2 + 1);
 
-	for(i = 0; i < len; i++)
+	for(i = 0; i < len; ++i)
 	{
-		if(string[i] == '\\' || char_is_one_of(chars, string[i]))
+		if(string[i] == with || char_is_one_of(chars, string[i]))
 		{
-			*dup++ = '\\';
+			*dup++ = with;
 		}
 		*dup++ = string[i];
 	}
 	*dup = '\0';
 	return ret;
+}
+
+void
+unescape(char s[], int regexp)
+{
+	char *p;
+
+	p = s;
+	while(s[0] != '\0')
+	{
+		if(s[0] == '\\' && (!regexp || s[1] == '/'))
+		{
+			++s;
+		}
+		*p++ = s[0];
+		if(s[0] != '\0')
+		{
+			++s;
+		}
+	}
+	*p = '\0';
 }
 
 int
@@ -371,7 +739,7 @@ expand_tabulation(const char line[], size_t max, size_t tab_stops, char buf[])
 	size_t col = 0;
 	while(col < max && *line != '\0')
 	{
-		const size_t char_width = get_char_width(line);
+		const size_t char_width = utf8_chrw(line);
 		const size_t char_screen_width = wcwidth(get_first_wchar(line));
 		if(char_screen_width != (size_t)-1 && col + char_screen_width > max)
 		{
@@ -392,7 +760,7 @@ expand_tabulation(const char line[], size_t max, size_t tab_stops, char buf[])
 			strncpy(buf, line, char_width);
 			buf += char_width;
 
-			col += char_screen_width;
+			col += (char_screen_width == (size_t)-1) ? 1 : char_screen_width;
 		}
 
 		line += char_width;
@@ -404,8 +772,12 @@ expand_tabulation(const char line[], size_t max, size_t tab_stops, char buf[])
 wchar_t
 get_first_wchar(const char str[])
 {
-	wchar_t wc[2];
+#ifndef _WIN32
+	wchar_t wc[2] = {};
 	return (mbstowcs(wc, str, ARRAY_LEN(wc)) >= 1) ? wc[0] : str[0];
+#else
+	return utf8_first_char(str);
+#endif
 }
 
 char *
@@ -426,6 +798,7 @@ extend_string(char str[], const char with[], size_t *len)
 int
 has_uppercase_letters(const char str[])
 {
+	/* TODO: rewrite this without call to to_wide(), use utf8_char_to_wchar(). */
 	int has_uppercase = 0;
 	wchar_t *const wstring = to_wide(str);
 	if(wstring != NULL)
@@ -530,5 +903,145 @@ split_and_get(char str[], char sep, char **state)
 	return (*str == '\0') ? NULL : str;
 }
 
+char *
+split_and_get_dc(char str[], char **state)
+{
+	if(*state != NULL)
+	{
+		if(**state == '\0')
+		{
+			return NULL;
+		}
+
+		str = *state;
+	}
+
+	while(str != NULL)
+	{
+		char *ptr;
+
+		if((ptr = strchr(str, ',')) != NULL)
+		{
+			while(ptr != NULL && ptr[1] == ',')
+			{
+				ptr = strchr(ptr + 2, ',');
+			}
+			if(ptr != NULL)
+			{
+				*ptr = '\0';
+				++ptr;
+			}
+		}
+		if(ptr == NULL)
+		{
+			ptr = str + strlen(str);
+		}
+
+		while(isspace(*str) || *str == ',')
+		{
+			++str;
+		}
+
+		if(str[0] != '\0')
+		{
+			squash_double_commas(str);
+			*state = ptr;
+			break;
+		}
+
+		str = ptr;
+	}
+
+	if(str == NULL)
+	{
+		*state = NULL;
+	}
+	return str;
+}
+
+/* Squashes two consecutive commas into one in place. */
+TSTATIC void
+squash_double_commas(char str[])
+{
+	char *p = str;
+	while(*str != '\0')
+	{
+		if(str[0] == ',')
+		{
+			if(str[1] == ',')
+			{
+				*p++ = *str++;
+				++str;
+				continue;
+			}
+		}
+		*p++ = *str++;
+	}
+	*p = '\0';
+}
+
+int
+count_lines(const char text[], int max_width)
+{
+	const char *start, *end;
+	int nlines;
+
+	nlines = 0;
+
+	start = text;
+	end = text - 1;
+	while((end = strchr(end + 1, '\n')) != NULL)
+	{
+		if(max_width == INT_MAX)
+		{
+			++nlines;
+		}
+		else
+		{
+			nlines += DIV_ROUND_UP(end - start, max_width);
+			if(start == end)
+			{
+				++nlines;
+			}
+		}
+
+		start = end + 1;
+	}
+	if(*start == '\0' || max_width == INT_MAX)
+	{
+		++nlines;
+	}
+	else
+	{
+		const size_t screen_width = utf8_strsw(start);
+		nlines += DIV_ROUND_UP(screen_width, max_width);
+	}
+
+	if(nlines == 0)
+	{
+		nlines = 1;
+	}
+
+	return nlines;
+}
+
+#ifdef _WIN32
+
+char *
+strcasestr(const char haystack[], const char needle[])
+{
+	char haystack_us[strlen(haystack) + 1];
+	char needle_us[strlen(needle) + 1];
+	const char *s;
+
+	strcpy(haystack_us, haystack);
+	strcpy(needle_us, needle);
+
+	s = strstr(haystack_us, needle_us);
+	return (s == NULL) ? NULL : ((char *)haystack + (s - haystack_us));
+}
+
+#endif
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -29,19 +29,23 @@
 #include "../cfg/hist.h"
 #include "../engine/keys.h"
 #include "../engine/mode.h"
-#include "../menus/menus.h"
+#include "../modes/dialogs/msg_dialog.h"
+#include "../ui/fileview.h"
+#include "../ui/statusbar.h"
+#include "../ui/ui.h"
 #include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
-#include "../bookmarks.h"
-#include "../commands.h"
+#include "../utils/utils.h"
+#include "../cmd_core.h"
 #include "../filelist.h"
 #include "../fileops.h"
+#include "../filtering.h"
+#include "../marks.h"
 #include "../registers.h"
 #include "../running.h"
 #include "../search.h"
 #include "../status.h"
-#include "../ui.h"
 #include "dialogs/attr_dialog.h"
 #include "cmdline.h"
 #include "modes.h"
@@ -72,6 +76,7 @@ static void cmd_ctrl_l(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_u(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_x(key_info_t key_info, keys_info_t *keys_info);
+static void call_incdec(int count);
 static void cmd_ctrl_y(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_quote(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_dollar(key_info_t key_info, keys_info_t *keys_info);
@@ -102,6 +107,7 @@ static void cmd_gg(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_gl(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_gU(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_gu(key_info_t key_info, keys_info_t *keys_info);
+static void do_gu(int upper);
 static void cmd_gv(key_info_t key_info, keys_info_t *keys_info);
 static void restore_previous_selection(void);
 static void select_first_one(void);
@@ -128,6 +134,7 @@ static void accept_and_leave(int save_msg);
 static void reject_and_leave(void);
 static void leave_clearing_selection(int go_to_top, int save_msg);
 static void update_marks(FileView *view);
+static void cmd_zd(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_zf(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_left_paren(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_right_paren(key_info_t key_info, keys_info_t *keys_info);
@@ -222,6 +229,7 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"v", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_v}}},
 	{L"y", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_y}}},
 	{L"zb", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_zb}}},
+	{L"zd", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_zd}}},
 	{L"zf", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_zf}}},
 	{L"zt", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_zt}}},
 	{L"zz", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = normal_cmd_zz}}},
@@ -341,13 +349,12 @@ restore_selection_flags(FileView *view)
 	}
 }
 
+/* Increments first number in names of marked files of the view [count=1]
+ * times. */
 static void
 cmd_ctrl_a(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(key_info.count == NO_COUNT_GIVEN)
-		key_info.count = 1;
-	curr_stats.save_msg = incdec_names(view, key_info.count);
-	accept_and_leave(curr_stats.save_msg);
+	call_incdec(def_count(key_info.count));
 }
 
 static void
@@ -355,7 +362,7 @@ cmd_ctrl_b(key_info_t key_info, keys_info_t *keys_info)
 {
 	if(can_scroll_up(view))
 	{
-		page_scroll(get_last_visible_file(view), -1);
+		page_scroll(get_last_visible_cell(view), -1);
 	}
 }
 
@@ -370,12 +377,12 @@ cmd_ctrl_d(key_info_t key_info, keys_info_t *keys_info)
 {
 	if(!at_last_line(view))
 	{
-		int new_pos;
+		size_t new_pos;
 		size_t offset = view->window_cells/2;
 		offset = ROUND_DOWN(offset, view->column_count);
 		new_pos = get_corrected_list_pos_down(view, offset);
 		new_pos = MAX(new_pos, view->list_pos + offset);
-		new_pos = MIN(new_pos, view->list_rows);
+		new_pos = MIN(new_pos, (size_t)view->list_rows);
 		new_pos = ROUND_DOWN(new_pos, view->column_count);
 		view->top_line += new_pos - view->list_pos;
 		goto_pos(new_pos);
@@ -460,13 +467,23 @@ cmd_ctrl_u(key_info_t key_info, keys_info_t *keys_info)
 	}
 }
 
+/* Decrements first number in names of marked files of the view [count=1]
+ * times. */
 static void
 cmd_ctrl_x(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(key_info.count == NO_COUNT_GIVEN)
-		key_info.count = 1;
-	curr_stats.save_msg = incdec_names(view, -key_info.count);
-	accept_and_leave(curr_stats.save_msg);
+	call_incdec(-def_count(key_info.count));
+}
+
+/* Increments/decrements first number in names of marked files of the view
+ * [count=1] times. */
+static void
+call_incdec(int count)
+{
+	int save_msg;
+	check_marking(view, 0, NULL);
+	save_msg = incdec_names(view, count);
+	accept_and_leave(save_msg);
 }
 
 static void
@@ -480,13 +497,15 @@ cmd_ctrl_y(key_info_t key_info, keys_info_t *keys_info)
 	}
 }
 
+/* Clones selection.  Count specifies number of copies of each file or directory
+ * to create (one by default). */
 static void
 cmd_C(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(key_info.count == NO_COUNT_GIVEN)
-		key_info.count = 1;
-	curr_stats.save_msg = clone_files(view, NULL, 0, 0, key_info.count);
-	accept_and_leave(curr_stats.save_msg);
+	int save_msg;
+	check_marking(curr_view, 0, NULL);
+	save_msg = clone_files(view, NULL, 0, 0, def_count(key_info.count));
+	accept_and_leave(save_msg);
 }
 
 static void
@@ -532,7 +551,7 @@ cmd_L(key_info_t key_info, keys_info_t *keys_info)
 	goto_pos(new_pos);
 }
 
-/* Move to middle line of window, selecting from start position to there. */
+/* Move to middle line of the window, selecting from start position to there. */
 static void
 cmd_M(key_info_t key_info, keys_info_t *keys_info)
 {
@@ -615,7 +634,7 @@ static void
 cmd_colon(key_info_t key_info, keys_info_t *keys_info)
 {
 	update_marks(view);
-	enter_cmdline_mode(CMD_SUBMODE, L"", NULL);
+	enter_cmdline_mode(CLS_COMMAND, L"", NULL);
 }
 
 static void
@@ -664,24 +683,18 @@ cmd_d(key_info_t key_info, keys_info_t *keys_info)
 	delete(key_info, 1);
 }
 
+/* Deletes files. */
 static void
 delete(key_info_t key_info, int use_trash)
 {
-	int save_msg;
-	if(key_info.reg == NO_REG_GIVEN)
-		key_info.reg = DEFAULT_REG_NAME;
-
-	curr_stats.confirmed = 0;
-	if(!use_trash && cfg.confirm)
+	if(confirm_deletion(use_trash))
 	{
-		if(!query_user_menu("Permanent deletion",
-				"Are you sure you want to delete files permanently?"))
-			return;
-		curr_stats.confirmed = 1;
-	}
+		int save_msg;
 
-	save_msg = delete_files(view, key_info.reg, 0, NULL, use_trash);
-	accept_and_leave(save_msg);
+		check_marking(view, 0, NULL);
+		save_msg = delete_files(view, def_reg(key_info.reg), use_trash);
+		accept_and_leave(save_msg);
+	}
 }
 
 static void
@@ -699,7 +712,7 @@ cmd_f(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_gA(key_info_t key_info, keys_info_t *keys_info)
 {
-	calculate_size(curr_view, 1);
+	calculate_size_bg(curr_view, 1);
 	accept_and_leave(0);
 }
 
@@ -707,7 +720,7 @@ cmd_gA(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_ga(key_info_t key_info, keys_info_t *keys_info)
 {
-	calculate_size(curr_view, 0);
+	calculate_size_bg(curr_view, 0);
 	accept_and_leave(0);
 }
 
@@ -739,24 +752,33 @@ cmd_gl(key_info_t key_info, keys_info_t *keys_info)
 {
 	update_marks(view);
 	leave_visual_mode(curr_stats.save_msg, 1, 0);
-	handle_file(view, 0, 0);
+	open_file(view, FHE_RUN);
 	clean_selected_files(view);
 	redraw_view(view);
 }
 
+/* Changes letters in filenames to upper case. */
 static void
 cmd_gU(key_info_t key_info, keys_info_t *keys_info)
 {
-	int save_msg;
-	save_msg = change_case(view, 1, 0, NULL);
-	accept_and_leave(save_msg);
+	do_gu(1);
 }
 
+/* Changes letters in filenames to lower case. */
 static void
 cmd_gu(key_info_t key_info, keys_info_t *keys_info)
 {
+	do_gu(0);
+}
+
+/* Handles gU and gu commands. */
+static void
+do_gu(int upper)
+{
 	int save_msg;
-	save_msg = change_case(view, 0, 0, NULL);
+
+	check_marking(view, 0, NULL);
+	save_msg = change_case(view, upper);
 	accept_and_leave(save_msg);
 }
 
@@ -821,7 +843,7 @@ cmd_h(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_i(key_info_t key_info, keys_info_t *keys_info)
 {
-	handle_file(view, 1, 0);
+	open_file(view, FHE_NO_RUN);
 	accept_and_leave(curr_stats.save_msg);
 }
 
@@ -879,8 +901,8 @@ go_to_next(key_info_t key_info, keys_info_t *keys_info, int def, int step)
 static void
 cmd_m(key_info_t key_info, keys_info_t *keys_info)
 {
-	set_user_bookmark(key_info.multi, view->curr_dir,
-			get_current_file_name(view));
+	const dir_entry_t *const entry = &view->dir_entry[view->list_pos];
+	set_user_mark(key_info.multi, entry->origin, entry->name);
 }
 
 static void
@@ -892,6 +914,8 @@ cmd_n(key_info_t key_info, keys_info_t *keys_info)
 static void
 search(key_info_t key_info, int backward, int interactive)
 {
+	/* TODO: extract common part of this function and normal.c:search(). */
+
 	int found;
 
 	if(hist_is_empty(&cfg.search_hist))
@@ -901,8 +925,7 @@ search(key_info_t key_info, int backward, int interactive)
 
 	if(view->matches == 0)
 	{
-		const char *pattern = (view->regexp[0] == '\0') ?
-				cfg.search_hist.items[0] : view->regexp;
+		const char *const pattern = cfg_get_last_search_pattern();
 		curr_stats.save_msg = find_vpattern(view, pattern, backward, interactive);
 		return;
 	}
@@ -920,7 +943,7 @@ search(key_info_t key_info, int backward, int interactive)
 		return;
 	}
 
-	status_bar_messagef("%c%s", backward ? '?' : '/', view->regexp);
+	print_search_next_msg(view, backward);
 	curr_stats.save_msg = 1;
 }
 
@@ -929,7 +952,7 @@ static void
 cmd_q_colon(key_info_t key_info, keys_info_t *keys_info)
 {
 	leave_clearing_selection(0, 0);
-	get_and_execute_command("", 0U, GET_COMMAND);
+	get_and_execute_command("", 0U, CIT_COMMAND);
 }
 
 /* Runs external editor to get search pattern and then executes it. */
@@ -950,17 +973,19 @@ cmd_q_question(key_info_t key_info, keys_info_t *keys_info)
 static void
 activate_search(int count, int back, int external)
 {
+	/* TODO: generalize with normal.c:activate_search(). */
+
 	search_repeat = (count == NO_COUNT_GIVEN) ? 1 : count;
 	curr_stats.last_search_backward = back;
 	if(external)
 	{
-		const int type = back ? GET_VBSEARCH_PATTERN : GET_VFSEARCH_PATTERN;
+		CmdInputType type = back ? CIT_VBSEARCH_PATTERN : CIT_VFSEARCH_PATTERN;
 		get_and_execute_command("", 0U, type);
 	}
 	else
 	{
-		const int type = back ? VSEARCH_BACKWARD_SUBMODE : VSEARCH_FORWARD_SUBMODE;
-		enter_cmdline_mode(type, L"", NULL);
+		const CmdLineSubmode submode = back ? CLS_VBSEARCH : CLS_VFSEARCH;
+		enter_cmdline_mode(submode, L"", NULL);
 	}
 }
 
@@ -1002,24 +1027,16 @@ change_amend_type(AmendType new_amend_type)
 	update();
 }
 
+/* Yanks files. */
 static void
 cmd_y(key_info_t key_info, keys_info_t *keys_info)
 {
-	if(key_info.reg == NO_REG_GIVEN)
-	{
-		key_info.reg = DEFAULT_REG_NAME;
-	}
+	int save_msg;
 
-	capture_target_files(view);
-	yank_selected_files(view, key_info.reg);
+	check_marking(view, 0, NULL);
+	save_msg = yank_files(view, def_reg(key_info.reg));
 
-	status_bar_messagef("%d file%s yanked", view->selected_files,
-			(view->selected_files == 1) ? "" : "s");
-	curr_stats.save_msg = 1;
-
-	free_file_capture(view);
-
-	accept_and_leave(1);
+	accept_and_leave(save_msg);
 }
 
 /* Accepts selected region and leaves visual mode.  This means forgetting
@@ -1056,6 +1073,7 @@ static void
 update_marks(FileView *view)
 {
 	char start_mark, end_mark;
+	const dir_entry_t *start_entry, *end_entry;
 
 	if(start_pos >= view->list_rows)
 	{
@@ -1067,8 +1085,19 @@ update_marks(FileView *view)
 	start_mark = upwards_range ? '<' : '>';
 	end_mark = upwards_range ? '>' : '<';
 
-	set_spec_bookmark(start_mark, view->curr_dir, get_current_file_name(view));
-	set_spec_bookmark(end_mark, view->curr_dir, view->dir_entry[start_pos].name);
+	start_entry = &view->dir_entry[view->list_pos];
+	end_entry = &view->dir_entry[start_pos];
+
+	set_spec_mark(start_mark, start_entry->origin, start_entry->name);
+	set_spec_mark(end_mark, end_entry->origin, end_entry->name);
+}
+
+/* Excludes entries from custom view. */
+static void
+cmd_zd(key_info_t key_info, keys_info_t *keys_info)
+{
+	flist_custom_exclude(curr_view);
+	accept_and_leave(0);
 }
 
 static void
@@ -1263,7 +1292,7 @@ static void
 update(void)
 {
 	redraw_view(view);
-	update_pos_window(view);
+	ui_ruler_update(view);
 }
 
 void
@@ -1366,4 +1395,4 @@ describe_visual_mode(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

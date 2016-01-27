@@ -1,33 +1,39 @@
+#include <stic.h>
+
 #include <regex.h>
 
 #include <stdlib.h>
 
-#include "seatest.h"
+#include "../../src/ui/escape.h"
 
-#include "../../src/escape.h"
+#define INV_START "\033[7,1m"
+#define INV_END "\033[27,22m"
 
 static regex_t re1c;
 static regex_t re2c;
+static regex_t re3c;
+static regex_t re4c;
+static regex_t re5c;
 
-static void
-setup(void)
+SETUP()
 {
-	int err;
-	err = regcomp(&re1c, "a", 0);
-	assert_int_equal(0, err);
-	err = regcomp(&re2c, "ab", 0);
-	assert_int_equal(0, err);
+	assert_success(regcomp(&re1c, "a", 0));
+	assert_success(regcomp(&re2c, "ab", 0));
+	assert_success(regcomp(&re3c, "$", 0));
+	assert_success(regcomp(&re4c, "a?", REG_EXTENDED));
+	assert_success(regcomp(&re5c, "^", 0));
 }
 
-static void
-teardown(void)
+TEARDOWN()
 {
+	regfree(&re5c);
+	regfree(&re4c);
+	regfree(&re3c);
 	regfree(&re2c);
 	regfree(&re1c);
 }
 
-static void
-test_single_char_regex_ok(void)
+TEST(single_char_regex_ok)
 {
 	const char *const input = "a";
 	const char *const expected = "\033[7,1m" "a" "\033[27,22m";
@@ -36,8 +42,7 @@ test_single_char_regex_ok(void)
 	free(actual);
 }
 
-static void
-test_double_char_regex_ok(void)
+TEST(double_char_regex_ok)
 {
 	const char *const input = "ab";
 	const char *const expected = "\033[7,1m" "a" "\033[27,22m" "\033[7,1m" "b" "\033[27,22m";
@@ -46,8 +51,7 @@ test_double_char_regex_ok(void)
 	free(actual);
 }
 
-static void
-test_match_at_the_beginning_ok(void)
+TEST(match_at_the_beginning_ok)
 {
 	const char *const input = "abBAR";
 	const char *const expected = "\033[7,1m" "a" "\033[27,22m" "\033[7,1m" "b" "\033[27,22mBAR";
@@ -56,8 +60,7 @@ test_match_at_the_beginning_ok(void)
 	free(actual);
 }
 
-static void
-test_match_at_the_end_ok(void)
+TEST(match_at_the_end_ok)
 {
 	const char *const input = "FOOab";
 	const char *const expected = "FOO" "\033[7,1m" "a" "\033[27,22m" "\033[7,1m" "b" "\033[27,22m";
@@ -66,8 +69,7 @@ test_match_at_the_end_ok(void)
 	free(actual);
 }
 
-static void
-test_match_in_the_middle_ok(void)
+TEST(match_in_the_middle_ok)
 {
 	const char *const input = "FOOabBAR";
 	const char *const expected = "FOO" "\033[7,1m" "a" "\033[27,22m" "\033[7,1m" "b" "\033[27,22m" "BAR";
@@ -76,8 +78,7 @@ test_match_in_the_middle_ok(void)
 	free(actual);
 }
 
-static void
-test_multiple_matches_ok(void)
+TEST(multiple_matches_ok)
 {
 	const char *const input = "FOOabBARab";
 	const char *const expected = "FOO" "\033[7,1m" "a" "\033[27,22m" "\033[7,1m" "b" "\033[27,22m"
@@ -87,8 +88,7 @@ test_multiple_matches_ok(void)
 	free(actual);
 }
 
-static void
-test_esc_in_input_are_ignored(void)
+TEST(esc_in_input_are_ignored)
 {
 	const char *const input = "FOO" "\033[7,1m" "a" "\033[27,22m" "BAR";
 	const char *const expected = "FOO" "\033[7,1m" "\033[7,1m" "a" "\033[27,22m" "\033[27,22m" "BAR";
@@ -97,24 +97,68 @@ test_esc_in_input_are_ignored(void)
 	free(actual);
 }
 
-void
-esc_highlight_pattern_tests(void)
+TEST(empty_match)
 {
-	test_fixture_start();
+	const char *const input = "anything";
+	const char *const expected = "anything";
+	char *const actual = esc_highlight_pattern(input, &re3c);
+	assert_string_equal(expected, actual);
+	free(actual);
+}
 
-	fixture_setup(setup);
-	fixture_teardown(teardown);
+TEST(match_on_empty_line)
+{
+	const char *const input = "";
+	const char *const expected = "";
+	char *const actual = esc_highlight_pattern(input, &re3c);
+	assert_string_equal(expected, actual);
+	free(actual);
+}
 
-	run_test(test_single_char_regex_ok);
-	run_test(test_double_char_regex_ok);
-	run_test(test_match_at_the_beginning_ok);
-	run_test(test_match_at_the_end_ok);
-	run_test(test_match_in_the_middle_ok);
-	run_test(test_multiple_matches_ok);
-	run_test(test_esc_in_input_are_ignored);
+TEST(non_empty_match_after_empty_match)
+{
+	const char *const input = " a";
+	const char *const expected = " " INV_START "a" INV_END;
+	char *const actual = esc_highlight_pattern(input, &re4c);
+	assert_string_equal(expected, actual);
+	free(actual);
+}
 
-	test_fixture_end();
+TEST(non_empty_match_after_empty_matche_with_esc)
+{
+	const char *const input = "\033[7,1m" " a";
+	const char *const expected = "\033[7,1m" " " INV_START "a" INV_END;
+	char *const actual = esc_highlight_pattern(input, &re4c);
+	assert_string_equal(expected, actual);
+	free(actual);
+}
+
+TEST(empty_match_is_fine)
+{
+	const char *const input = "foo \033[31m bar vifm";
+	const char *const expected = input;
+	char *const actual = esc_highlight_pattern(input, &re5c);
+	assert_string_equal(expected, actual);
+	free(actual);
+}
+
+TEST(trailing_empty_match_is_fine)
+{
+	const char *const input = "data \033(B\033[m";
+	const char *const expected = input;
+	char *const actual = esc_highlight_pattern(input, &re3c);
+	assert_string_equal(expected, actual);
+	free(actual);
+}
+
+TEST(empty_match_with_utf8_character)
+{
+	const char *const input = "б";
+	const char *const expected = input;
+	char *const actual = esc_highlight_pattern(input, &re5c);
+	assert_string_equal(expected, actual);
+	free(actual);
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

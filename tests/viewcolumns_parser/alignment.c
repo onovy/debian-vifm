@@ -1,37 +1,29 @@
+#include <stic.h>
+
 #include <string.h>
 
-#include "seatest.h"
-
-#include "../../src/column_view.h"
+#include "../../src/ui/column_view.h"
 #include "../../src/viewcolumns_parser.h"
+
 #include "test.h"
 
-static void
-test_left_alignment_ok(void)
+TEST(left_alignment_ok)
 {
-	int result = do_parse("-{name}");
-	assert_true(result == 0);
-	assert_true(info.align == AT_LEFT);
+	assert_success(do_parse("-{name}"));
+	assert_int_equal(AT_LEFT, info.align);
 }
 
-static void
-test_right_alignment_ok(void)
+TEST(right_alignment_ok)
 {
-	int result = do_parse("{name}");
-	assert_true(result == 0);
-	assert_true(info.align == AT_RIGHT);
+	assert_success(do_parse("{name}"));
+	assert_int_equal(AT_RIGHT, info.align);
 }
 
-void
-alignment_tests(void)
+TEST(dynamic_alignment_ok)
 {
-	test_fixture_start();
-
-	run_test(test_left_alignment_ok);
-	run_test(test_right_alignment_ok);
-
-	test_fixture_end();
+	assert_success(do_parse("*{name}"));
+	assert_int_equal(AT_DYN, info.align);
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -1,84 +1,77 @@
-#include "seatest.h"
+#include <stic.h>
 
 #include <unistd.h> /* F_OK access() */
 
 #include "../../src/io/iop.h"
 #include "../../src/io/ior.h"
 
-static const char *const FILE_NAME = "file-to-create";
+static const char *const FILE_NAME = SANDBOX_PATH "/file-to-create";
 
-static void
-test_file_is_created(void)
+TEST(file_is_created)
 {
-	assert_int_equal(-1, access(FILE_NAME, F_OK));
+	assert_failure(access(FILE_NAME, F_OK));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 		};
-		assert_int_equal(0, iop_mkfile(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(iop_mkfile(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(0, access(FILE_NAME, F_OK));
+	assert_success(access(FILE_NAME, F_OK));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 		};
-		assert_int_equal(0, ior_rm(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(ior_rm(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 }
 
-/* Currently there is no check that file exists on *nix, so test will fail. */
-#ifdef _WIN32
-static void
-test_fails_if_file_exists(void)
+TEST(fails_if_file_exists)
 {
-	assert_int_equal(-1, access(FILE_NAME, F_OK));
+	assert_failure(access(FILE_NAME, F_OK));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 		};
-		assert_int_equal(0, iop_mkfile(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(iop_mkfile(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(0, access(FILE_NAME, F_OK));
+	assert_success(access(FILE_NAME, F_OK));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 		};
-		assert_false(iop_mkfile(&args) == 0);
+		ioe_errlst_init(&args.result.errors);
+
+		assert_failure(iop_mkfile(&args));
+
+		assert_true(args.result.errors.error_count != 0);
+		ioe_errlst_free(&args.result.errors);
 	}
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 		};
-		assert_int_equal(0, ior_rm(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(ior_rm(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
-}
-#endif
-
-void
-mkfile_tests(void)
-{
-	test_fixture_start();
-
-	run_test(test_file_is_created);
-	/* Currently there is no check that file exists on *nix, so test will fail. */
-#ifdef _WIN32
-	run_test(test_fails_if_file_exists);
-#endif
-
-	test_fixture_end();
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

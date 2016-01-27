@@ -1,4 +1,4 @@
-#include "seatest.h"
+#include <stic.h>
 
 #include <stddef.h> /* NULL */
 
@@ -6,9 +6,7 @@
 #include "../../src/io/ioeta.h"
 #include "../../src/io/iop.h"
 
-
-static void
-test_non_existent_path_yields_zero_size(void)
+TEST(non_existent_path_yields_zero_size)
 {
 	ioeta_estim_t *const estim = ioeta_alloc(NULL);
 
@@ -22,12 +20,11 @@ test_non_existent_path_yields_zero_size(void)
 	ioeta_free(estim);
 }
 
-static void
-test_empty_files_are_ok(void)
+TEST(empty_files_are_ok)
 {
 	ioeta_estim_t *const estim = ioeta_alloc(NULL);
 
-	ioeta_calculate(estim, "test-data/existing-files", 0);
+	ioeta_calculate(estim, TEST_DATA_PATH "/existing-files", 0);
 
 	assert_int_equal(3, estim->total_items);
 	assert_int_equal(0, estim->current_item);
@@ -37,12 +34,11 @@ test_empty_files_are_ok(void)
 	ioeta_free(estim);
 }
 
-static void
-test_non_empty_files_are_ok(void)
+TEST(non_empty_files_are_ok)
 {
 	ioeta_estim_t *const estim = ioeta_alloc(NULL);
 
-	ioeta_calculate(estim, "test-data/various-sizes", 0);
+	ioeta_calculate(estim, TEST_DATA_PATH "/various-sizes", 0);
 
 	assert_int_equal(7, estim->total_items);
 	assert_int_equal(0, estim->current_item);
@@ -52,12 +48,11 @@ test_non_empty_files_are_ok(void)
 	ioeta_free(estim);
 }
 
-static void
-test_shallow_estimation_does_not_recur(void)
+TEST(shallow_estimation_does_not_recur)
 {
 	ioeta_estim_t *const estim = ioeta_alloc(NULL);
 
-	ioeta_calculate(estim, "test-data/various-sizes", 1);
+	ioeta_calculate(estim, TEST_DATA_PATH "/various-sizes", 1);
 
 	assert_int_equal(1, estim->total_items);
 	assert_int_equal(0, estim->current_item);
@@ -69,21 +64,19 @@ test_shallow_estimation_does_not_recur(void)
 
 #ifndef _WIN32
 
-static void
-test_symlink_calculated_as_zero_bytes(void)
+TEST(symlink_calculated_as_zero_bytes)
 {
 	ioeta_estim_t *const estim = ioeta_alloc(NULL);
 
 	{
-		io_args_t args =
-		{
-			.arg1.path = "test-data/existing-files",
-			.arg2.target = "link",
+		io_args_t args = {
+			.arg1.path = TEST_DATA_PATH "/existing-files",
+			.arg2.target = SANDBOX_PATH "/link",
 		};
 		assert_int_equal(0, iop_ln(&args));
 	}
 
-	ioeta_calculate(estim, "link", 0);
+	ioeta_calculate(estim, SANDBOX_PATH "/link", 0);
 
 	assert_int_equal(1, estim->total_items);
 	assert_int_equal(0, estim->current_item);
@@ -91,9 +84,8 @@ test_symlink_calculated_as_zero_bytes(void)
 	assert_int_equal(0, estim->current_byte);
 
 	{
-		io_args_t args =
-		{
-			.arg1.path = "link",
+		io_args_t args = {
+			.arg1.path = SANDBOX_PATH "/link",
 		};
 		assert_int_equal(0, iop_rmfile(&args));
 	}
@@ -103,23 +95,5 @@ test_symlink_calculated_as_zero_bytes(void)
 
 #endif
 
-void
-calculate_tests(void)
-{
-	test_fixture_start();
-
-	run_test(test_non_existent_path_yields_zero_size);
-	run_test(test_empty_files_are_ok);
-	run_test(test_non_empty_files_are_ok);
-	run_test(test_shallow_estimation_does_not_recur);
-
-#ifndef _WIN32
-	/* Creating symbolic links on Windows requires administrator rights. */
-	run_test(test_symlink_calculated_as_zero_bytes);
-#endif
-
-	test_fixture_end();
-}
-
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -23,6 +23,7 @@
 #include <stdlib.h> /* qsort() */
 #include <string.h> /* strdup() */
 
+#include "../compat/reallocarray.h"
 #include "../utils/macros.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
@@ -65,7 +66,13 @@ vle_compl_reset(void)
 int
 vle_compl_add_match(const char match[])
 {
-	return add_match(strdup(match));
+	return vle_compl_put_match(strdup(match));
+}
+
+int
+vle_compl_put_match(char match[])
+{
+	return add_match(match);
 }
 
 int
@@ -73,6 +80,21 @@ vle_compl_add_path_match(const char path[])
 {
 	char *const match = add_path_hook(path);
 	return add_match(match);
+}
+
+int
+vle_compl_put_path_match(char path[])
+{
+	if(add_path_hook == &strdup)
+	{
+		return add_match(path);
+	}
+	else
+	{
+		const int result = vle_compl_add_path_match(path);
+		free(path);
+		return result;
+	}
 }
 
 /* Adds new match to the list of matches.  Becomes an owner of memory pointed to
@@ -89,7 +111,8 @@ add_match(char match[])
 		return -1;
 	}
 
-	if((p = realloc(lines, sizeof(*lines)*(count + 1))) == NULL)
+	p = reallocarray(lines, count + 1, sizeof(*lines));
+	if(p == NULL)
 	{
 		free(match);
 		return -1;
@@ -137,7 +160,10 @@ group_unique_sort(size_t start_index, size_t len)
 
 	assert(state != COMPLETING);
 
-	qsort(group_start, len, sizeof(*group_start), sorter);
+	if(len != 0U)
+	{
+		qsort(group_start, len, sizeof(*group_start), &sorter);
+	}
 	count = start_index + remove_duplicates(group_start, len);
 	group_begin = count;
 }
@@ -261,4 +287,4 @@ vle_compl_set_add_path_hook(vle_compl_add_path_hook_f hook)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

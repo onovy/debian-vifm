@@ -1,16 +1,17 @@
+#include <stic.h>
+
 #include <unistd.h> /* chdir() */
 
 #include <stdlib.h>
 #include <string.h>
 
-#include "seatest.h"
-
 #include "../../src/cfg/config.h"
+#include "../../src/ui/ui.h"
+#include "../../src/utils/dynarray.h"
 #include "../../src/utils/str.h"
 #include "../../src/filelist.h"
 #include "../../src/macros.h"
 #include "../../src/registers.h"
-#include "../../src/ui.h"
 
 #ifdef _WIN32
 #define SL "\\\\"
@@ -25,11 +26,16 @@ setup_lwin(void)
 
 	lwin.list_rows = 4;
 	lwin.list_pos = 2;
-	lwin.dir_entry = calloc(lwin.list_rows, sizeof(*lwin.dir_entry));
+	lwin.dir_entry = dynarray_cextend(NULL,
+			lwin.list_rows*sizeof(*lwin.dir_entry));
 	lwin.dir_entry[0].name = strdup("lfi le0");
+	lwin.dir_entry[0].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[1].name = strdup("lfile1");
+	lwin.dir_entry[1].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[2].name = strdup("lfile\"2");
+	lwin.dir_entry[2].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[3].name = strdup("lfile3");
+	lwin.dir_entry[3].origin = &lwin.curr_dir[0];
 
 	lwin.dir_entry[0].selected = 1;
 	lwin.dir_entry[2].selected = 1;
@@ -43,15 +49,23 @@ setup_rwin(void)
 
 	rwin.list_rows = 7;
 	rwin.list_pos = 5;
-	rwin.dir_entry = calloc(rwin.list_rows, sizeof(*rwin.dir_entry));
+	rwin.dir_entry = dynarray_cextend(NULL,
+			rwin.list_rows*sizeof(*rwin.dir_entry));
 	rwin.dir_entry[0].name = strdup("rfile0");
+	rwin.dir_entry[0].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[1].name = strdup("rfile1");
+	rwin.dir_entry[1].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[2].name = strdup("rfile2");
+	rwin.dir_entry[2].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[3].name = strdup("rfile3");
+	rwin.dir_entry[3].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[4].name = strdup("rfile4");
+	rwin.dir_entry[4].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[5].name = strdup("rfile5");
-	rwin.dir_entry[6].type = DIRECTORY;
-	rwin.dir_entry[6].name = strdup("rdir6/");
+	rwin.dir_entry[5].origin = &rwin.curr_dir[0];
+	rwin.dir_entry[6].name = strdup("rdir6");
+	rwin.dir_entry[6].type = FT_DIR;
+	rwin.dir_entry[6].origin = &rwin.curr_dir[0];
 
 	rwin.dir_entry[1].selected = 1;
 	rwin.dir_entry[3].selected = 1;
@@ -59,8 +73,7 @@ setup_rwin(void)
 	rwin.selected_files = 3;
 }
 
-static void
-setup(void)
+SETUP()
 {
 	setup_lwin();
 	setup_rwin();
@@ -69,22 +82,20 @@ setup(void)
 	other_view = &rwin;
 }
 
-static void
-teardown(void)
+TEARDOWN()
 {
 	int i;
 
 	for(i = 0; i < lwin.list_rows; i++)
 		free(lwin.dir_entry[i].name);
-	free(lwin.dir_entry);
+	dynarray_free(lwin.dir_entry);
 
 	for(i = 0; i < rwin.list_rows; i++)
 		free(rwin.dir_entry[i].name);
-	free(rwin.dir_entry);
+	dynarray_free(rwin.dir_entry);
 }
 
-static void
-test_b_both_have_selection(void)
+TEST(b_both_have_selection)
 {
 	char *expanded;
 
@@ -99,8 +110,7 @@ test_b_both_have_selection(void)
 	free(expanded);
 }
 
-static void
-test_f_both_have_selection(void)
+TEST(f_both_have_selection)
 {
 	char *expanded;
 
@@ -116,8 +126,7 @@ test_f_both_have_selection(void)
 	free(expanded);
 }
 
-static void
-test_b_only_lwin_has_selection(void)
+TEST(b_only_lwin_has_selection)
 {
 	char *expanded;
 
@@ -134,8 +143,7 @@ test_b_only_lwin_has_selection(void)
 	free(expanded);
 }
 
-static void
-test_b_only_rwin_has_selection(void)
+TEST(b_only_rwin_has_selection)
 {
 	char *expanded;
 
@@ -151,8 +159,7 @@ test_b_only_rwin_has_selection(void)
 	free(expanded);
 }
 
-static void
-test_b_noone_has_selection(void)
+TEST(b_noone_has_selection)
 {
 	char *expanded;
 
@@ -168,8 +175,7 @@ test_b_noone_has_selection(void)
 	free(expanded);
 }
 
-static void
-test_no_slash_after_dirname(void)
+TEST(no_slash_after_dirname)
 {
 	char *expanded;
 
@@ -181,8 +187,7 @@ test_no_slash_after_dirname(void)
 	free(expanded);
 }
 
-static void
-test_forward_slashes_on_win_for_non_shell(void)
+TEST(forward_slashes_on_win_for_non_shell)
 {
 	char *expanded;
 
@@ -198,8 +203,7 @@ test_forward_slashes_on_win_for_non_shell(void)
 	free(expanded);
 }
 
-static void
-test_m(void)
+TEST(m)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -209,16 +213,15 @@ test_m(void)
 	other_view = &lwin;
 	expanded = expand_macros("%M echo log", "", &flags, 0);
 	assert_string_equal(" echo log", expanded);
-	assert_int_equal(MACRO_MENU_NAV_OUTPUT, flags);
+	assert_int_equal(MF_MENU_NAV_OUTPUT, flags);
 	free(expanded);
 }
 
-static void
-test_r_well_formed(void)
+TEST(r_well_formed)
 {
 	const char *p;
 
-	chdir("test-data/existing-files");
+	chdir(TEST_DATA_PATH "/existing-files");
 
 	init_registers();
 
@@ -247,17 +250,14 @@ test_r_well_formed(void)
 	}
 
 	clear_registers();
-
-	chdir("../..");
 }
 
-static void
-test_r_ill_formed(void)
+TEST(r_ill_formed)
 {
 	char key;
 	char expected[] = "a b cx";
 
-	chdir("test-data/existing-files");
+	chdir(TEST_DATA_PATH "/existing-files");
 
 	init_registers();
 
@@ -282,12 +282,9 @@ test_r_ill_formed(void)
 	while(key != '\0');
 
 	clear_registers();
-
-	chdir("../..");
 }
 
-static void
-test_with_quotes(void)
+TEST(with_quotes)
 {
 	char *expanded;
 
@@ -326,7 +323,7 @@ test_with_quotes(void)
 	assert_string_equal(" a m M s ", expanded);
 	free(expanded);
 
-	chdir("test-data/existing-files");
+	chdir(TEST_DATA_PATH "/existing-files");
 	init_registers();
 
 	append_to_register(DEFAULT_REG_NAME, "a");
@@ -338,11 +335,9 @@ test_with_quotes(void)
 	free(expanded);
 
 	clear_registers();
-	chdir("../..");
 }
 
-static void
-test_single_percent_sign(void)
+TEST(single_percent_sign)
 {
 	char *expanded;
 
@@ -351,8 +346,7 @@ test_single_percent_sign(void)
 	free(expanded);
 }
 
-static void
-test_percent_sign_and_double_quote(void)
+TEST(percent_sign_and_double_quote)
 {
 	char *expanded;
 
@@ -361,8 +355,7 @@ test_percent_sign_and_double_quote(void)
 	free(expanded);
 }
 
-static void
-test_empty_line_ok(void)
+TEST(empty_line_ok)
 {
 	char *expanded;
 
@@ -371,31 +364,92 @@ test_empty_line_ok(void)
 	free(expanded);
 }
 
-void
-test_expand_macros(void)
+TEST(singly_expanded_is_not_escaped)
 {
-	test_fixture_start();
+	char *expanded;
+	lwin.list_pos = 0;
+	expanded = ma_expand_single("%c");
+	assert_string_equal("lfi le0", expanded);
+	free(expanded);
+}
 
-	fixture_setup(setup);
-	fixture_teardown(teardown);
+TEST(singly_expanded_is_not_quoted)
+{
+	char *expanded;
+	lwin.list_pos = 0;
+	expanded = ma_expand_single("%\"c");
+	assert_string_equal("lfi le0", expanded);
+	free(expanded);
+}
 
-	run_test(test_b_both_have_selection);
-	run_test(test_f_both_have_selection);
-	run_test(test_b_only_lwin_has_selection);
-	run_test(test_b_only_rwin_has_selection);
-	run_test(test_b_noone_has_selection);
-	run_test(test_no_slash_after_dirname);
-	run_test(test_forward_slashes_on_win_for_non_shell);
-	run_test(test_m);
-	run_test(test_r_well_formed);
-	run_test(test_r_ill_formed);
-	run_test(test_with_quotes);
-	run_test(test_single_percent_sign);
-	run_test(test_percent_sign_and_double_quote);
-	run_test(test_empty_line_ok);
+TEST(singly_expanded_single_macros)
+{
+	char *expanded;
+	lwin.list_pos = 0;
+	expanded = ma_expand_single("%d");
+	assert_string_equal("/lwin", expanded);
+	free(expanded);
+}
 
-	test_fixture_end();
+TEST(singly_expanded_multiple_macros_single_file)
+{
+	char *expanded;
+	lwin.dir_entry[2].selected = 0;
+	lwin.selected_files = 1;
+	expanded = ma_expand_single("%f");
+	assert_string_equal("lfi le0", expanded);
+	free(expanded);
+}
+
+TEST(singly_not_expanded_multiple_macros_multiple_files)
+{
+	char *expanded;
+	lwin.list_pos = 0;
+	expanded = ma_expand_single("%f");
+	assert_string_equal("", expanded);
+	free(expanded);
+}
+
+TEST(singly_no_crash_on_wrong_register_name)
+{
+	chdir(TEST_DATA_PATH "/spaces-in-names");
+	init_registers();
+
+	assert_success(append_to_register('r', "spaces in the middle"));
+	free(ma_expand_single("%r "));
+
+	clear_registers();
+}
+
+TEST(singly_expanded_single_file_register)
+{
+	char *expanded;
+
+	chdir(TEST_DATA_PATH "/spaces-in-names");
+	init_registers();
+
+	assert_success(append_to_register('r', "spaces in the middle"));
+	expanded = ma_expand_single("%rr");
+	assert_string_equal("spaces in the middle", expanded);
+	free(expanded);
+
+	clear_registers();
+}
+
+TEST(singly_not_expanded_multiple_files_register)
+{
+	char *expanded;
+
+	init_registers();
+
+	append_to_register('r', "a");
+	append_to_register('r', "b");
+	expanded = ma_expand_single("%rr");
+	assert_string_equal("", expanded);
+	free(expanded);
+
+	clear_registers();
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

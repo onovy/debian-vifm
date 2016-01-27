@@ -19,18 +19,21 @@
 
 #include "filetype.h"
 
+#include <assert.h> /* assert() */
 #include <ctype.h> /* isspace() */
-#include <stdlib.h> /* free() realloc() */
+#include <stddef.h> /* NULL */
+#include <stdlib.h> /* free() */
 #include <string.h> /* strchr() strdup() strcasecmp() */
 
-#include "menus/menus.h"
-#include "utils/fs_limits.h"
+#include "compat/fs_limits.h"
+#include "compat/reallocarray.h"
+#include "modes/dialogs/msg_dialog.h"
+#include "utils/matcher.h"
 #include "utils/str.h"
 #include "utils/utils.h"
-#include "globals.h"
 
-const assoc_record_t NONE_PSEUDO_PROG =
-{
+/* Predefined builtin command. */
+const assoc_record_t NONE_PSEUDO_PROG = {
 	.command = "",
 	.description = "",
 };
@@ -46,227 +49,159 @@ static assoc_record_type_t new_records_type = ART_CUSTOM;
 /* Pointer to external command existence check function. */
 static external_command_exists_t external_command_exists_func;
 
-TSTATIC void replace_double_comma(char cmd[], int put_null);
-static int get_filetype_number(const char *file, assoc_list_t assoc_list);
-static void assoc_programs(const char pattern[], const char programs[],
+static const char * find_existing_cmd(const assoc_list_t *record_list,
+		const char file[]);
+static assoc_record_t find_existing_cmd_record(const assoc_records_t *records);
+static void assoc_programs(matcher_t *matcher, const assoc_records_t *programs,
 		int for_x, int in_x);
+static assoc_records_t parse_command_list(const char cmds[], int with_descr);
+TSTATIC void replace_double_comma(char cmd[]);
 static void register_assoc(assoc_t assoc, int for_x, int in_x);
+static assoc_records_t clone_all_matching_records(const char file[],
+		const assoc_list_t *record_list);
 static void add_assoc(assoc_list_t *assoc_list, assoc_t assoc);
-static void assoc_viewer(const char *pattern, const char *viewer);
+static void assoc_viewers(matcher_t *matcher, const assoc_records_t *viewers);
+static assoc_records_t clone_assoc_records(const assoc_records_t *records);
 static void reset_all_list(void);
 static void add_defaults(int in_x);
 static void reset_list(assoc_list_t *assoc_list);
 static void reset_list_head(assoc_list_t *assoc_list);
+static void free_assoc_record(assoc_record_t *record);
 static void free_assoc(assoc_t *assoc);
 static void safe_free(char **adr);
+static int is_assoc_record_empty(const assoc_record_t *record);
 
 void
-config_filetypes(external_command_exists_t ece_func)
+ft_init(external_command_exists_t ece_func)
 {
 	external_command_exists_func = ece_func;
 }
 
-int
-get_default_program_for_file(const char *file, assoc_record_t *result)
+const char *
+ft_get_program(const char file[])
 {
-	int j;
-	assoc_records_t records;
-	assoc_record_t prog;
-
-	j = 0;
-	records = get_all_programs_for_file(file);
-	while(j < records.count)
-	{
-		char name_buf[NAME_MAX];
-		(void)extract_cmd_name(records.list[j].command, 0, sizeof(name_buf),
-				name_buf);
-		if(external_command_exists_func == NULL ||
-				external_command_exists_func(name_buf))
-			break;
-		j++;
-	}
-	if(j >= records.count)
-	{
-		free(records.list);
-		return 0;
-	}
-
-	prog = records.list[j];
-	result->command = strdup(prog.command);
-	result->description = strdup(prog.description);
-	free(records.list);
-
-	if(result->command == NULL || result->description == NULL)
-	{
-		free_assoc_record(result);
-		return 0;
-	}
-
-	return 1;
+	return find_existing_cmd(&active_filetypes, file);
 }
 
-char *
-get_viewer_for_file(const char file[])
+const char *
+ft_get_viewer(const char file[])
 {
-	int i = get_filetype_number(file, fileviewers);
-
-	if(i < 0)
-	{
-		return NULL;
-	}
-
-	return fileviewers.list[i].records.list[0].command;
+	return find_existing_cmd(&fileviewers, file);
 }
 
-static int
-get_filetype_number(const char *file, assoc_list_t assoc_list)
+/* Finds first existing command which pattern matches given file.  Returns the
+ * command (it's lifetime is managed by this unit) or NULL on failure. */
+static const char *
+find_existing_cmd(const assoc_list_t *record_list, const char file[])
 {
 	int i;
-	for(i = 0; i < assoc_list.count; i++)
+
+	for(i = 0; i < record_list->count; ++i)
 	{
-		if(global_matches(assoc_list.list[i].pattern, file))
-		{
-			return i;
-		}
-	}
-	return -1;
-}
+		assoc_record_t prog;
+		assoc_t *const assoc = &record_list->list[i];
 
-assoc_records_t
-get_all_programs_for_file(const char *file)
-{
-	int i;
-	assoc_records_t result = {};
-
-	for(i = 0; i < active_filetypes.count; i++)
-	{
-		assoc_records_t progs;
-		int j;
-
-		if(!global_matches(active_filetypes.list[i].pattern, file))
+		if(!matcher_matches(assoc->matcher, file))
 		{
 			continue;
 		}
 
-		progs = active_filetypes.list[i].records;
-		for(j = 0; j < progs.count; j++)
+		prog = find_existing_cmd_record(&assoc->records);
+		if(!is_assoc_record_empty(&prog))
 		{
-			assoc_record_t prog = progs.list[j];
-			add_assoc_record(&result, prog.command, prog.description);
+			return prog.command;
 		}
 	}
 
-	return result;
+	return NULL;
+}
+
+/* Finds record that corresponds to an external command that is available.
+ * Returns the record on success or an empty record on failure. */
+static assoc_record_t
+find_existing_cmd_record(const assoc_records_t *records)
+{
+	static assoc_record_t empty_record;
+
+	int i;
+	for(i = 0; i < records->count; ++i)
+	{
+		char cmd_name[NAME_MAX];
+		(void)extract_cmd_name(records->list[i].command, 0, sizeof(cmd_name),
+				cmd_name);
+
+		if(external_command_exists_func == NULL ||
+				external_command_exists_func(cmd_name))
+		{
+			return records->list[i];
+		}
+	}
+
+	return empty_record;
+}
+
+assoc_records_t
+ft_get_all_programs(const char file[])
+{
+	return clone_all_matching_records(file, &active_filetypes);
 }
 
 void
-set_programs(const char patterns[], const char programs[], int for_x, int in_x)
+ft_set_programs(matcher_t *matcher, const char programs[], int for_x, int in_x)
 {
-	char *exptr;
-	char *ex_copy = strdup(patterns);
-	char *free_this = ex_copy;
-	while((exptr = strchr(ex_copy, ',')) != NULL)
-	{
-		*exptr = '\0';
-
-		assoc_programs(ex_copy, programs, for_x, in_x);
-
-		ex_copy = exptr + 1;
-	}
-	assoc_programs(ex_copy, programs, for_x, in_x);
-	free(free_this);
+	assoc_records_t prog_records = parse_command_list(programs, 1);
+	assoc_programs(matcher, &prog_records, for_x, in_x);
+	ft_assoc_records_free(&prog_records);
 }
 
-/* Associates patter with list of comma separated programs either for X or non-X
+/* Associates pattern with the list of programs either for X or non-X
  * associations and depending on current execution environment. */
 static void
-assoc_programs(const char pattern[], const char programs[], int for_x, int in_x)
+assoc_programs(matcher_t *matcher, const assoc_records_t *programs, int for_x,
+		int in_x)
 {
-	assoc_t assoc;
-	char *prog;
-	char *free_this;
-
-	if(pattern[0] == '\0')
-	{
-		return;
-	}
-
-	assoc.pattern = strdup(pattern);
-	assoc.records.list = NULL;
-	assoc.records.count = 0;
-
-	prog = strdup(programs);
-	free_this = prog;
-
-	while(prog != NULL)
-	{
-		char *ptr;
-		const char *description = "";
-
-		if((ptr = strchr(prog, ',')) != NULL)
-		{
-			while(ptr != NULL && ptr[1] == ',')
-			{
-				ptr = strchr(ptr + 2, ',');
-			}
-			if(ptr != NULL)
-			{
-				*ptr = '\0';
-				ptr++;
-			}
-		}
-
-		while(isspace(*prog) || *prog == ',')
-		{
-			prog++;
-		}
-
-		if(*prog == '{')
-		{
-			char *p = strchr(prog + 1, '}');
-			if(p != NULL)
-			{
-				*p = '\0';
-				description = prog + 1;
-				prog = skip_whitespace(p + 1);
-			}
-		}
-
-		if(prog[0] != '\0')
-		{
-			replace_double_comma(prog, 0);
-			add_assoc_record(&assoc.records, prog, description);
-		}
-		prog = ptr;
-	}
-
-	free(free_this);
+	const assoc_t assoc = {
+		.matcher = matcher,
+		.records = clone_assoc_records(programs),
+	};
 
 	register_assoc(assoc, for_x, in_x);
 }
 
-TSTATIC void
-replace_double_comma(char cmd[], int put_null)
+/* Parses comma separated list of commands into array of associations.  Returns
+ * the list. */
+static assoc_records_t
+parse_command_list(const char cmds[], int with_descr)
 {
-	char *p = cmd;
-	while(*cmd != '\0')
+	assoc_records_t records = {};
+
+	char *free_this = strdup(cmds);
+
+	char *part = free_this, *state = NULL;
+	while((part = split_and_get_dc(part, &state)) != NULL)
 	{
-		if(cmd[0] == ',')
+		const char *description = "";
+
+		if(with_descr && *part == '{')
 		{
-			if(cmd[1] == ',')
+			char *p = strchr(part + 1, '}');
+			if(p != NULL)
 			{
-				*p++ = *cmd++;
-				cmd++;
-				continue;
-			}
-			else if(put_null)
-			{
-				break;
+				*p = '\0';
+				description = part + 1;
+				part = skip_whitespace(p + 1);
 			}
 		}
-		*p++ = *cmd++;
+
+		if(part[0] != '\0')
+		{
+			ft_assoc_record_add(&records, part, description);
+		}
 	}
-	*p = '\0';
+
+	free(free_this);
+
+	return records;
 }
 
 /* Registers association in appropriate associations list and possibly in list
@@ -282,62 +217,66 @@ register_assoc(assoc_t assoc, int for_x, int in_x)
 	}
 }
 
-void
-set_fileviewer(const char *patterns, const char *viewer)
+assoc_records_t
+ft_get_all_viewers(const char file[])
 {
-	char *exptr;
-	char *ex_copy = strdup(patterns);
-	char *free_this = ex_copy;
-	while((exptr = strchr(ex_copy, ',')) != NULL)
-	{
-		*exptr = '\0';
-
-		assoc_viewer(ex_copy, viewer);
-
-		ex_copy = exptr + 1;
-	}
-	assoc_viewer(ex_copy, viewer);
-	free(free_this);
+	return clone_all_matching_records(file, &fileviewers);
 }
 
-static void
-assoc_viewer(const char *pattern, const char *viewer)
+/* Clones all records which pattern matches the file.  Returns list of records
+ * composed of clones. */
+static assoc_records_t
+clone_all_matching_records(const char file[], const assoc_list_t *record_list)
 {
 	int i;
+	assoc_records_t result = {};
 
-	if(pattern[0] == '\0')
+	for(i = 0; i < record_list->count; ++i)
 	{
-		return;
-	}
-
-	for(i = 0; i < fileviewers.count; i++)
-	{
-		if(strcasecmp(fileviewers.list[i].pattern, pattern) == 0)
+		assoc_t *const assoc = &record_list->list[i];
+		if(matcher_matches(assoc->matcher, file))
 		{
-			break;
+			ft_assoc_record_add_all(&result, &assoc->records);
 		}
 	}
-	if(i == fileviewers.count)
-	{
-		assoc_t assoc =
-		{
-			.pattern = strdup(pattern),
-			.records.list = NULL,
-			.records.count = 0,
-		};
-		add_assoc_record(&assoc.records, viewer, "");
-		add_assoc(&fileviewers, assoc);
-	}
-	else
-	{
-		(void)replace_string(&fileviewers.list[i].records.list[0].command, viewer);
-	}
+
+	return result;
+}
+
+void
+ft_set_viewers(matcher_t *matcher, const char viewers[])
+{
+	assoc_records_t view_records = parse_command_list(viewers, 0);
+	assoc_viewers(matcher, &view_records);
+	ft_assoc_records_free(&view_records);
+}
+
+/* Associates pattern with the list of viewers. */
+static void
+assoc_viewers(matcher_t *matcher, const assoc_records_t *viewers)
+{
+	const assoc_t assoc = {
+		.matcher = matcher,
+		.records = clone_assoc_records(viewers),
+	};
+
+	add_assoc(&fileviewers, assoc);
+}
+
+/* Clones list of association records.  Returns the clone. */
+static assoc_records_t
+clone_assoc_records(const assoc_records_t *records)
+{
+	assoc_records_t list = {};
+	ft_assoc_record_add_all(&list, records);
+	return list;
 }
 
 static void
 add_assoc(assoc_list_t *assoc_list, assoc_t assoc)
 {
-	void *p = realloc(assoc_list->list, (assoc_list->count + 1)*sizeof(assoc_t));
+	void *p;
+	p = reallocarray(assoc_list->list, assoc_list->count + 1, sizeof(assoc_t));
 	if(p == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory");
@@ -350,7 +289,7 @@ add_assoc(assoc_list_t *assoc_list, assoc_t assoc)
 }
 
 void
-reset_all_file_associations(int in_x)
+ft_reset(int in_x)
 {
 	reset_all_list();
 	add_defaults(in_x);
@@ -370,8 +309,12 @@ reset_all_list(void)
 static void
 add_defaults(int in_x)
 {
+	char *error;
+	matcher_t *const m = matcher_alloc("{*/}", 0, 1, &error);
+	assert(m != NULL && "Failed to allocate builtin matcher!");
+
 	new_records_type = ART_BUILTIN;
-	set_programs("*/", "{Enter directory}" VIFM_PSEUDO_CMD, 0, in_x);
+	ft_set_programs(m, "{Enter directory}" VIFM_PSEUDO_CMD, 0, in_x);
 	new_records_type = ART_CUSTOM;
 }
 
@@ -397,12 +340,12 @@ reset_list_head(assoc_list_t *assoc_list)
 static void
 free_assoc(assoc_t *assoc)
 {
-	safe_free(&assoc->pattern);
-	free_assoc_records(&assoc->records);
+	matcher_free(assoc->matcher);
+	ft_assoc_records_free(&assoc->records);
 }
 
 void
-free_assoc_records(assoc_records_t *records)
+ft_assoc_records_free(assoc_records_t *records)
 {
 	int i;
 	for(i = 0; i < records->count; i++)
@@ -415,7 +358,8 @@ free_assoc_records(assoc_records_t *records)
 	records->count = 0;
 }
 
-void
+/* After this call the structure contains NULL values. */
+static void
 free_assoc_record(assoc_record_t *record)
 {
 	safe_free(&record->command);
@@ -423,10 +367,11 @@ free_assoc_record(assoc_record_t *record)
 }
 
 void
-add_assoc_record(assoc_records_t *records, const char *command,
+ft_assoc_record_add(assoc_records_t *records, const char *command,
 		const char *description)
 {
-	void *p = realloc(records->list, sizeof(assoc_record_t)*(records->count + 1));
+	void *p;
+	p = reallocarray(records->list, records->count + 1, sizeof(assoc_record_t));
 	if(p == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory");
@@ -441,7 +386,7 @@ add_assoc_record(assoc_records_t *records, const char *command,
 }
 
 void
-add_assoc_records(assoc_records_t *assocs, const assoc_records_t *src)
+ft_assoc_record_add_all(assoc_records_t *assocs, const assoc_records_t *src)
 {
 	int i;
 	void *p;
@@ -452,7 +397,8 @@ add_assoc_records(assoc_records_t *assocs, const assoc_records_t *src)
 		return;
 	}
 
-	p = realloc(assocs->list, sizeof(assoc_record_t)*(assocs->count + src_count));
+	p = reallocarray(assocs->list, assocs->count + src_count,
+			sizeof(assoc_record_t));
 	if(p == NULL)
 	{
 		show_error_msg("Memory Error", "Unable to allocate enough memory");
@@ -479,11 +425,12 @@ safe_free(char **adr)
 	*adr = NULL;
 }
 
-int
-assoc_prog_is_empty(const assoc_record_t *record)
+/* Returns non-zero for an empty assoc_record_t structure. */
+static int
+is_assoc_record_empty(const assoc_record_t *record)
 {
 	return record->command == NULL && record->description == NULL;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

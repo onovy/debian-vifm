@@ -24,13 +24,14 @@
 #include <assert.h>
 #include <string.h>
 
+#include "../../cfg/config.h"
 #include "../../engine/keys.h"
 #include "../../engine/mode.h"
+#include "../../ui/colors.h"
+#include "../../ui/ui.h"
 #include "../../utils/macros.h"
-#include "../../colors.h"
 #include "../../fileops.h"
 #include "../../status.h"
-#include "../../ui.h"
 #include "../modes.h"
 #include "attr_dialog.h"
 
@@ -93,7 +94,7 @@ enter_change_mode(FileView *active_view)
 	view = active_view;
 	vle_mode_set(CHANGE_MODE, VMT_SECONDARY);
 
-	wattroff(view->win, COLOR_PAIR(DCOLOR_BASE + CURR_LINE_COLOR) | A_BOLD);
+	wattroff(view->win, COLOR_PAIR(cfg.cs.pair[CURR_LINE_COLOR]) | A_BOLD);
 	curs_set(FALSE);
 	update_all_windows();
 
@@ -119,7 +120,7 @@ redraw_change_dialog(void)
 
 	getmaxyx(change_win, y, x);
 	werase(change_win);
-	box(change_win, ACS_VLINE, ACS_HLINE);
+	box(change_win, 0, 0);
 
 	mvwaddstr(change_win, 0, (x - 20)/2, " Change Current File ");
 	mvwaddstr(change_win, 2, 4, " [ ] Name");
@@ -252,4 +253,4 @@ clear_at_pos(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -36,13 +36,29 @@ void process_cancel_request(pid_t pid);
  * status of the process specified by its identifier. */
 int get_proc_exit_status(pid_t pid);
 
-void _gnuc_noreturn run_from_fork(int pipe[2], int err, char *cmd);
+/* If err_only then use stderr and close stdin and stdout, otherwise both stdout
+ * and stderr are redirected to the pipe. */
+void _gnuc_noreturn run_from_fork(int pipe[2], int err_only, char cmd[]);
+
+/* Extracts name of the shell to be used with execv*() function.  Returns
+ * pointer to statically allocated buffer. */
+char * get_execv_path(char shell[]);
+
+/* Creates array to be passed into one of execv*() functions.  To be used by
+ * forked process.  Returns newly allocated array with some strings allocated,
+ * some as is.  Memory management shouldn't matter at this point, we either
+ * successfully replace process image or terminate. */
+char ** make_execv_array(char shell[], char cmd[]);
 
 /* Converts the mode to string representation of permissions. */
 void get_perm_string(char buf[], int len, mode_t mode);
 
+/* Maps string with user id as a string or user name to integer id.  Returns
+ * zero on success and non-zero otherwise. */
 int get_uid(const char user[], uid_t *uid);
 
+/* Maps string with group id as a string or group name to integer id.  Returns
+ * zero on success and non-zero otherwise. */
 int get_gid(const char group[], gid_t *gid);
 
 int S_ISEXE(mode_t mode);
@@ -50,4 +66,4 @@ int S_ISEXE(mode_t mode);
 #endif /* VIFM__UTILS__UTILS_NIX_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

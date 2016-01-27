@@ -25,30 +25,38 @@
 
 #include <assert.h> /* assert() */
 #include <stddef.h> /* NULL wchar_t */
-#include <stdlib.h> /* free() malloc() */
+#include <stdio.h> /* pclose() popen() */
+#include <stdlib.h> /* free() */
 #include <string.h>
 
 #include "../cfg/config.h"
+#include "../compat/reallocarray.h"
 #include "../engine/cmds.h"
 #include "../engine/keys.h"
 #include "../engine/mode.h"
 #include "../menus/menus.h"
+#include "../modes/dialogs/msg_dialog.h"
+#include "../ui/fileview.h"
+#include "../ui/statusbar.h"
+#include "../ui/ui.h"
 #include "../utils/macros.h"
+#include "../utils/path.h"
+#include "../utils/regexp.h"
+#include "../utils/str.h"
 #include "../utils/utils.h"
-#include "../commands.h"
+#include "../cmd_core.h"
 #include "../filelist.h"
 #include "../status.h"
-#include "../ui.h"
 #include "cmdline.h"
 #include "modes.h"
 
 static const int SCROLL_GAP = 2;
 
-static int complete_args(int id, const char *args, int argc, char **argv,
-		int arg_pos, void *arg);
+static int complete_args(int id, const cmd_info_t *cmd_info, int arg_pos,
+		void *extra_arg);
 static int swap_range(void);
 static int resolve_mark(char mark);
-static char * menu_expand_macros(const char *str, int for_shell, int *usr1,
+static char * menu_expand_macros(const char str[], int for_shell, int *usr1,
 		int *usr2);
 static char * menu_expand_envvars(const char *str);
 static void post(int id);
@@ -67,17 +75,21 @@ static int can_scroll_menu_down(const menu_info *menu);
 static void change_menu_top(menu_info *const menu, int delta);
 static void cmd_ctrl_l(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info);
+static void update_ui_on_leaving(void);
 static void cmd_ctrl_u(key_info_t key_info, keys_info_t *keys_info);
 static int get_effective_menu_scroll_offset(const menu_info *menu);
 static void cmd_ctrl_y(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_slash(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_colon(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_question(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_B(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_G(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_H(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_L(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_M(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_N(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_b(key_info_t key_info, keys_info_t *keys_info);
+static void dump_into_custom_view(int very);
 static void cmd_dd(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_gf(key_info_t key_info, keys_info_t *keys_info);
 static int pass_combination_to_khandler(const wchar_t keys[]);
@@ -85,6 +97,7 @@ static void cmd_gg(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_j(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_k(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_n(key_info_t key_info, keys_info_t *keys_info);
+static void cmd_v(key_info_t key_info, keys_info_t *keys_info);
 static void search(int backward);
 static void cmd_zb(key_info_t key_info, keys_info_t *keys_info);
 static void cmd_zH(key_info_t key_info, keys_info_t *keys_info);
@@ -101,6 +114,7 @@ static int quit_cmd(const cmd_info_t *cmd_info);
 static int search_menu(menu_info *m, int start_pos);
 static int search_menu_forwards(menu_info *m, int start_pos);
 static int search_menu_backwards(menu_info *m, int start_pos);
+static int get_match_index(const menu_info *m);
 
 static FileView *view;
 static menu_info *menu;
@@ -127,6 +141,7 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"/", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_slash}}},
 	{L":", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_colon}}},
 	{L"?", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_question}}},
+	{L"B", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_B}}},
 	{L"G", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_G}}},
 	{L"H", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_H}}},
 	{L"L", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_L}}},
@@ -134,6 +149,7 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"N", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_N}}},
 	{L"ZZ", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_c}}},
 	{L"ZQ", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_c}}},
+	{L"b", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_b}}},
 	{L"dd", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_dd}}},
 	{L"gf", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_gf}}},
 	{L"gg", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_gg}}},
@@ -142,6 +158,7 @@ static keys_add_info_t builtin_cmds[] = {
 	{L"l", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_m}}},
 	{L"n", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_n}}},
 	{L"q", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_ctrl_c}}},
+	{L"v", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_v}}},
 	{L"zb", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_zb}}},
 	{L"zH", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_zH}}},
 	{L"zL", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_zL}}},
@@ -173,20 +190,20 @@ static const cmd_add_t commands[] = {
 		.handler = quit_cmd,        .qmark = 0,      .expand = 0, .cust_sep = 0,         .min_args = 0, .max_args = 0,       .select = 0, },
 };
 
+/* Settings for the cmds unit. */
 static cmds_conf_t cmds_conf = {
-	.complete_args = complete_args,
-	.swap_range = swap_range,
-	.resolve_mark = resolve_mark,
-	.expand_macros = menu_expand_macros,
-	.expand_envvars = menu_expand_envvars,
-	.post = post,
-	.select_range = menu_select_range,
-	.skip_at_beginning = skip_at_beginning,
+	.complete_args = &complete_args,
+	.swap_range = &swap_range,
+	.resolve_mark = &resolve_mark,
+	.expand_macros = &menu_expand_macros,
+	.expand_envvars = &menu_expand_envvars,
+	.post = &post,
+	.select_range = &menu_select_range,
+	.skip_at_beginning = &skip_at_beginning,
 };
 
 static int
-complete_args(int id, const char *args, int argc, char **argv, int arg_pos,
-		void *arg)
+complete_args(int id, const cmd_info_t *cmd_info, int arg_pos, void *extra_arg)
 {
 	return 0;
 }
@@ -203,8 +220,10 @@ resolve_mark(char mark)
 	return -1;
 }
 
+/* Implementation of macros expansion callback for cmds unit.  Returns newly
+ * allocated memory. */
 static char *
-menu_expand_macros(const char *str, int for_shell, int *usr1, int *usr2)
+menu_expand_macros(const char str[], int for_shell, int *usr1, int *usr2)
 {
 	return strdup(str);
 }
@@ -283,8 +302,8 @@ enter_menu_mode(menu_info *m, FileView *active_view)
 void
 menu_pre(void)
 {
-	touchwin(pos_win);
-	wrefresh(pos_win);
+	touchwin(ruler_win);
+	wrefresh(ruler_win);
 }
 
 void
@@ -292,8 +311,7 @@ menu_post(void)
 {
 	if(curr_stats.need_update != UT_NONE)
 	{
-		touchwin(menu_win);
-		wrefresh(menu_win);
+		menu_redraw();
 		curr_stats.need_update = UT_NONE;
 	}
 	status_bar_message(curr_stats.save_msg ? NULL : "");
@@ -304,14 +322,6 @@ menu_redraw(void)
 {
 	was_redraw = 1;
 	redraw_menu(menu);
-
-	if(curr_stats.errmsg_shown)
-	{
-		redraw_error_msg_window();
-		redrawwin(error_win);
-		wnoutrefresh(error_win);
-		doupdate();
-	}
 }
 
 static void
@@ -324,14 +334,7 @@ leave_menu_mode(void)
 
 	vle_mode_set(NORMAL_MODE, VMT_PRIMARY);
 
-	if(was_redraw)
-	{
-		update_screen(UT_FULL);
-	}
-	else
-	{
-		update_all_windows();
-	}
+	update_ui_on_leaving();
 }
 
 static void
@@ -426,10 +429,11 @@ get_last_visible_line(const menu_info *menu)
 	return menu->top + (menu->win_rows - 2) - 1;
 }
 
+/* Redraw TUI. */
 static void
 cmd_ctrl_l(key_info_t key_info, keys_info_t *keys_info)
 {
-	redraw_menu(menu);
+	menu_redraw();
 }
 
 static void
@@ -456,10 +460,21 @@ cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 		update_menu();
 	}
 
+	update_ui_on_leaving();
+}
+
+/* Updates UI on leaving the mode trying to minimize efforts to do this. */
+static void
+update_ui_on_leaving(void)
+{
 	if(was_redraw)
+	{
 		update_screen(UT_FULL);
+	}
 	else
+	{
 		update_all_windows();
+	}
 }
 
 static void
@@ -508,7 +523,7 @@ cmd_slash(key_info_t key_info, keys_info_t *keys_info)
 	menu->match_dir = NONE;
 	free(menu->regexp);
 	menu->regexp = NULL;
-	enter_cmdline_mode(MENU_SEARCH_FORWARD_SUBMODE, L"", menu);
+	enter_cmdline_mode(CLS_MENU_FSEARCH, L"", menu);
 }
 
 static void
@@ -517,7 +532,7 @@ cmd_colon(key_info_t key_info, keys_info_t *keys_info)
 	cmds_conf.begin = 1;
 	cmds_conf.current = menu->pos;
 	cmds_conf.end = menu->len;
-	enter_cmdline_mode(MENU_CMD_SUBMODE, L"", menu);
+	enter_cmdline_mode(CLS_MENU_COMMAND, L"", menu);
 }
 
 static void
@@ -527,7 +542,14 @@ cmd_question(key_info_t key_info, keys_info_t *keys_info)
 	last_search_backward = 1;
 	menu->match_dir = NONE;
 	free(menu->regexp);
-	enter_cmdline_mode(MENU_SEARCH_BACKWARD_SUBMODE, L"", menu);
+	enter_cmdline_mode(CLS_MENU_BSEARCH, L"", menu);
+}
+
+/* Populates very custom (unsorted) view with list of files. */
+static void
+cmd_B(key_info_t key_info, keys_info_t *keys_info)
+{
+	dump_into_custom_view(1);
 }
 
 static void
@@ -586,17 +608,18 @@ cmd_L(key_info_t key_info, keys_info_t *keys_info)
 	wrefresh(menu_win);
 }
 
+/* Moves cursor to the middle of the window. */
 static void
 cmd_M(key_info_t key_info, keys_info_t *keys_info)
 {
 	int new_pos;
 	if(menu->len < menu->win_rows)
-		new_pos = menu->len/2;
+		new_pos = DIV_ROUND_UP(menu->len, 2);
 	else
-		new_pos = menu->top + (menu->win_rows - 3)/2;
+		new_pos = menu->top + DIV_ROUND_UP(menu->win_rows - 3, 2);
 
 	clean_menu_position(menu);
-	move_to_menu_pos(new_pos, menu);
+	move_to_menu_pos(MAX(0, new_pos - 1), menu);
 	wrefresh(menu_win);
 }
 
@@ -609,12 +632,33 @@ cmd_N(key_info_t key_info, keys_info_t *keys_info)
 		search(!last_search_backward);
 }
 
+/* Populates custom view with list of files. */
+static void
+cmd_b(key_info_t key_info, keys_info_t *keys_info)
+{
+	dump_into_custom_view(0);
+}
+
+/* Makees custom view of specified type out of menu items. */
+static void
+dump_into_custom_view(int very)
+{
+	if(menu_to_custom_view(menu, view, very) != 0)
+	{
+		show_error_msg("Menu transformation",
+				"No valid paths discovered in menu content");
+		return;
+	}
+
+	leave_menu_mode();
+}
+
 static void
 cmd_dd(key_info_t key_info, keys_info_t *keys_info)
 {
 	if(pass_combination_to_khandler(L"dd") && menu->len == 0)
 	{
-		show_error_msg("No more items in the menu", "Menu will be closed");
+		show_error_msg("Menu is closing", "No more items in the menu");
 		leave_menu_mode();
 	}
 }
@@ -705,18 +749,82 @@ cmd_n(key_info_t key_info, keys_info_t *keys_info)
 		search(last_search_backward);
 }
 
+/* Handles current content of the menu to Vim as quickfix list. */
+static void
+cmd_v(key_info_t key_info, keys_info_t *keys_info)
+{
+	int bg;
+	const char *vi_cmd;
+	FILE *vim_stdin;
+	char *cmd;
+	int i;
+	int qf = 1;
+
+	/* If both first and last lines do not contain colons, treat lines as list of
+	 * file names. */
+	if(strchr(menu->items[0], ':') == NULL &&
+			strchr(menu->items[menu->len - 1], ':') == NULL)
+	{
+		qf = 0;
+	}
+
+	endwin();
+	curr_stats.need_update = UT_FULL;
+
+	vi_cmd = cfg_get_vicmd(&bg);
+	if(!qf)
+	{
+		char *const arg = shell_like_escape("+exe 'bd!|args' "
+				"join(map(getline('1','$'),'fnameescape(v:val)'))", 0);
+		cmd = format_str("%s %s +argument%d -", vi_cmd, arg, menu->pos + 1);
+		free(arg);
+	}
+	else if(menu->pos == 0)
+	{
+		/* For some reason +cc1 causes noisy messages on status line, so handle this
+		 * case separately. */
+		cmd = format_str("%s +cgetbuffer +bd! +cfirst -", vi_cmd);
+	}
+	else
+	{
+		cmd = format_str("%s +cgetbuffer +bd! +cfirst +cc%d -", vi_cmd,
+				menu->pos + 1);
+	}
+
+	vim_stdin = popen(cmd, "w");
+	free(cmd);
+
+	if(vim_stdin == NULL)
+	{
+		recover_after_shellout();
+		show_error_msg("Vim QuickFix", "Failed to send list of files to editor.");
+		return;
+	}
+
+	for(i = 0; i < menu->len; ++i)
+	{
+		fprintf(vim_stdin, "%s\n", menu->items[i]);
+	}
+
+	pclose(vim_stdin);
+	recover_after_shellout();
+}
+
 static void
 search(int backward)
 {
 	if(menu->regexp != NULL)
 	{
-		int was_msg;
 		menu->match_dir = backward ? UP : DOWN;
-		was_msg = search_menu_list(NULL, menu);
+		(void)search_menu_list(NULL, menu);
 		wrefresh(menu_win);
 
-		if(!was_msg)
-			status_bar_messagef("%c%s", backward ? '?' : '/', menu->regexp);
+		if(menu->matching_entries > 0)
+		{
+			status_bar_messagef("(%d of %d) %c%s", get_match_index(menu),
+					menu->matching_entries,
+					backward ? '?' : '/', menu->regexp);
+		}
 	}
 	else
 	{
@@ -868,21 +976,21 @@ search_menu_list(const char pattern[], menu_info *m)
 		draw_menu(m);
 	}
 
-	for(i = 0; i < search_repeat; i++)
+	for(i = 0; i < search_repeat; ++i)
+	{
 		switch(m->match_dir)
 		{
 			case NONE:
+			case DOWN:
 				save = search_menu_forwards(m, m->pos + 1);
 				break;
 			case UP:
 				save = search_menu_backwards(m, m->pos - 1);
 				break;
-			case DOWN:
-				save = search_menu_forwards(m, m->pos + 1);
-				break;
 			default:
 				break;
 		}
+	}
 	return save;
 }
 
@@ -895,7 +1003,9 @@ search_menu(menu_info *m, int start_pos)
 	int err;
 
 	if(m->matches == NULL)
-		m->matches = malloc(sizeof(int)*m->len);
+	{
+		m->matches = reallocarray(NULL, m->len, sizeof(int));
+	}
 
 	memset(m->matches, 0, sizeof(int)*m->len);
 	m->matching_entries = 0;
@@ -929,7 +1039,7 @@ search_menu(menu_info *m, int start_pos)
 static int
 search_menu_forwards(menu_info *m, int start_pos)
 {
-	/* FIXME: code duplicatio with search_menu_backwards. */
+	/* FIXME: code duplication with search_menu_backwards. */
 
 	int match_up = -1;
 	int match_down = -1;
@@ -1036,15 +1146,14 @@ search_menu_backwards(menu_info *m, int start_pos)
 		{
 			menu_print_search_msg(m);
 		}
-		return 1;
 	}
-	return 0;
+	return 1;
 }
 
 void
 execute_cmdline_command(const char cmd[])
 {
-	if(exec_command(cmd, curr_view, GET_COMMAND) < 0)
+	if(exec_command(cmd, curr_view, CIT_COMMAND) < 0)
 	{
 		status_bar_error("An error occurred while trying to execute command");
 	}
@@ -1079,7 +1188,7 @@ menu_print_search_msg(const menu_info *m)
 
 	if(m->matching_entries > 0)
 	{
-		status_bar_messagef("%d %s", m->matching_entries,
+		status_bar_messagef("%d of %d %s", get_match_index(m), m->matching_entries,
 				(m->matching_entries == 1) ? "match" : "matches");
 	}
 	else
@@ -1088,5 +1197,25 @@ menu_print_search_msg(const menu_info *m)
 	}
 }
 
+/* Calculates the index of the current match from the list of matches.  Returns
+ * the index. */
+static int
+get_match_index(const menu_info *m)
+{
+	int n, i;
+
+	n = (m->matches[0] ? 1 : 0);
+	i = 0;
+	while(i++ < m->pos)
+	{
+		if(m->matches[i])
+		{
+			++n;
+		}
+	}
+
+	return n;
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

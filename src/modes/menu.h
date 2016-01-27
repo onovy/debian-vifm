@@ -20,8 +20,8 @@
 #ifndef VIFM__MODES__MENU_H__
 #define VIFM__MODES__MENU_H__
 
+#include "../ui/ui.h"
 #include "../menus/menus.h"
-#include "../ui.h"
 
 /* Initiailizes menu mode. */
 void init_menu_mode(void);
@@ -30,8 +30,10 @@ void enter_menu_mode(menu_info *m, FileView *active_view);
 
 void menu_pre(void);
 
+/* Performs post-actions (at the end of input processing loop) for menus. */
 void menu_post(void);
 
+/* Redraws menu. */
 void menu_redraw(void);
 
 /* Redraws and refreshes menu window. */
@@ -41,8 +43,8 @@ void save_menu_pos(void);
 
 void load_menu_pos(void);
 
-/* Performs search of pattern among menu items.  Returns new value for save_msg
- * flag. */
+/* Performs search of pattern among menu items.  NULL pattern requests use of
+ * results of the last used pattern.  Returns new value for save_msg flag. */
 int search_menu_list(const char pattern[], menu_info *m);
 
 /* Allows running regular command-line mode commands from menu mode. */
@@ -59,4 +61,4 @@ void menu_print_search_msg(const menu_info *m);
 #endif /* VIFM__MODES__MENU_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

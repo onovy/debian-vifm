@@ -19,315 +19,134 @@
 
 #ifdef _WIN32
 #define _WIN32_WINNT 0x0500
-#include <tchar.h>
 #include <windows.h>
 #endif
 
+#include "vifm.h"
+
 #include <curses.h>
 
-#include <unistd.h> /* getcwd, stat, sysconf */
+#include <unistd.h>
 
 #include <errno.h> /* errno */
 #include <locale.h> /* setlocale */
-#include <stddef.h> /* NULL */
-#include <stdio.h> /* FILE fclose() fopen() fprintf() fputs() puts()
-                      snprintf() */
-#include <stdlib.h> /* EXIT_SUCCESS exit() system() */
+#include <stddef.h> /* NULL size_t */
+#include <stdio.h> /* fprintf() fputs() puts() snprintf() */
+#include <stdlib.h> /* EXIT_FAILURE EXIT_SUCCESS exit() system() */
 #include <string.h>
 
 #include "cfg/config.h"
 #include "cfg/info.h"
+#include "engine/autocmds.h"
+#include "compat/fs_limits.h"
 #include "engine/cmds.h"
 #include "engine/keys.h"
 #include "engine/mode.h"
 #include "engine/options.h"
 #include "engine/variables.h"
-#include "menus/menus.h"
+#include "int/fuse.h"
+#include "int/path_env.h"
+#include "int/term_title.h"
+#include "int/vim.h"
+#include "modes/dialogs/msg_dialog.h"
 #include "modes/modes.h"
 #include "modes/view.h"
+#include "ui/cancellation.h"
+#include "ui/color_manager.h"
+#include "ui/color_scheme.h"
+#include "ui/quickview.h"
+#include "ui/statusbar.h"
+#include "ui/ui.h"
 #include "utils/fs.h"
-#include "utils/fs_limits.h"
 #include "utils/log.h"
 #include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "utils/string_array.h"
 #include "utils/utils.h"
+#include "args.h"
 #include "background.h"
-#include "bookmarks.h"
+#include "bmarks.h"
 #include "bracket_notation.h"
 #include "builtin_functions.h"
-#include "color_manager.h"
-#include "color_scheme.h"
-#include "commands.h"
-#include "commands_completion.h"
+#include "cmd_completion.h"
+#include "cmd_core.h"
 #include "dir_stack.h"
+#include "event_loop.h"
 #include "filelist.h"
 #include "fileops.h"
 #include "filetype.h"
-#include "fuse.h"
 #include "ipc.h"
-#include "main_loop.h"
+#include "marks.h"
 #include "ops.h"
 #include "opt_handlers.h"
-#include "path_env.h"
-#include "quickview.h"
 #include "registers.h"
 #include "running.h"
 #include "signals.h"
 #include "status.h"
-#include "term_title.h"
 #include "trash.h"
-#include "ui.h"
 #include "undo.h"
-#include "version.h"
 
-#ifndef _WIN32
-#define CONF_DIR "~/.vifm"
-#else
-#define CONF_DIR "(%HOME%/.vifm or %APPDATA%/Vifm)"
-#endif
-
-static void quit_on_arg_parsing(void);
+static int pair_in_use(short int pair);
+static void move_pair(short int from, short int to);
 static int undo_perform_func(OPS op, void *data, const char src[],
 		const char dst[]);
-static void parse_recieved_arguments(char *args[]);
+static void parse_received_arguments(char *args[]);
 static void remote_cd(FileView *view, const char *path, int handle);
+static void check_path_for_file(FileView *view, const char path[], int handle);
 static int need_to_switch_active_pane(const char lwin_path[],
 		const char rwin_path[]);
 static void load_scheme(void);
-static void convert_configs(void);
-static int run_converter(int vifm_like_mode);
-static void dump_filenames(const FileView *view, FILE *fp, int nfiles,
-		char *files[]);
+static void exec_startup_commands(const args_t *args);
+static void _gnuc_noreturn vifm_leave(int exit_code, int cquit);
 
-static void
-show_version_msg(void)
-{
-	int i, len;
-	char **list;
-	list = malloc(sizeof(char*)*fill_version_info(NULL));
-
-	len = fill_version_info(list);
-	for(i = 0; i < len; i++)
-	{
-		puts(list[i]);
-	}
-
-	free_string_array(list, len);
-}
-
-static void
-show_help_msg(void)
-{
-	puts("vifm usage:\n");
-	puts("  To start in a specific directory give the directory path.\n");
-	puts("    vifm /path/to/start/dir/one");
-	puts("    or");
-	puts("    vifm /path/to/start/dir/one  /path/to/start/dir/two\n");
-	puts("  To open file using associated program pass to vifm it's path.\n");
-	puts("  To select file prepend its path with --select.\n");
-	puts("  If no path is given vifm will start in the current working directory.\n");
-	puts("  vifm --logging");
-	puts("    log some errors to " CONF_DIR "/log.\n");
-#ifdef ENABLE_REMOTE_CMDS
-	puts("  vifm --remote");
-	puts("    passes all arguments that left in command line to active vifm server.\n");
-#endif
-	puts("  vifm -c <command> | +<command>");
-	puts("    run <command> on startup.\n");
-	puts("  vifm --version | -v");
-	puts("    show version number and quit.\n");
-	puts("  vifm --help | -h");
-	puts("    show this help message and quit.\n");
-	puts("  vifm --no-configs");
-	puts("    don't read vifmrc and vifminfo.");
-}
-
-/* buf should be at least PATH_MAX characters length */
-static void
-parse_path(const char *dir, const char *path, char *buf)
-{
-	strcpy(buf, path);
-#ifdef _WIN32
-	to_forward_slash(buf);
-#endif
-	if(is_path_absolute(buf))
-	{
-		snprintf(buf, PATH_MAX, "%s", path);
-	}
-#ifdef _WIN32
-	else if(buf[0] == '/')
-	{
-		snprintf(buf, PATH_MAX, "%c:%s", dir[0], path);
-	}
-#endif
-	else
-	{
-		char new_path[PATH_MAX];
-		snprintf(new_path, sizeof(new_path), "%s/%s", dir, path);
-		canonicalize_path(new_path, buf, PATH_MAX);
-	}
-	if(!is_root_dir(buf))
-		chosp(buf);
-
-#ifdef _WIN32
-	to_forward_slash(buf);
-#endif
-}
-
-static void
-parse_args(int argc, char *argv[], const char *dir, char *lwin_path,
-		char *rwin_path, int *lwin_handle, int *rwin_handle)
-{
-	int x;
-	int select = 0;
-
-	(void)vifm_chdir(dir);
-
-	/* Get Command Line Arguments */
-	for(x = 1; x < argc; x++)
-	{
-		if(!strcmp(argv[x], "--select"))
-		{
-			select = 1;
-		}
-#ifdef ENABLE_REMOTE_CMDS
-		else if(!strcmp(argv[x], "--remote"))
-		{
-			if(!ipc_server())
-			{
-				ipc_send(argv + x + 1);
-				quit_on_arg_parsing();
-			}
-		}
-#endif
-		else if(!strcmp(argv[x], "-f"))
-		{
-			curr_stats.file_picker_mode = 1;
-		}
-		else if(!strcmp(argv[x], "--no-configs"))
-		{
-			/* Do nothing. */
-		}
-		else if(!strcmp(argv[x], "--version") || !strcmp(argv[x], "-v"))
-		{
-			show_version_msg();
-			quit_on_arg_parsing();
-		}
-		else if(!strcmp(argv[x], "--help") || !strcmp(argv[x], "-h"))
-		{
-			show_help_msg();
-			quit_on_arg_parsing();
-		}
-		else if(!strcmp(argv[x], "--logging"))
-		{
-			/* do nothing, it's handeled in main() */
-		}
-		else if(!strcmp(argv[x], "-c"))
-		{
-			if(x == argc - 1)
-			{
-				puts("Argument missing after \"-c\"");
-				quit_on_arg_parsing();
-			}
-			/* do nothing, it's handeled in exec_startup_commands() */
-			x++;
-		}
-		else if(argv[x][0] == '+')
-		{
-			/* do nothing, it's handeled in exec_startup_commands() */
-		}
-		else if(path_exists(argv[x]) || is_path_absolute(argv[x]) ||
-				is_root_dir(argv[x]))
-		{
-			if(lwin_path[0] != '\0')
-			{
-				parse_path(dir, argv[x], rwin_path);
-				*rwin_handle = !select;
-			}
-			else
-			{
-				parse_path(dir, argv[x], lwin_path);
-				*lwin_handle = !select;
-			}
-			select = 0;
-		}
-		else if(curr_stats.load_stage == 0)
-		{
-			show_help_msg();
-			quit_on_arg_parsing();
-		}
-#ifdef ENABLE_REMOTE_CMDS
-		else
-		{
-			show_error_msgf("--remote error", "Invalid argument: %s", argv[x]);
-		}
-#endif
-	}
-}
-
-/* Quits during argument parsing when it's allowed (e.g. not for remote
- * commands). */
-static void
-quit_on_arg_parsing(void)
-{
-	if(curr_stats.load_stage == 0)
-	{
-		exit(1);
-	}
-}
-
-static void
-check_path_for_file(FileView *view, const char *path, int handle)
-{
-	if(path[0] != '\0' && !is_dir(path))
-	{
-		const char *slash = strrchr(path, '/');
-		if(slash == NULL)
-			slash = path - 1;
-		load_dir_list(view, !(cfg.vifm_info&VIFMINFO_SAVEDIRS));
-		if(ensure_file_is_selected(view, slash + 1))
-		{
-			if(handle)
-				handle_file(view, 0, 0);
-		}
-	}
-}
+/* Command-line arguments in parsed form. */
+static args_t vifm_args;
 
 int
 main(int argc, char *argv[])
 {
 	/* TODO: refactor main() function */
 
+	static const int quit = 0;
+
 	char dir[PATH_MAX];
-	char lwin_path[PATH_MAX] = "";
-	char rwin_path[PATH_MAX] = "";
-	int lwin_handle = 0, rwin_handle = 0;
-	int old_config;
-	int no_configs;
+	char **files = NULL;
+	int nfiles = 0;
 
-	init_config();
-
-	if(is_in_string_array(argv + 1, argc - 1, "--logging"))
-	{
-		init_logger(1);
-	}
-
-	(void)setlocale(LC_ALL, "");
-	if(getcwd(dir, sizeof(dir)) == NULL)
+	if(get_cwd(dir, sizeof(dir)) == NULL)
 	{
 		perror("getcwd");
 		return -1;
 	}
-#ifdef _WIN32
-	to_forward_slash(dir);
-#endif
+
+	(void)vifm_chdir(dir);
+	args_parse(&vifm_args, argc, argv, dir);
+	args_process(&vifm_args, 1);
+
+	if(strcmp(vifm_args.lwin_path, "-") == 0 ||
+			strcmp(vifm_args.rwin_path, "-") == 0)
+	{
+		files = read_stream_lines(stdin, &nfiles);
+		if(reopen_term_stdin() != 0)
+		{
+			return EXIT_FAILURE;
+		}
+	}
+
+	(void)setlocale(LC_ALL, "");
+
+	cfg_init();
+
+	if(vifm_args.logging)
+	{
+		init_logger(1, vifm_args.startup_log_path);
+	}
 
 	init_filelists();
 	init_registers();
-	set_config_paths();
-	reinit_logger();
+	cfg_discover_paths();
+	reinit_logger(cfg.log_file);
 
 	/* Commands module also initializes bracket notation and variables. */
 	init_commands();
@@ -341,34 +160,32 @@ main(int argc, char *argv[])
 		return -1;
 	}
 
-	no_configs = is_in_string_array(argv + 1, argc - 1, "--no-configs");
-
 	/* Tell file type module what function to use to check availability of
 	 * external programs. */
-	config_filetypes(&external_command_exists);
+	ft_init(&external_command_exists);
 	/* This should be called before loading any configuration file. */
-	reset_all_file_associations(curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
+	ft_reset(curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
 
 	init_option_handlers();
 
-	old_config = is_old_config();
-	if(!old_config && !no_configs)
+	if(!vifm_args.no_configs)
+	{
+		/* vifminfo must be processed this early so that it can restore last visited
+		 * directory. */
 		read_info_file(0);
+	}
 
-	ipc_pre_init();
-
-	parse_args(argc, argv, dir, lwin_path, rwin_path, &lwin_handle, &rwin_handle);
-
-	ipc_init(&parse_recieved_arguments);
+	ipc_init(vifm_args.server_name, &parse_received_arguments);
+	args_process(&vifm_args, 0);
 
 	init_background();
 
 	init_fileops();
 
-	set_view_path(&lwin, lwin_path);
-	set_view_path(&rwin, rwin_path);
+	set_view_path(&lwin, vifm_args.lwin_path);
+	set_view_path(&rwin, vifm_args.rwin_path);
 
-	if(need_to_switch_active_pane(lwin_path, rwin_path))
+	if(need_to_switch_active_pane(vifm_args.lwin_path, vifm_args.rwin_path))
 	{
 		swap_view_roles();
 	}
@@ -377,59 +194,72 @@ main(int argc, char *argv[])
 	load_initial_directory(&rwin, dir);
 
 	/* Force split view when two paths are specified on command-line. */
-	if(lwin_path[0] != '\0' && rwin_path[0] != '\0')
+	if(vifm_args.lwin_path[0] != '\0' && vifm_args.rwin_path[0] != '\0')
 	{
 		curr_stats.number_of_windows = 2;
 	}
 
-	/* Setup the ncurses interface. */
-	if(!setup_ncurses_interface())
+	/* Prepare terminal for further operations. */
+	curr_stats.original_stdout = reopen_term_stdout();
+	if(curr_stats.original_stdout == NULL)
+	{
 		return -1;
+	}
 
-	colmgr_init(COLOR_PAIRS);
+	if(!setup_ncurses_interface())
+	{
+		return -1;
+	}
+
+	{
+		const colmgr_conf_t colmgr_conf = {
+			.max_color_pairs = COLOR_PAIRS,
+			.max_colors = COLORS,
+			.init_pair = &init_pair,
+			.pair_content = &pair_content,
+			.pair_in_use = &pair_in_use,
+			.move_pair = &move_pair,
+		};
+		colmgr_init(&colmgr_conf);
+	}
+
 	init_modes();
 	init_undo_list(&undo_perform_func, NULL, &ui_cancellation_requested,
 			&cfg.undo_levels);
-	load_local_options(curr_view);
+	load_view_options(curr_view);
 
 	curr_stats.load_stage = 1;
 
-	if(!old_config && !no_configs)
+	if(!vifm_args.no_configs)
 	{
 		load_scheme();
-		source_config();
+		cfg_load();
+
+		if(strcmp(vifm_args.lwin_path, "-") == 0)
+		{
+			flist_set(&lwin, "-", dir, files, nfiles);
+		}
+		else if(strcmp(vifm_args.rwin_path, "-") == 0)
+		{
+			flist_set(&rwin, "-", dir, files, nfiles);
+		}
 	}
+	/* Load colors in any case to load color pairs. */
+	load_color_scheme_colors();
 
 	write_color_scheme_file();
 	setup_signals();
-
-	if(old_config && !no_configs)
-	{
-		convert_configs();
-
-		curr_stats.load_stage = 0;
-		read_info_file(0);
-		curr_stats.load_stage = 1;
-
-		set_view_path(&lwin, lwin_path);
-		set_view_path(&rwin, rwin_path);
-
-		load_initial_directory(&lwin, dir);
-		load_initial_directory(&rwin, dir);
-
-		source_config();
-	}
 
 	/* Ensure trash directories exist, it might not have been called during
 	 * configuration file sourcing if there is no `set trashdir=...` command. */
 	(void)set_trash_dir(cfg.trash_dir);
 
-	check_path_for_file(&lwin, lwin_path, lwin_handle);
-	check_path_for_file(&rwin, rwin_path, rwin_handle);
+	check_path_for_file(&lwin, vifm_args.lwin_path, vifm_args.lwin_handle);
+	check_path_for_file(&rwin, vifm_args.rwin_path, vifm_args.rwin_handle);
 
 	curr_stats.load_stage = 2;
 
-	exec_startup_commands(argc, argv);
+	exec_startup_commands(&vifm_args);
 	update_screen(UT_FULL);
 	modes_update();
 
@@ -443,9 +273,54 @@ main(int argc, char *argv[])
 
 	curr_stats.load_stage = 3;
 
-	main_loop();
+	/* Trigger auto-commands for initial directories. */
+	vle_aucmd_execute("DirEnter", lwin.curr_dir, &lwin);
+	vle_aucmd_execute("DirEnter", rwin.curr_dir, &rwin);
+
+	event_loop(&quit);
 
 	return 0;
+}
+
+/* Checks whether pair is being used at the moment.  Returns non-zero if so and
+ * zero otherwise. */
+static int
+pair_in_use(short int pair)
+{
+	int i;
+
+	for(i = 0; i < MAXNUM_COLOR; ++i)
+	{
+		if(cfg.cs.pair[i] == pair || lwin.cs.pair[i] == pair ||
+				rwin.cs.pair[i] == pair)
+		{
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/* Substitutes old pair number with the new one. */
+static void
+move_pair(short int from, short int to)
+{
+	int i;
+	for(i = 0; i < MAXNUM_COLOR; ++i)
+	{
+		if(cfg.cs.pair[i] == from)
+		{
+			cfg.cs.pair[i] = to;
+		}
+		if(lwin.cs.pair[i] == from)
+		{
+			lwin.cs.pair[i] = to;
+		}
+		if(rwin.cs.pair[i] == from)
+		{
+			rwin.cs.pair[i] = to;
+		}
+	}
 }
 
 /* perform_operation() interface adaptor for the undo unit. */
@@ -455,22 +330,24 @@ undo_perform_func(OPS op, void *data, const char src[], const char dst[])
 	return perform_operation(op, NULL, data, src, dst);
 }
 
+/* Handles arguments received from remote instance. */
 static void
-parse_recieved_arguments(char *args[])
+parse_received_arguments(char *argv[])
 {
-	char lwin_path[PATH_MAX] = "";
-	char rwin_path[PATH_MAX] = "";
-	int lwin_handle = 0, rwin_handle = 0;
 	int argc = 0;
+	args_t args = {};
 
-	while(args[argc] != NULL)
+	while(argv[argc] != NULL)
 	{
 		argc++;
 	}
 
-	parse_args(argc, args, args[0], lwin_path, rwin_path, &lwin_handle,
-			&rwin_handle);
-	exec_startup_commands(argc, args);
+	(void)vifm_chdir(argv[0]);
+	args_parse(&args, argc, argv, argv[0]);
+	args_process(&args, 0);
+
+	exec_startup_commands(&args);
+	args_free(&args);
 
 	if(NONE(vle_mode_is, NORMAL_MODE, VIEW_MODE))
 	{
@@ -483,17 +360,17 @@ parse_recieved_arguments(char *args[])
 	SetForegroundWindow(GetConsoleWindow());
 #endif
 
-	if(view_needs_cd(&lwin, lwin_path))
+	if(view_needs_cd(&lwin, args.lwin_path))
 	{
-		remote_cd(&lwin, lwin_path, lwin_handle);
+		remote_cd(&lwin, args.lwin_path, args.lwin_handle);
 	}
 
-	if(view_needs_cd(&rwin, rwin_path))
+	if(view_needs_cd(&rwin, args.rwin_path))
 	{
-		remote_cd(&rwin, rwin_path, rwin_handle);
+		remote_cd(&rwin, args.rwin_path, args.rwin_handle);
 	}
 
-	if(need_to_switch_active_pane(lwin_path, rwin_path))
+	if(need_to_switch_active_pane(args.lwin_path, args.rwin_path))
 	{
 		change_window();
 	}
@@ -522,11 +399,31 @@ remote_cd(FileView *view, const char *path, int handle)
 		toggle_quick_view();
 	}
 
-	snprintf(buf, sizeof(buf), "%s", path);
+	copy_str(buf, sizeof(buf), path);
 	exclude_file_name(buf);
 
 	(void)cd(view, view->curr_dir, buf);
 	check_path_for_file(view, path, handle);
+}
+
+/* Navigates to/opens (handles) file specified by the path (and file only, no
+ * directories). */
+static void
+check_path_for_file(FileView *view, const char path[], int handle)
+{
+	if(path[0] == '\0' || is_dir(path) || strcmp(path, "-") == 0)
+	{
+		return;
+	}
+
+	load_dir_list(view, !(cfg.vifm_info&VIFMINFO_SAVEDIRS));
+	if(ensure_file_is_selected(view, after_last(path, '/')))
+	{
+		if(handle)
+		{
+			open_file(view, FHE_RUN);
+		}
+	}
 }
 
 /* Decides whether active view should be switched based on paths provided for
@@ -541,110 +438,19 @@ need_to_switch_active_pane(const char lwin_path[], const char rwin_path[])
 	    && curr_view != &lwin;
 }
 
-/* Loads color scheme.  Converts old format to the new one if needed.
- * Terminates application with error message on error. */
+/* Loads color scheme.  Converts old format to the new one if needed. */
 static void
 load_scheme(void)
 {
-	if(are_old_color_schemes())
+	if(cs_have_no_extensions())
 	{
-		const int err = run_converter(2);
-		if(err != 0)
-		{
-			endwin();
-			fputs("Problems with running vifmrc-converter\n", stderr);
-			exit(err);
-		}
+		cs_rename_all();
 	}
+
 	if(color_scheme_exists(curr_stats.color_scheme))
 	{
 		load_primary_color_scheme(curr_stats.color_scheme);
 	}
-	load_color_scheme_colors();
-}
-
-/* Converts old versions of configuration files to new ones.  Terminates
- * application with error message on error or when user chooses to do not update
- * anything. */
-static void
-convert_configs(void)
-{
-	int vifm_like_mode;
-	int err;
-
-	if(!query_user_menu("Configuration update", "Your vifmrc will be "
-			"upgraded to a new format.  Your current configuration will be copied "
-			"before performing any changes, but if you don't want to take the risk "
-			"and would like to make one more copy say No to exit vifm.  Continue?"))
-	{
-#ifdef _WIN32
-		system("cls");
-#endif
-		endwin();
-		exit(0);
-	}
-
-	vifm_like_mode = !query_user_menu("Configuration update", "This version of "
-			"vifm is able to save changes in the configuration files automatically "
-			"when quitting, as it was possible in older versions.  It is from now "
-			"on recommended though, to save permanent changes manually in the "
-			"configuration file as it is done in vi/vim.  Do you want vifm to "
-			"behave like vi/vim?");
-
-	err = run_converter(vifm_like_mode);
-	if(err != 0)
-	{
-		endwin();
-		fputs("Problems with running vifmrc-converter\n", stderr);
-		exit(err);
-	}
-
-	show_error_msg("Configuration update", "Your vifmrc has been upgraded to "
-			"new format, you can find its old version in " CONF_DIR "/vifmrc.bak.  "
-			"vifm will not write anything to vifmrc, and all variables that are "
-			"saved between runs of vifm are stored in " CONF_DIR "/vifminfo now "
-			"(you can edit it by hand, but do it carefully).  You can control what "
-			"vifm stores in vifminfo with 'vifminfo' option.");
-}
-
-/* Runs vifmrc-converter in mode specified by the vifm_like_mode argument.
- * Returns zero on success, non-zero otherwise. */
-static int
-run_converter(int vifm_like_mode)
-{
-#ifndef _WIN32
-	char cmd[PATH_MAX];
-	snprintf(cmd, sizeof(cmd), "vifmrc-converter %d", vifm_like_mode);
-	return shellout(cmd, -1, 0);
-#else
-	char cmd[2*PATH_MAX];
-	int returned_exit_code;
-	char *name_part;
-
-	if(GetModuleFileName(NULL, cmd, PATH_MAX) == 0)
-	{
-		return -1;
-	}
-
-	/* Override last path component. */
-	name_part = strrchr(cmd, '\\');
-	name_part = (name_part == NULL) ? cmd : (name_part + 1);
-	switch(vifm_like_mode)
-	{
-		case 2:
-			strcpy(name_part, "vifmrc-converter 2");
-			break;
-		case 1:
-			strcpy(name_part, "vifmrc-converter 1");
-			break;
-
-		default:
-			strcpy(name_part, "vifmrc-converter 0");
-			break;
-	}
-
-	return win_exec_cmd(cmd, &returned_exit_code);
-#endif
 }
 
 void
@@ -659,6 +465,9 @@ vifm_restart(void)
 
 	/* User defined commands. */
 	execute_cmd("comclear");
+
+	/* Autocommands. */
+	vle_aucmd_remove(NULL, NULL);
 
 	/* Directory histories. */
 	ui_view_clear_history(&lwin);
@@ -680,12 +489,12 @@ vifm_restart(void)
 	/* Options of other pane. */
 	tmp_view = curr_view;
 	curr_view = other_view;
-	load_local_options(other_view);
+	load_view_options(other_view);
 	reset_options_to_default();
 	curr_view = tmp_view;
 
 	/* File types and viewers. */
-	reset_all_file_associations(curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
+	ft_reset(curr_stats.exec_env_type == EET_EMULATOR_WITH_X);
 
 	/* Undo list. */
 	reset_undo_list();
@@ -696,8 +505,9 @@ vifm_restart(void)
 	/* Registers. */
 	clear_registers();
 
-	/* Clear all bookmarks. */
-	clear_all_bookmarks();
+	/* Clear all marks and bookmarks. */
+	clear_all_marks();
+	bmarks_clear();
 
 	/* Reset variables. */
 	clear_variables();
@@ -725,132 +535,121 @@ vifm_restart(void)
 	}
 	load_color_scheme_colors();
 
-	source_config();
-	exec_startup_commands(0, NULL);
+	cfg_load();
+	exec_startup_commands(&vifm_args);
 
 	curr_stats.restart_in_progress = 0;
+
+	/* Trigger auto-commands for initial directories. */
+	vle_aucmd_execute("DirEnter", lwin.curr_dir, &lwin);
+	vle_aucmd_execute("DirEnter", rwin.curr_dir, &rwin);
 
 	update_screen(UT_REDRAW);
 }
 
+/* Executes list of startup commands. */
+static void
+exec_startup_commands(const args_t *args)
+{
+	size_t i;
+	for(i = 0; i < args->ncmds; ++i)
+	{
+		(void)exec_commands(args->cmds[i], curr_view, CIT_COMMAND);
+	}
+}
+
 void
-vifm_try_leave(int write_info, int force)
+vifm_try_leave(int write_info, int cquit, int force)
 {
 	if(!force && bg_has_active_jobs())
 	{
-		if(!query_user_menu("Warning", "Some of backgrounded commands are still "
+		if(!prompt_msg("Warning", "Some of backgrounded commands are still "
 					"working.  Quit?"))
 		{
 			return;
 		}
 	}
 
-	unmount_fuse();
+	fuse_unmount_all();
 
 	if(write_info)
 	{
 		write_info_file();
 	}
 
-	if(curr_stats.file_picker_mode)
+	if(stats_file_choose_action_set())
 	{
-		char buf[PATH_MAX];
-		FILE *fp;
-
-		snprintf(buf, sizeof(buf), "%s/vimfiles", cfg.config_dir);
-		fp = fopen(buf, "w");
-		if(fp != NULL)
-		{
-			fclose(fp);
-		}
-		else
-		{
-			LOG_SERROR_MSG(errno, "Can't truncate file: \"%s\"", buf);
-		}
+		vim_write_empty_file_list();
 	}
 
 #ifdef _WIN32
 	system("cls");
 #endif
 
-	set_term_title(NULL);
 	endwin();
-	exit(0);
+	vifm_leave(EXIT_SUCCESS, cquit);
 }
 
 void _gnuc_noreturn
-vifm_return_file_list(const FileView *view, int nfiles, char *files[])
+vifm_choose_files(const FileView *view, int nfiles, char *files[])
 {
-	FILE *fp;
-	char filepath[PATH_MAX];
-	int exit_code = EXIT_SUCCESS;
+	int exit_code;
 
-	snprintf(filepath, sizeof(filepath), "%s/vimfiles", cfg.config_dir);
-	fp = fopen(filepath, "w");
-	if(fp != NULL)
+	/* As curses can do something with terminal on shutting down, disable it
+	 * before writing anything to the screen. */
+	endwin();
+
+	exit_code = EXIT_SUCCESS;
+	if(vim_write_file_list(view, nfiles, files) != 0)
 	{
-		dump_filenames(view, fp, nfiles, files);
-		fclose(fp);
+		exit_code = EXIT_FAILURE;
 	}
-	else
+	/* XXX: this ignores nfiles+files. */
+	if(vim_run_choose_cmd(view) != 0)
 	{
-		LOG_SERROR_MSG(errno, "Can't open file for writing: \"%s\"", filepath);
 		exit_code = EXIT_FAILURE;
 	}
 
 	write_info_file();
 
-	endwin();
+	vifm_leave(exit_code, 0);
+}
+
+/* Single exit point for leaving vifm, performs only minimum common
+ * deinitialization steps. */
+static void _gnuc_noreturn
+vifm_leave(int exit_code, int cquit)
+{
+	vim_write_dir(cquit ? "" : flist_get_dir(curr_view));
+
+	if(cquit && exit_code == EXIT_SUCCESS)
+	{
+		exit_code = EXIT_FAILURE;
+	}
+
+	term_title_update(NULL);
 	exit(exit_code);
 }
 
-/* Writes list of full paths to files into the file pointed to by fp.  files and
- * nfiles parameters can be used to supply list of file names in the currecnt
- * directory of the view.  Otherwise current selection is used if current files
- * is selected, if current file is not selected it's the only one that is
- * stored. */
-static void
-dump_filenames(const FileView *view, FILE *fp, int nfiles, char *files[])
+void _gnuc_noreturn
+vifm_finish(const char message[])
 {
-	if(nfiles == 0)
+	endwin();
+
+	/* Update vifminfo only if we were able to startup, otherwise we can end up
+	 * writing from some intermediate half-initialized state.  One particular
+	 * case: after vifminfo read, but before configuration is processed, as a
+	 * result we write very little information to vifminfo file according to
+	 * default value of 'vifminfo' option. */
+	if(curr_stats.load_stage == 3)
 	{
-		if(!view->dir_entry[view->list_pos].selected)
-		{
-			fprintf(fp, "%s", view->curr_dir);
-			if(view->curr_dir[strlen(view->curr_dir) - 1] != '/')
-			{
-				fprintf(fp, "%s", "/");
-			}
-			fprintf(fp, "%s\n", view->dir_entry[view->list_pos].name);
-		}
-		else
-		{
-			int i;
-			for(i = 0; i < view->list_rows; ++i)
-			{
-				if(view->dir_entry[i].selected)
-				{
-					fprintf(fp, "%s/%s\n", view->curr_dir, view->dir_entry[i].name);
-				}
-			}
-		}
+		write_info_file();
 	}
-	else
-	{
-		int i;
-		for(i = 0; i < nfiles; ++i)
-		{
-			if(is_path_absolute(files[i]))
-			{
-				fprintf(fp, "%s\n", files[i]);
-			}
-			else
-			{
-				fprintf(fp, "%s/%s\n", view->curr_dir, files[i]);
-			}
-		}
-	}
+
+	fprintf(stderr, "%s\n", message);
+	LOG_ERROR_MSG("Finishing: %s", message);
+	exit(EXIT_FAILURE);
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

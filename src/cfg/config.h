@@ -20,16 +20,26 @@
 #ifndef VIFM__CFG__CONFIG_H__
 #define VIFM__CFG__CONFIG_H__
 
-#include <stddef.h> /* size_t */
+#include <stddef.h> /* size_t wchar_t */
 
-#include "../utils/fs_limits.h"
-#include "../color_scheme.h"
+#include "../compat/fs_limits.h"
+#include "../ui/color_scheme.h"
+#include "../ui/ui.h"
 #include "../types.h"
-#include "../ui.h"
 #include "hist.h"
 
+/* Name of help file in plain text format. */
 #define VIFM_HELP "vifm-help.txt"
+
+/* Name help file in Vim-documentation format. */
+#define VIFM_VIM_HELP "vifm-app.txt"
+
+/* Name of directory in main configuration directory that contains scripts
+ * implicitly included into $PATH for Vifm only. */
 #define SCRIPTS_DIR "scripts"
+
+/* Path to global directory for color schemes. */
+#define GLOBAL_COLORS_DIR PACKAGE_SYSCONF_DIR "/colors/"
 
 typedef enum
 {
@@ -38,6 +48,14 @@ typedef enum
 	NUM_DOT_DIRS      =      2
 }
 DotDirs;
+
+/* What should be displayed as size of a directory in a view by default. */
+typedef enum
+{
+	VDS_SIZE,   /* Size of a directory (not its content). */
+	VDS_NITEMS, /* Number of items in a directory. */
+}
+ViewDirSize;
 
 /* Indexes for cfg.decorations. */
 enum
@@ -48,8 +66,11 @@ enum
 
 typedef struct config_t
 {
-	char home_dir[PATH_MAX]; /* ends with a slash */
-	char config_dir[PATH_MAX];
+	char home_dir[PATH_MAX];   /* Ends with a slash. */
+	char config_dir[PATH_MAX]; /* Where local configuration files are stored. */
+	char colors_dir[PATH_MAX]; /* Where local color files are stored. */
+	char data_dir[PATH_MAX];   /* Where to store data files. */
+
 	/* This one should be set using set_trash_dir() function. */
 	char trash_dir[PATH_MAX];
 	char log_file[PATH_MAX];
@@ -66,11 +87,11 @@ typedef struct config_t
 	int history_len;
 
 	int auto_execute;
-	int show_one_window;
 	int use_iec_prefixes;
 	int wrap_quick_view;
 	char *time_format;
-	char *fuse_home; /* This one should be set using set_fuse_home() function. */
+	/* This one should be set using cfg_set_fuse_home() function. */
+	char *fuse_home;
 
 	/* History of command-line commands. */
 	hist_t cmd_hist;
@@ -95,19 +116,14 @@ typedef struct config_t
 	int vifm_info;
 	int auto_ch_pos;
 	char *shell;
-	int timeout_len;
 	int scroll_off;
 	int gdefault;
-#ifndef _WIN32
-	char *slow_fs_list;
-#endif
 	int scroll_bind;
 	int wrap_scan;
 	int inc_search;
 	int selection_is_primary; /* For yy, dd and DD: act on selection not file. */
 	int tab_switches_pane; /* Whether <tab> is switch pane or history forward. */
 	int use_system_calls; /* Prefer performing operations with system calls. */
-	int last_status;
 	int tab_stop;
 	char *ruler_format;
 	char *status_line;
@@ -115,67 +131,124 @@ typedef struct config_t
 	int columns; /* Terminal width in characters. */
 	/* Controls displaying of dot directories.  Combination of DotDirs flags. */
 	int dot_dirs;
-	char decorations[FILE_TYPE_COUNT][2]; /* Prefixes and suffixes of files. */
-	int trunc_normal_sb_msgs; /* Truncate normal status bar messages if needed. */
+	char decorations[FT_COUNT][2]; /* File type specific refixes and suffixes. */
 	int filter_inverted_by_default; /* Default inversion value for :filter. */
+
+	/* Invocation formats for external applications. */
 	char *apropos_prg; /* apropos tool calling pattern. */
-	char *find_prg; /* find tool calling pattern. */
-	char *grep_prg; /* grep tool calling pattern. */
-	char *locate_prg; /* locate tool calling pattern. */
+	char *find_prg;    /* find tool calling pattern. */
+	char *grep_prg;    /* grep tool calling pattern. */
+	char *locate_prg;  /* locate tool calling pattern. */
+	char *delete_prg;  /* File removal application. */
+
+	/* Message shortening controlled by 'shortmess'. */
+	int trunc_normal_sb_msgs; /* Truncate normal status bar messages if needed. */
+	int shorten_title_paths;  /* Use tilde shortening in view titles. */
+
+	/* Comma-separated list of file system types which are slow to respond. */
+	char *slow_fs_list;
 
 	/* Coma separated list of places to look for relative path to directories. */
 	char *cd_path;
 
 	/* Whether there should be reserved single character width space before and
-	 * after file list column inside a view. */
-	int filelist_col_padding;
+	 * after file list column inside a view and first and last columns and lines
+	 * for a quick view. */
+	int extra_padding;
 
 	/* Whether side borders are visible (separator in the middle isn't
 	 * affected). */
 	int side_borders_visible;
 
+	/* Whether statusline is visible. */
+	int display_statusline;
+
 	/* Per line pattern for borders. */
 	char *border_filler;
+
+	/* Whether terminal title should be updated or not. */
+	int set_title;
+
+	/* Whether directory path should always be resolved to real path (all symbolic
+	 * link expanded). */
+	int chase_links;
+
+	int timeout_len;     /* Maximum period on waiting for the input. */
+	int min_timeout_len; /* Minimum period on waiting for the input. */
+
+	char word_chars[256]; /* Whether corresponding character is a word char. */
+
+	ViewDirSize view_dir_size; /* Type of size display for directories in view. */
+
+	/* Controls use of fast file cloning for file systems that support it. */
+	int fast_file_cloning;
 }
 config_t;
 
 extern config_t cfg;
 
-void init_config(void);
-void set_config_paths(void);
+/* Initializes cfg global variable with initial values.  Re-initialization is
+ * not supported. */
+void cfg_init(void);
+
+/* Searches for configuration file and directories, stores them and ensures
+ * existence of some of them.  This routine is separated from cfg_init() to
+ * allow logging of path discovery. */
+void cfg_discover_paths(void);
+
 /* Sources vifmrc file (pointed to by the $MYVIFMRC). */
-void source_config(void);
+void cfg_load(void);
+
 /* Returns non-zero on error. */
-int source_file(const char filename[]);
-/* Checks whether vifmrc file (pointed to by the $MYVIFMRC) has old format.
- * Returns non-zero if so, otherwise zero is returned. */
-int is_old_config(void);
-int are_old_color_schemes(void);
-const char * get_vicmd(int *bg);
-/* Generates name of file inside tmp folder. */
-void generate_tmp_file_name(const char prefix[], char buf[], size_t buf_len);
-/* Changes size of all histories. */
-void resize_history(size_t new_len);
+int cfg_source_file(const char filename[]);
+
+/* Gets editor invocation command.  Sets *bg to indicate whether the command
+ * should be executed in background.  Returns pointer to a string from
+ * configuration variables. */
+const char * cfg_get_vicmd(int *bg);
+
+/* Changes size of all histories.  Zero or negative length disables history. */
+void cfg_resize_histories(int new_len);
+
 /* Sets value of cfg.fuse_home.  Returns non-zero in case of error, otherwise
  * zero is returned. */
-int set_fuse_home(const char new_value[]);
+int cfg_set_fuse_home(const char new_value[]);
+
 /* Sets whether support of terminal multiplexers is enabled. */
-void set_use_term_multiplexer(int use_term_multiplexer);
+void cfg_set_use_term_multiplexer(int use_term_multiplexer);
+
 /* Frees memory previously allocated for specified history items. */
-void free_history_items(const history_t history[], size_t len);
+void cfg_free_history_items(const history_t history[], size_t len);
+
 /* Saves command to command history. */
-void save_command_history(const char command[]);
+void cfg_save_command_history(const char command[]);
+
 /* Saves pattern to search history. */
-void save_search_history(const char pattern[]);
+void cfg_save_search_history(const char pattern[]);
+
 /* Saves input to prompt history. */
-void save_prompt_history(const char input[]);
+void cfg_save_prompt_history(const char input[]);
+
 /* Saves input to local filter history. */
-void save_filter_history(const char pattern[]);
+void cfg_save_filter_history(const char pattern[]);
+
+/* Gets the most recently used search pattern.  Returns the pattern or empty
+ * string if search history is empty. */
+const char * cfg_get_last_search_pattern(void);
 
 /* Sets shell invocation command. */
 void cfg_set_shell(const char shell[]);
 
+/* Checks whether given wide character should be considered as part of a word
+ * according to current settings.  Returns non-zero if so, otherwise zero is
+ * returned. */
+int cfg_is_word_wchar(wchar_t c);
+
+/* Whether ../ directory should appear in file list.  Returns non-zero if so,
+ * and zero otherwise. */
+int cfg_parent_dir_is_visible(int in_root);
+
 #endif /* VIFM__CFG__CONFIG_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

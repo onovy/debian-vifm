@@ -23,11 +23,13 @@
 #include <string.h> /* strdup() */
 
 #include "../cfg/config.h"
+#include "../modes/dialogs/msg_dialog.h"
+#include "../ui/statusbar.h"
+#include "../ui/ui.h"
 #include "../utils/macros.h"
 #include "../utils/path.h"
 #include "../utils/str.h"
 #include "../macros.h"
-#include "../ui.h"
 #include "menus.h"
 
 static int execute_grep_cb(FileView *view, menu_info *m);
@@ -35,35 +37,46 @@ static int execute_grep_cb(FileView *view, menu_info *m);
 int
 show_grep_menu(FileView *view, const char args[], int invert)
 {
+	enum { M_i, M_a, M_s, M_A, M_u, M_U, };
+
 	char *targets;
 	int save_msg;
 	char *cmd;
 	char *escaped_args = NULL;
 
-	custom_macro_t macros[] =
-	{
-		{ .letter = 'i', .value = NULL, .uses_left = 1, .group = -1 },
-		{ .letter = 'a', .value = NULL, .uses_left = 1, .group =  1 },
-		{ .letter = 's', .value = NULL, .uses_left = 1, .group = -1 },
-		{ .letter = 'A', .value = NULL, .uses_left = 0, .group =  1 },
+	custom_macro_t macros[] = {
+		[M_i] = { .letter = 'i', .value = NULL, .uses_left = 1, .group = -1 },
+		[M_a] = { .letter = 'a', .value = NULL, .uses_left = 1, .group =  1 },
+		[M_s] = { .letter = 's', .value = NULL, .uses_left = 1, .group = -1 },
+		[M_A] = { .letter = 'A', .value = NULL, .uses_left = 0, .group =  1 },
+
+		[M_u] = { .letter = 'u', .value = "",   .uses_left = 1, .group = -1 },
+		[M_U] = { .letter = 'U', .value = "",   .uses_left = 1, .group = -1 },
 	};
 
 	static menu_info m;
-	init_menu_info(&m, GREP_MENU, strdup("No matches found"));
 
-	m.title = format_str(" Grep %s ", args);
+	targets = prepare_targets(view);
+	if(targets == NULL)
+	{
+		show_error_msg("Grep", "Failed to setup target directory.");
+		return 0;
+	}
+
+	init_menu_info(&m, format_str("Grep %s", args),
+			format_str("No matches found: %s", args));
+
 	m.execute_handler = &execute_grep_cb;
 	m.key_handler = &filelist_khandler;
 
-	targets = get_cmd_target();
-	macros[0].value = invert ? "-v" : "";
-	macros[1].value = args;
-	macros[2].value = targets;
-	macros[3].value = args;
+	macros[M_i].value = invert ? "-v" : "";
+	macros[M_a].value = args;
+	macros[M_s].value = targets;
+	macros[M_A].value = args;
 	if(args[0] != '-')
 	{
-		escaped_args = escape_filename(args, 0);
-		macros[1].value = escaped_args;
+		escaped_args = shell_like_escape(args, 0);
+		macros[M_a].value = escaped_args;
 	}
 
 	cmd = expand_custom_macros(cfg.grep_prg, ARRAY_LEN(macros), macros);
@@ -72,7 +85,8 @@ show_grep_menu(FileView *view, const char args[], int invert)
 	free(targets);
 
 	status_bar_message("grep...");
-	save_msg = capture_output_to_menu(view, cmd, &m);
+	save_msg = capture_output(view, cmd, 0, &m, macros[M_u].explicit_use,
+			macros[M_U].explicit_use);
 	free(cmd);
 
 	return save_msg;
@@ -83,9 +97,9 @@ show_grep_menu(FileView *view, const char args[], int invert)
 static int
 execute_grep_cb(FileView *view, menu_info *m)
 {
-	goto_selected_file(view, m->items[m->pos], 1);
+	(void)goto_selected_file(view, m->items[m->pos], 1);
 	return 1;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */
