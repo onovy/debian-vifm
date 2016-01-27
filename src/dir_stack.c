@@ -22,8 +22,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "compat/reallocarray.h"
+#include "ui/fileview.h"
+#include "ui/ui.h"
 #include "filelist.h"
-#include "ui.h"
 
 stack_entry_t *stack;
 unsigned int stack_top;
@@ -46,7 +48,7 @@ push_to_dirstack(const char *ld, const char *lf, const char *rd, const char *rf)
 {
 	if(stack_top == stack_size)
 	{
-		stack_entry_t *s = realloc(stack, (stack_size + 1)*sizeof(*stack));
+		stack_entry_t *s = reallocarray(stack, stack_size + 1, sizeof(*stack));
 		if(s == NULL)
 		{
 			return -1;
@@ -89,7 +91,7 @@ popd(void)
 	if(change_directory(&rwin, stack[stack_top].rpane_dir) >= 0)
 		load_dir_list(&rwin, 0);
 
-	move_to_list_pos(curr_view, curr_view->list_pos);
+	fview_cursor_redraw(curr_view);
 	refresh_view_win(other_view);
 
 	free_entry(&stack[stack_top]);
@@ -119,7 +121,7 @@ swap_dirs(void)
 	if(change_directory(&rwin, item.rpane_dir) >= 0)
 		load_dir_list(&rwin, 0);
 
-	move_to_list_pos(curr_view, curr_view->list_pos);
+	fview_cursor_redraw(curr_view);
 	refresh_view_win(other_view);
 
 	free_entry(&item);
@@ -130,7 +132,7 @@ int
 rotate_stack(int n)
 {
 	stack_entry_t *new_stack;
-	int i;
+	size_t i;
 
 	if(n == 0)
 		return 0;
@@ -138,12 +140,14 @@ rotate_stack(int n)
 	if(pushd() != 0)
 		return -1;
 
-	new_stack = malloc(stack_size*sizeof(*stack));
+	new_stack = reallocarray(NULL, stack_size, sizeof(*stack));
 	if(new_stack == NULL)
 		return -1;
 
-	for(i = 0; i < stack_top; i++)
+	for(i = 0U; i < stack_top; ++i)
+	{
 		new_stack[(i + n)%stack_top] = stack[i];
+	}
 
 	free(stack);
 	stack = new_stack;
@@ -175,7 +179,7 @@ free_entry(const stack_entry_t *entry)
 char **
 dir_stack_list(void)
 {
-	int i;
+	size_t i;
 	int len;
 	char **list, **p;
 
@@ -183,7 +187,7 @@ dir_stack_list(void)
 		len = 2 + 1 + 1;
 	else
 		len = 2 + 1 + stack_top*2 + stack_top - 1 + 1;
-	list = malloc(sizeof(char *)*len);
+	list = reallocarray(NULL, len, sizeof(char *));
 
 	if(list == NULL)
 		return NULL;
@@ -199,7 +203,7 @@ dir_stack_list(void)
 			return list;
 	}
 
-	for(i = 0; i < stack_top; i++)
+	for(i = 0U; i < stack_top; ++i)
 	{
 		if((*p++ = strdup(stack[stack_top - 1 - i].lpane_dir)) == NULL)
 			return list;
@@ -231,4 +235,4 @@ dir_stack_changed(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

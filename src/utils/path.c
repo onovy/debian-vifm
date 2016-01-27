@@ -19,9 +19,15 @@
 
 #include "path.h"
 
+#ifndef _WIN32
+#include <pwd.h> /* getpwnam() */
+#endif
+#include <unistd.h>
+
 #ifdef _WIN32
 #include <ctype.h>
 #endif
+#include <errno.h> /* errno */
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h>  /* snprintf() */
 #include <stdlib.h> /* malloc() free() */
@@ -29,17 +35,12 @@
                        strncasecmp() strncat() strchr() strcpy() strlen()
                        strrchr() */
 
-#ifndef _WIN32
-#include <pwd.h> /* getpwnam() */
-#endif
-
 #include "../cfg/config.h"
-#include "../path_env.h"
-#ifdef _WIN32
+#include "../compat/fs_limits.h"
+#include "../int/path_env.h"
 #include "env.h"
-#endif
 #include "fs.h"
-#include "fs_limits.h"
+#include "log.h"
 #include "str.h"
 #include "utils.h"
 
@@ -47,9 +48,8 @@ static int skip_dotdir_if_any(const char *path[], int fully);
 static char * try_replace_tilde(const char path[]);
 static char * find_ext_dot(const char path[]);
 
-/* like chomp() but removes trailing slash */
 void
-chosp(char *path)
+chosp(char path[])
 {
 	size_t len;
 
@@ -68,35 +68,30 @@ ends_with_slash(const char *str)
 }
 
 int
-path_starts_with(const char *path, const char *begin)
+path_starts_with(const char path[], const char prefix[])
 {
-	size_t len = strlen(begin);
+	size_t len = strlen(prefix);
 
-	if(len > 0 && begin[len - 1] == '/')
+	if(len > 0 && prefix[len - 1] == '/')
+	{
 		len--;
+	}
 
-	if(strnoscmp(path, begin, len) != 0)
-		return 0;
-
-	return (path[len] == '\0' || path[len] == '/');
+	return strnoscmp(path, prefix, len) == 0
+	    && (path[len] == '\0' || path[len] == '/');
 }
 
 int
 paths_are_equal(const char s[], const char t[])
 {
-	size_t s_len = strlen(s);
-	size_t t_len = strlen(t);
+	/* Some additional space is allocated for adding slashes. */
+	char s_can[strlen(s) + 8];
+	char t_can[strlen(t) + 8];
 
-	if(s_len > 0 && s[s_len - 1] == '/')
-		s_len--;
-	if(t_len > 0 && t[t_len - 1] == '/')
-		t_len--;
+	canonicalize_path(s, s_can, sizeof(s_can));
+	canonicalize_path(t, t_can, sizeof(t_can));
 
-	if(s_len == t_len)
-	{
-		return strnoscmp(s, t, s_len) == 0;
-	}
-	return 0;
+	return stroscmp(s_can, t_can) == 0;
 }
 
 void
@@ -171,7 +166,7 @@ canonicalize_path(const char directory[], char buf[], size_t buf_size)
 		p++;
 	}
 
-	if(*q != '/')
+	if((*directory != '\0' && q < buf) || (q >= buf && *q != '/'))
 	{
 		*++q = '/';
 	}
@@ -217,7 +212,7 @@ skip_dotdir_if_any(const char *path[], int fully)
 }
 
 const char *
-make_rel_path(const char *path, const char *base)
+make_rel_path(const char path[], const char base[])
 {
 	static char buf[PATH_MAX];
 
@@ -315,15 +310,8 @@ is_unc_root(const char *path)
 #endif
 }
 
-/*
- * Escape the filename for the purpose of inserting it into the shell.
- *
- * quote_percent means prepend percent sign with a percent sign
- *
- * Returns new string, caller should free it.
- */
 char *
-escape_filename(const char *string, int quote_percent)
+shell_like_escape(const char string[], int quote_percent)
 {
 	size_t len;
 	size_t i;
@@ -393,24 +381,32 @@ escape_filename(const char *string, int quote_percent)
 }
 
 char *
-replace_home_part(const char directory[])
+replace_home_part(const char path[])
+{
+	char *result = replace_home_part_strict(path);
+	if(!is_root_dir(result))
+	{
+		chosp(result);
+	}
+	return result;
+}
+
+char *
+replace_home_part_strict(const char path[])
 {
 	static char buf[PATH_MAX];
 	size_t len;
 
 	len = strlen(cfg.home_dir) - 1;
-	if(strnoscmp(directory, cfg.home_dir, len) == 0 &&
-			(directory[len] == '\0' || directory[len] == '/'))
+	if(strnoscmp(path, cfg.home_dir, len) == 0 &&
+			(path[len] == '\0' || path[len] == '/'))
 	{
-		strncat(strcpy(buf, "~"), directory + len, sizeof(buf) - strlen(buf) - 1);
+		strncat(strcpy(buf, "~"), path + len, sizeof(buf) - strlen(buf) - 1);
 	}
 	else
 	{
-		copy_str(buf, sizeof(buf), directory);
+		copy_str(buf, sizeof(buf), path);
 	}
-
-	if(!is_root_dir(buf))
-		chosp(buf);
 
 	return buf;
 }
@@ -497,20 +493,26 @@ get_last_path_component(const char path[])
 	}
 	else if(slash[1] == '\0')
 	{
+		/* Skip slashes. */
 		while(slash > path && slash[0] == '/')
-			slash--;
-		while(slash > path + 1 && slash[-1] != '/')
-			slash--;
+		{
+			--slash;
+		}
+		/* Skip until slash. */
+		while(slash > path && slash[-1] != '/')
+		{
+			--slash;
+		}
 	}
 	else
 	{
-		slash++;
+		++slash;
 	}
 	return slash;
 }
 
 void
-remove_last_path_component(char *path)
+remove_last_path_component(char path[])
 {
 	char *slash;
 
@@ -519,10 +521,15 @@ remove_last_path_component(char *path)
 		chosp(path);
 	}
 
-	if((slash = strrchr(path, '/')) != NULL)
+	slash = strrchr(path, '/');
+	if(slash == NULL)
 	{
-		int pos = is_root_dir(path) ? 1 : 0;
-		slash[pos] = '\0';
+		path[0] = '\0';
+	}
+	else
+	{
+		const int offset = is_root_dir(path) ? 1 : 0;
+		slash[offset] = '\0';
 	}
 }
 
@@ -551,6 +558,37 @@ ensure_path_well_formed(char *path)
 	strcpy(path, env_get("SYSTEMDRIVE"));
 	strcat(path, "/");
 #endif
+}
+
+int
+to_canonic_path(const char path[], char buf[], size_t buf_len)
+{
+	if(!is_path_absolute(path))
+	{
+		char cwd[PATH_MAX];
+		char full_path[PATH_MAX];
+
+		if(get_cwd(cwd, sizeof(cwd)) == NULL)
+		{
+			/* getcwd() failed, we can't use relative path, so fail. */
+			LOG_SERROR_MSG(errno, "Can't get CWD");
+			return 1;
+		}
+
+#ifdef _WIN32
+		to_forward_slash(cwd);
+#endif
+
+		snprintf(full_path, sizeof(full_path), "%s/%s", cwd, path);
+		canonicalize_path(full_path, buf, buf_len);
+	}
+	else
+	{
+		canonicalize_path(path, buf, buf_len);
+	}
+
+	chosp(buf);
+	return 0;
 }
 
 int
@@ -645,10 +683,12 @@ find_ext_dot(const char path[])
 }
 
 void
-exclude_file_name(char *path)
+exclude_file_name(char path[])
 {
-	if(path_exists(path) && !is_valid_dir(path))
+	if(path_exists(path, DEREF) && !is_valid_dir(path))
+	{
 		remove_last_path_component(path);
+	}
 }
 
 int
@@ -692,6 +732,22 @@ find_cmd_in_path(const char cmd[], size_t path_len, char path[])
 	return 1;
 }
 
+void
+generate_tmp_file_name(const char prefix[], char buf[], size_t buf_len)
+{
+	snprintf(buf, buf_len, "%s/%s", get_tmpdir(), prefix);
+#ifdef _WIN32
+	to_forward_slash(buf);
+#endif
+	copy_str(buf, buf_len, make_name_unique(buf));
+}
+
+const char *
+get_tmpdir(void)
+{
+	return env_get_one_of_def("/tmp/", "TMPDIR", "TEMP", "TEMPDIR", "TMP", NULL);
+}
+
 #ifdef _WIN32
 
 int
@@ -715,4 +771,4 @@ to_back_slash(char path[])
 #endif
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

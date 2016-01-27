@@ -20,7 +20,7 @@
 #ifndef VIFM__MODES__VISUAL_H__
 #define VIFM__MODES__VISUAL_H__
 
-#include "../ui.h"
+#include "../ui/ui.h"
 
 /* Generic submodes of the visual mode. */
 typedef enum
@@ -53,4 +53,4 @@ const char * describe_visual_mode(void);
 #endif /* VIFM__MODES__VISUAL_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

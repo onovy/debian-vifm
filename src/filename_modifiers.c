@@ -18,17 +18,21 @@
 
 #include "filename_modifiers.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #include <stddef.h> /* size_t */
 #include <stdio.h> /* snprintf() */
 #include <string.h> /* memmove() strchr() strlen() strrchr() */
 
 #include "cfg/config.h"
-#include "utils/fs_limits.h"
+#include "compat/fs_limits.h"
+#include "ui/ui.h"
 #include "utils/path.h"
 #include "utils/str.h"
 #include "fileops.h"
 #include "status.h"
-#include "ui.h"
 
 static const char * apply_mod(const char *path, const char *parent,
 		const char *mod, int *mod_len, int for_shell);
@@ -171,9 +175,9 @@ apply_dot_mod(const char *path, char *buf, size_t buf_len)
 {
 	size_t len = strlen(curr_view->curr_dir);
 	if(strnoscmp(path, curr_view->curr_dir, len) != 0 || path[len] == '\0')
-		snprintf(buf, buf_len, "%s", path);
+		copy_str(buf, buf_len, path);
 	else
-		snprintf(buf, buf_len, "%s", path + len + 1);
+		copy_str(buf, buf_len, path + len + 1);
 	return 0;
 }
 
@@ -317,4 +321,4 @@ find_nth_chr(const char *str, char c, int n)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -1,13 +1,16 @@
+#include <stic.h>
+
+#include <unistd.h> /* chdir() */
+
 #include <stdlib.h>
 #include <string.h>
 
-#include "seatest.h"
-
 #include "../../src/cfg/config.h"
+#include "../../src/ui/ui.h"
+#include "../../src/utils/dynarray.h"
 #include "../../src/filelist.h"
 #include "../../src/macros.h"
 #include "../../src/registers.h"
-#include "../../src/ui.h"
 
 #ifdef _WIN32
 #define SL "\\\\"
@@ -22,12 +25,18 @@ setup_lwin(void)
 
 	lwin.list_rows = 5;
 	lwin.list_pos = 2;
-	lwin.dir_entry = calloc(lwin.list_rows, sizeof(*lwin.dir_entry));
+	lwin.dir_entry = dynarray_cextend(NULL,
+			lwin.list_rows*sizeof(*lwin.dir_entry));
 	lwin.dir_entry[0].name = strdup("lfile0");
+	lwin.dir_entry[0].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[1].name = strdup("lfile1");
+	lwin.dir_entry[1].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[2].name = strdup("lfile2");
+	lwin.dir_entry[2].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[3].name = strdup("lfile3");
+	lwin.dir_entry[3].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[4].name = strdup(".lfile4");
+	lwin.dir_entry[4].origin = &lwin.curr_dir[0];
 
 	lwin.dir_entry[0].selected = 1;
 	lwin.dir_entry[2].selected = 1;
@@ -41,14 +50,22 @@ setup_rwin(void)
 
 	rwin.list_rows = 7;
 	rwin.list_pos = 5;
-	rwin.dir_entry = calloc(rwin.list_rows, sizeof(*rwin.dir_entry));
+	rwin.dir_entry = dynarray_cextend(NULL,
+			rwin.list_rows*sizeof(*rwin.dir_entry));
 	rwin.dir_entry[0].name = strdup("rfile0");
+	rwin.dir_entry[0].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[1].name = strdup("rfile1");
+	rwin.dir_entry[1].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[2].name = strdup("rfile2");
+	rwin.dir_entry[2].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[3].name = strdup("rfile3");
+	rwin.dir_entry[3].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[4].name = strdup("rfile4.tar.gz");
+	rwin.dir_entry[4].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[5].name = strdup("rfile5");
+	rwin.dir_entry[5].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[6].name = strdup("rdir6");
+	rwin.dir_entry[6].origin = &rwin.curr_dir[0];
 
 	rwin.dir_entry[1].selected = 1;
 	rwin.dir_entry[3].selected = 1;
@@ -60,13 +77,17 @@ static void
 setup_registers(void)
 {
 	init_registers();
-	append_to_register('z', "test-data/existing-files/a");
-	append_to_register('z', "test-data/existing-files/b");
-	append_to_register('z', "test-data/existing-files/c");
+	append_to_register('z', "existing-files/a");
+	append_to_register('z', "existing-files/b");
+	append_to_register('z', "existing-files/c");
 }
 
-static void
-setup(void)
+SETUP_ONCE()
+{
+	assert_success(chdir(TEST_DATA_PATH));
+}
+
+SETUP()
 {
 	setup_lwin();
 	setup_rwin();
@@ -79,24 +100,22 @@ setup(void)
 	setup_registers();
 }
 
-static void
-teardown(void)
+TEARDOWN()
 {
 	int i;
 
 	for(i = 0; i < lwin.list_rows; i++)
 		free(lwin.dir_entry[i].name);
-	free(lwin.dir_entry);
+	dynarray_free(lwin.dir_entry);
 
 	for(i = 0; i < rwin.list_rows; i++)
 		free(rwin.dir_entry[i].name);
-	free(rwin.dir_entry);
+	dynarray_free(rwin.dir_entry);
 
 	clear_registers();
 }
 
-static void
-test_colon_p(void)
+TEST(colon_p)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -134,12 +153,11 @@ test_colon_p(void)
 	free(expanded);
 
 	expanded = expand_macros(" cp %rz:p ", "", &flags, 1);
-	assert_string_equal(" cp " SL "lwin" SL "test-data" SL "existing-files" SL "a " SL "lwin" SL "test-data" SL "existing-files" SL "b " SL "lwin" SL "test-data" SL "existing-files" SL "c ", expanded);
+	assert_string_equal(" cp " SL "lwin" SL "existing-files" SL "a " SL "lwin" SL "existing-files" SL "b " SL "lwin" SL "existing-files" SL "c ", expanded);
 	free(expanded);
 }
 
-static void
-test_colon_p_in_root(void)
+TEST(colon_p_in_root)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -178,12 +196,11 @@ test_colon_p_in_root(void)
 	free(expanded);
 
 	expanded = expand_macros(" cp %rz:p ", "", &flags, 1);
-	assert_string_equal(" cp " SL "test-data" SL "existing-files" SL "a " SL "test-data" SL "existing-files" SL "b " SL "test-data" SL "existing-files" SL "c ", expanded);
+	assert_string_equal(" cp " SL "existing-files" SL "a " SL "existing-files" SL "b " SL "existing-files" SL "c ", expanded);
 	free(expanded);
 }
 
-static void
-test_colon_tilde(void)
+TEST(colon_tilde)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -234,12 +251,11 @@ test_colon_tilde(void)
 	free(expanded);
 
 	expanded = expand_macros(" cp %rz:~ ", "", &flags, 1);
-	assert_string_equal(" cp test-data" SL "existing-files" SL "a test-data" SL "existing-files" SL "b test-data" SL "existing-files" SL "c ", expanded);
+	assert_string_equal(" cp existing-files" SL "a existing-files" SL "b existing-files" SL "c ", expanded);
 	free(expanded);
 }
 
-static void
-test_colon_dot(void)
+TEST(colon_dot)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -295,12 +311,11 @@ test_colon_dot(void)
 	free(expanded);
 
 	expanded = expand_macros(" cp %rz:. ", "", &flags, 1);
-	assert_string_equal(" cp test-data" SL "existing-files" SL "a test-data" SL "existing-files" SL "b test-data" SL "existing-files" SL "c ", expanded);
+	assert_string_equal(" cp existing-files" SL "a existing-files" SL "b existing-files" SL "c ", expanded);
 	free(expanded);
 }
 
-static void
-test_colon_h(void)
+TEST(colon_h)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -347,12 +362,11 @@ test_colon_h(void)
 	free(expanded);
 
 	expanded = expand_macros(" cp %rz:h ", "", &flags, 1);
-	assert_string_equal(" cp test-data" SL "existing-files test-data" SL "existing-files test-data" SL "existing-files ", expanded);
+	assert_string_equal(" cp existing-files existing-files existing-files ", expanded);
 	free(expanded);
 }
 
-static void
-test_colon_t(void)
+TEST(colon_t)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -402,8 +416,7 @@ test_colon_t(void)
 	free(expanded);
 }
 
-static void
-test_colon_r(void)
+TEST(colon_r)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -458,8 +471,7 @@ test_colon_r(void)
 	free(expanded);
 }
 
-static void
-test_colon_e(void)
+TEST(colon_e)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -516,8 +528,7 @@ test_colon_e(void)
 	free(expanded);
 }
 
-static void
-test_colon_s(void)
+TEST(colon_s)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -547,8 +558,7 @@ test_colon_s(void)
 	free(expanded);
 }
 
-static void
-test_colon_gs(void)
+TEST(colon_gs)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -587,8 +597,8 @@ test_colon_gs(void)
 }
 
 #ifdef _WIN32
-static void
-test_colon_u(void)
+
+TEST(colon_u)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -604,8 +614,7 @@ test_colon_u(void)
 	free(expanded);
 }
 
-static void
-test_windows_specific(void)
+TEST(windows_specific)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -630,10 +639,10 @@ test_windows_specific(void)
 	assert_string_equal(" \\\\\\\\ZX-Spectrum ", expanded);
 	free(expanded);
 }
+
 #endif
 
-static void
-test_modif_without_macros(void)
+TEST(modif_without_macros)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -645,8 +654,7 @@ test_modif_without_macros(void)
 	free(expanded);
 }
 
-static void
-test_with_quotes(void)
+TEST(with_quotes)
 {
 	MacroFlags flags;
 	char *expanded;
@@ -657,35 +665,5 @@ test_with_quotes(void)
 	free(expanded);
 }
 
-void
-fname_modif_tests(void)
-{
-	test_fixture_start();
-
-	fixture_setup(setup);
-	fixture_teardown(teardown);
-
-	run_test(test_colon_p);
-	run_test(test_colon_p_in_root);
-	run_test(test_colon_tilde);
-	run_test(test_colon_dot);
-	run_test(test_colon_h);
-	run_test(test_colon_t);
-	run_test(test_colon_r);
-	run_test(test_colon_e);
-	run_test(test_colon_s);
-	run_test(test_colon_gs);
-
-#ifdef _WIN32
-	run_test(test_colon_u);
-	run_test(test_windows_specific);
-#endif
-
-	run_test(test_modif_without_macros);
-	run_test(test_with_quotes);
-
-	test_fixture_end();
-}
-
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

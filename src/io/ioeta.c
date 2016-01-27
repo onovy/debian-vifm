@@ -23,7 +23,7 @@
 #include <stdint.h> /* uint64_t */
 #include <stdlib.h> /* calloc() free() */
 
-#include "../ui.h"
+#include "../ui/cancellation.h"
 #include "private/ioeta.h"
 #include "private/traverser.h"
 
@@ -33,7 +33,7 @@ static VisitResult eta_visitor(const char full_path[], VisitAction action,
 ioeta_estim_t *
 ioeta_alloc(void *param)
 {
-	ioeta_estim_t *const estim = calloc(1U, sizeof(ioeta_estim_t));
+	ioeta_estim_t *const estim = calloc(1U, sizeof(*estim));
 	estim->param = param;
 	return estim;
 }
@@ -44,6 +44,7 @@ ioeta_free(ioeta_estim_t *estim)
 	if(estim != NULL)
 	{
 		free(estim->item);
+		free(estim->target);
 		free(estim);
 	}
 }
@@ -90,4 +91,4 @@ eta_visitor(const char full_path[], VisitAction action, void *param)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -23,8 +23,10 @@
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h>
 #include <stdlib.h> /* calloc() malloc() free() realloc() */
-#include <string.h>
+#include <string.h> /* strdup() */
 
+#include "../compat/reallocarray.h"
+#include "../utils/darray.h"
 #include "../utils/log.h"
 #include "../utils/macros.h"
 #include "../utils/str.h"
@@ -42,7 +44,8 @@ typedef enum
 	BUILTIN_ABBR,
 	BUILTIN_CMD,
 	USER_CMD,
-}CMD_TYPE;
+}
+CMD_TYPE;
 
 typedef struct cmd_t
 {
@@ -57,6 +60,7 @@ typedef struct cmd_t
 	int range;
 	int cust_sep;
 	int emark;
+	int comment;   /* Whether trailing comment is allowed for the command. */
 	int qmark;
 	int expand;
 	int min_args, max_args;
@@ -105,9 +109,8 @@ static int is_correct_name(const char name[]);
 static cmd_t * insert_cmd(cmd_t *after);
 static int delcommand_cmd(const cmd_info_t *cmd_info);
 TSTATIC char ** dispatch_line(const char args[], int *count, char sep,
-		int regexp, int quotes, int *last_arg, int *last_begin, int *last_end);
+		int regexp, int quotes, int comments, int *last_arg, int (**positions)[2]);
 static int is_separator(char c, char sep);
-TSTATIC void unescape(char s[], int regexp);
 
 void
 init_cmds(int udf, cmds_conf_t *conf)
@@ -181,7 +184,7 @@ execute_cmd(const char cmd[])
 	int execution_code;
 	size_t last_arg_len;
 	char *last_arg;
-	int last_end;
+	int last_end = 0;
 	cmds_conf_t *cc = cmds_conf;
 
 	init_cmd_info(&cmd_info);
@@ -210,11 +213,8 @@ execute_cmd(const char cmd[])
 	if(udf_is_ambiguous(cmd_name))
 		return CMDS_ERR_UDF_IS_AMBIGUOUS;
 
-	cur = inner->head.next;
-	while(cur != NULL && strcmp(cur->name, cmd_name) < 0)
-		cur = cur->next;
-
-	if(cur == NULL || strncmp(cmd_name, cur->name, strlen(cmd_name)) != 0)
+	cur = find_cmd(cmd_name);
+	if(cur == NULL)
 		return CMDS_ERR_INVALID_CMD;
 
 	args = parse_tail(cur, cmd, &cmd_info);
@@ -224,7 +224,7 @@ execute_cmd(const char cmd[])
 	/* Set background flag and remove background mark from raw arguments, when
 	 * command supports backgrounding. */
 	last_arg = get_last_argument(cmd_info.raw_args, &last_arg_len);
-	if(cur->bg && *last_arg == '&' && *skip_whitespace(last_arg + 1) == '\0')
+	if(cur->bg && *last_arg == '&' && *vle_cmds_at_arg(last_arg + 1) == '\0')
 	{
 		cmd_info.bg = 1;
 		*last_arg = '\0';
@@ -235,25 +235,33 @@ execute_cmd(const char cmd[])
 
 	if(cur->expand)
 	{
-		char *p = NULL;
 		if(cur->expand & 1)
+		{
 			cmd_info.args = cc->expand_macros(cmd_info.raw_args, cur->expand & 4,
 					&cmd_info.usr1, &cmd_info.usr2);
+		}
 		if(cur->expand & 2)
 		{
-			p = cmd_info.args;
+			char *const p = cmd_info.args;
 			cmd_info.args = cc->expand_envvars(p ? p : cmd_info.raw_args);
+			free(p);
 		}
-		free(p);
 	}
-	else
+
+	/* This handles both !cur->expand and malformed value of cur->expand. */
+	if(cmd_info.args == NULL)
 	{
 		cmd_info.args = strdup(cmd_info.raw_args);
 	}
 	cmd_info.argv = dispatch_line(cmd_info.args, &cmd_info.argc, cmd_info.sep,
-			cur->regexp, cur->quote, NULL, NULL, &last_end);
+			cur->regexp, cur->quote, cur->comment, NULL, &cmd_info.argvp);
+	if(cmd_info.argc > 0)
+	{
+		last_end = cmd_info.argvp[cmd_info.argc - 1][1];
+	}
 	cmd_info.args[last_end] = '\0';
 
+	/* TODO: extract a method that would check all these error conditions. */
 	if((cmd_info.begin != NOT_DEF || cmd_info.end != NOT_DEF) && !cur->range)
 	{
 		execution_code = CMDS_ERR_NO_RANGE_ALLOWED;
@@ -290,7 +298,7 @@ execute_cmd(const char cmd[])
 	{
 		cur->passed++;
 
-		if(cur->type != BUILTIN_CMD && cur->type != BUILTIN_ABBR)
+		if(cur->type == USER_CMD)
 		{
 			cmd_info.cmd = cur->cmd;
 			execution_code = inner->user_cmd_handler.handler(&cmd_info);
@@ -307,13 +315,18 @@ execute_cmd(const char cmd[])
 	free(cmd_info.raw_args);
 	free(cmd_info.args);
 	free_string_array(cmd_info.argv, cmd_info.argc);
+	free(cmd_info.argvp);
 
 	return execution_code;
 }
 
+/* Applies limit shifts and ensures that its value is not out of bounds.
+ * Returns pointer to part of string after parsed piece. */
 static const char *
 correct_limit(const char cmd[], cmd_info_t *cmd_info)
 {
+	cmd_info->count = (cmd_info->end == NOT_DEF) ? 1 : (cmd_info->end + 1);
+
 	while(*cmd == '+' || *cmd == '-')
 	{
 		int n = 1;
@@ -325,11 +338,19 @@ correct_limit(const char cmd[], cmd_info_t *cmd_info)
 			n = strtol(cmd, &p, 10);
 			cmd = p;
 		}
+
 		if(plus)
+		{
 			cmd_info->end += n;
+			cmd_info->count += n;
+		}
 		else
+		{
 			cmd_info->end -= n;
+			cmd_info->count -= n;
+		}
 	}
+
 	if(cmd_info->end < 0)
 		cmd_info->end = 0;
 	if(cmd_info->end > cmds_conf->end)
@@ -412,11 +433,21 @@ get_cmd_id(const char cmd[])
 	return get_cmd_info(cmd, &info);
 }
 
+const char *
+get_cmd_args(const char cmd[])
+{
+	cmd_info_t info = {};
+	(void)get_cmd_info(cmd, &info);
+	return info.raw_args;
+}
+
+/* Initializes command info structure with reasonable defaults. */
 static void
 init_cmd_info(cmd_info_t *cmd_info)
 {
 	cmd_info->begin = NOT_DEF;
 	cmd_info->end = NOT_DEF;
+	cmd_info->count = NOT_DEF;
 	cmd_info->emark = 0;
 	cmd_info->qmark = 0;
 	cmd_info->raw_args = NULL;
@@ -436,8 +467,7 @@ get_cmd_info(const char cmd[], cmd_info_t *info)
 {
 	cmd_info_t cmd_info;
 	char cmd_name[MAX_CMD_NAME_LEN];
-	cmd_t *cur;
-	size_t len;
+	cmd_t *c;
 
 	init_cmd_info(&cmd_info);
 
@@ -446,19 +476,14 @@ get_cmd_info(const char cmd[], cmd_info_t *info)
 		return CMDS_ERR_INVALID_CMD;
 
 	cmd = get_cmd_name(cmd, cmd_name, sizeof(cmd_name));
-	cur = inner->head.next;
-	while(cur != NULL && strcmp(cur->name, cmd_name) < 0)
-		cur = cur->next;
-
-	len = strlen(cmd_name);
-	if(cur == NULL || strncmp(cmd_name, cur->name, len) != 0)
+	c = find_cmd(cmd_name);
+	if(c == NULL)
 		return -1;
 
-	if(parse_tail(cur, cmd, &cmd_info) == NULL)
-		return -1;
+	cmd_info.raw_args = (char *)parse_tail(c, cmd, &cmd_info);
 
 	*info = cmd_info;
-	return cur->id;
+	return c->id;
 }
 
 int
@@ -569,7 +594,7 @@ parse_range(const char cmd[], cmd_info_t *cmd_info)
 {
 	char last_sep;
 
-	cmd = skip_whitespace(cmd);
+	cmd = vle_cmds_at_arg(cmd);
 
 	if(isalpha(*cmd) || *cmd == '!' || *cmd == '\0')
 	{
@@ -590,9 +615,11 @@ parse_range(const char cmd[], cmd_info_t *cmd_info)
 		cmd = correct_limit(cmd, cmd_info);
 
 		if(cmd_info->begin == NOT_DEF)
+		{
 			cmd_info->begin = cmd_info->end;
+		}
 
-		cmd = skip_whitespace(cmd);
+		cmd = vle_cmds_at_arg(cmd);
 
 		if(!char_is_one_of(RANGE_SEPARATORS, *cmd))
 		{
@@ -602,7 +629,7 @@ parse_range(const char cmd[], cmd_info_t *cmd_info)
 		last_sep = *cmd;
 		cmd++;
 
-		cmd = skip_whitespace(cmd);
+		cmd = vle_cmds_at_arg(cmd);
 	}
 
 	return cmd;
@@ -686,7 +713,7 @@ get_cmd_name(const char cmd[], char buf[], size_t buf_len)
 	if(cmd[0] == '!')
 	{
 		strcpy(buf, "!");
-		cmd = skip_whitespace(cmd + 1);
+		cmd = vle_cmds_at_arg(cmd + 1);
 		return cmd;
 	}
 
@@ -694,7 +721,7 @@ get_cmd_name(const char cmd[], char buf[], size_t buf_len)
 	while(isalpha(*t))
 		t++;
 
-	len = MIN(t - cmd, buf_len - 1);
+	len = MIN((size_t)(t - cmd), buf_len - 1);
 	strncpy(buf, cmd, len);
 	buf[len] = '\0';
 	if(*t == '?' || *t == '!')
@@ -705,16 +732,30 @@ get_cmd_name(const char cmd[], char buf[], size_t buf_len)
 		cur = inner->head.next;
 		while(cur != NULL && (cmp = strncmp(cur->name, buf, len)) <= 0)
 		{
-			if(cmp == 0 && cur->type == USER_CMD &&
-					cur->name[strlen(cur->name) - 1] == *t)
+			if(cmp == 0)
 			{
-				strncpy(buf, cur->name, buf_len);
-				break;
+				/* Check for user-defined command that ends with the char. */
+				if(cur->type == USER_CMD && cur->name[strlen(cur->name) - 1] == *t)
+				{
+					strncpy(buf, cur->name, buf_len);
+					break;
+				}
+				/* Or builtin abbreviation that supports the mark. */
+				if(cur->type == BUILTIN_ABBR &&
+						((*t == '!' && cur->emark) || (*t == '?' && cur->qmark)))
+				{
+					strncpy(buf, cur->name, buf_len);
+					break;
+				}
 			}
 			cur = cur->next;
 		}
-		if(cur != NULL && strncmp(cur->name, buf, len) == 0)
-			t++;
+		/* For builtin commands, the char is not part of the name. */
+		if(cur != NULL && cur->type == USER_CMD &&
+				strncmp(cur->name, buf, len) == 0)
+		{
+			++t;
+		}
 	}
 
 	return t;
@@ -732,7 +773,7 @@ complete_cmd_args(cmd_t *cur, const char args[], cmd_info_t *cmd_info,
 		return 0;
 
 	args = parse_tail(cur, tmp_args, cmd_info);
-	args = skip_whitespace(args);
+	args = vle_cmds_at_arg(args);
 	result += args - tmp_args;
 
 	if(cur->id == COMMAND_CMD_ID || cur->id == DELCOMMAND_CMD_ID)
@@ -749,12 +790,19 @@ complete_cmd_args(cmd_t *cur, const char args[], cmd_info_t *cmd_info,
 	{
 		int argc;
 		char **argv;
+		int (*argvp)[2];
 		int last_arg = 0;
 
-		argv = dispatch_line(args, &argc, ' ', 0, 1, &last_arg, NULL, NULL);
-		result += cmds_conf->complete_args(cur->id, args, argc, argv, last_arg,
-				arg);
+		argv = dispatch_line(args, &argc, ' ', 0, 1, 0, &last_arg,
+				&argvp);
+
+		cmd_info->args = (char *)args;
+		cmd_info->argc = argc;
+		cmd_info->argv = argv;
+		result += cmds_conf->complete_args(cur->id, cmd_info, last_arg, arg);
+
 		free_string_array(argv, argc);
+		free(argvp);
 	}
 	return result;
 }
@@ -814,6 +862,7 @@ add_builtin_commands(const cmd_add_t *cmds, int count)
 				assert(ret_code == 0);
 			}
 		}
+		(void)ret_code;
 	}
 }
 
@@ -821,7 +870,6 @@ add_builtin_commands(const cmd_add_t *cmds, int count)
 TSTATIC int
 add_builtin_cmd(const char name[], int abbr, const cmd_add_t *conf)
 {
-	int i;
 	int cmp;
 	cmd_t *new;
 	cmd_t *cur = &inner->head;
@@ -835,15 +883,24 @@ add_builtin_cmd(const char name[], int abbr, const cmd_add_t *conf)
 	}
 
 	if(strcmp(name, "!") != 0)
-		for(i = 0; name[i] != '\0'; i++)
+	{
+		unsigned int i;
+		for(i = 0U; name[i] != '\0'; ++i)
+		{
 			if(!isalpha(name[i]))
+			{
 				return -1;
+			}
+		}
+	}
 
 	cmp = -1;
 	while(cur->next != NULL && (cmp = strcmp(cur->next->name, name)) < 0)
+	{
 		cur = cur->next;
+	}
 
-	/* command with the same name already exists */
+	/* Command with the same name already exists. */
 	if(cmp == 0)
 	{
 		if(strncmp(name, "command", strlen(name)) == 0)
@@ -864,6 +921,7 @@ add_builtin_cmd(const char name[], int abbr, const cmd_add_t *conf)
 	new->range = conf->range;
 	new->cust_sep = conf->cust_sep;
 	new->emark = conf->emark;
+	new->comment = conf->comment;
 	new->qmark = conf->qmark;
 	new->expand = conf->expand;
 	new->min_args = conf->min_args;
@@ -909,6 +967,8 @@ command_cmd(const cmd_info_t *cmd_info)
 	char cmd_name[MAX_CMD_NAME_LEN];
 	const char *args;
 	cmd_t *new, *cur;
+	size_t len;
+	int has_emark, has_qmark;
 
 	if(cmd_info->argc < 2)
 	{
@@ -919,16 +979,34 @@ command_cmd(const cmd_info_t *cmd_info)
 	}
 
 	args = get_user_cmd_name(cmd_info->args, cmd_name, sizeof(cmd_name));
-	args = skip_whitespace(args);
+	args = vle_cmds_at_arg(args);
 	if(args[0] == '\0')
 		return CMDS_ERR_TOO_FEW_ARGS;
 	else if(!is_correct_name(cmd_name))
 		return CMDS_ERR_INCORRECT_NAME;
 
+	len = strlen(cmd_name);
+	has_emark = (len > 0 && cmd_name[len - 1] == '!');
+	has_qmark = (len > 0 && cmd_name[len - 1] == '?');
+
 	cmp = -1;
 	cur = &inner->head;
 	while(cur->next != NULL && (cmp = strcmp(cur->next->name, cmd_name)) < 0)
+	{
+		if(has_emark && cur->next->type == BUILTIN_CMD && cur->next->emark &&
+				strncmp(cmd_name, cur->next->name, len - 1) == 0)
+		{
+			cmp = 0;
+			break;
+		}
+		if(has_qmark && cur->next->type == BUILTIN_CMD && cur->next->qmark &&
+				strncmp(cmd_name, cur->next->name, len - 1) == 0)
+		{
+			cmp = 0;
+			break;
+		}
 		cur = cur->next;
+	}
 
 	if(cmp == 0)
 	{
@@ -957,6 +1035,7 @@ command_cmd(const cmd_info_t *cmd_info)
 	new->range = inner->user_cmd_handler.range;
 	new->cust_sep = inner->user_cmd_handler.cust_sep;
 	new->emark = inner->user_cmd_handler.emark;
+	new->comment = inner->user_cmd_handler.comment;
 	new->qmark = inner->user_cmd_handler.qmark;
 	new->expand = inner->user_cmd_handler.expand;
 	new->min_args = inner->user_cmd_handler.min_args;
@@ -976,9 +1055,9 @@ get_user_cmd_name(const char cmd[], char buf[], size_t buf_len)
 	const char *t;
 	size_t len;
 
-	t = skip_non_whitespace(cmd);
+	t = vle_cmds_past_arg(cmd);
 
-	len = MIN(t - cmd, buf_len);
+	len = MIN((size_t)(t - cmd), buf_len);
 	strncpy(buf, cmd, len);
 	buf[len] = '\0';
 	return t;
@@ -1050,12 +1129,21 @@ get_last_argument(const char cmd[], size_t *len)
 {
 	int argc;
 	char **argv;
+	int (*argvp)[2];
 	int last_start = 0;
 	int last_end = 0;
 
-	argv = dispatch_line(cmd, &argc, ' ', 0, 1, NULL, &last_start, &last_end);
+	argv = dispatch_line(cmd, &argc, ' ', 0, 1, 0, NULL, &argvp);
+
+	if(argc > 0)
+	{
+		last_start = argvp[argc - 1][0];
+		last_end = argvp[argc - 1][1];
+	}
+
 	*len = last_end - last_start;
 	free_string_array(argv, argc);
+	free(argvp);
 	return (char *)cmd + last_start;
 }
 
@@ -1064,23 +1152,22 @@ get_last_argument(const char cmd[], size_t *len)
  * unmatched quotes and to zero on all other errors). */
 TSTATIC char **
 dispatch_line(const char args[], int *count, char sep, int regexp, int quotes,
-		int *last_pos, int *last_begin, int *last_end)
+		int comments, int *last_pos, int (**positions)[2])
 {
 	char *cmdstr;
 	int len;
 	int i;
 	int st;
 	const char *args_beg;
-	char** params;
+	char **params;
+	int (*argvp)[2] = NULL;
+	DA_INSTANCE(argvp);
 
 	enum { BEGIN, NO_QUOTING, S_QUOTING, D_QUOTING, R_QUOTING, ARG, QARG } state;
 
 	if(last_pos != NULL)
 		*last_pos = 0;
-	if(last_begin != NULL)
-		*last_begin = 0;
-	if(last_end != NULL)
-		*last_end = 0;
+	*positions = NULL;
 
 	*count = 0;
 	params = NULL;
@@ -1088,7 +1175,7 @@ dispatch_line(const char args[], int *count, char sep, int regexp, int quotes,
 	args_beg = args;
 	if(sep == ' ')
 	{
-		args = skip_whitespace(args);
+		args = vle_cmds_at_arg(args);
 	}
 	cmdstr = strdup(args);
 	len = strlen(cmdstr);
@@ -1103,7 +1190,8 @@ dispatch_line(const char args[], int *count, char sep, int regexp, int quotes,
 					st = i + 1;
 					state = S_QUOTING;
 				}
-				else if(sep == ' ' && cmdstr[i] == '"' && quotes)
+				else if(cmdstr[i] == '"' && ((sep == ' ' && quotes) ||
+							(comments && strchr(&cmdstr[i + 1], '"') == NULL)))
 				{
 					st = i + 1;
 					state = D_QUOTING;
@@ -1117,15 +1205,26 @@ dispatch_line(const char args[], int *count, char sep, int regexp, int quotes,
 				{
 					st = i;
 					state = NO_QUOTING;
+
+					/* Skip escaped character.  If not and it's a separator, beginning of
+					 * the argument will be skipped. */
+					if(cmdstr[i] == '\\' && cmdstr[i + 1] != '\0')
+					{
+						++i;
+					}
 				}
 				else if(sep != ' ' && i > 0 && is_separator(cmdstr[i - 1], sep))
 				{
 					st = i--;
 					state = NO_QUOTING;
 				}
-				if(state != BEGIN && cmdstr[i] != '\0' && last_begin != NULL)
+				if(state != BEGIN && cmdstr[i] != '\0')
 				{
-					*last_begin = i;
+					if(DA_EXTEND(argvp) != NULL)
+					{
+						DA_COMMIT(argvp);
+						argvp[DA_SIZE(argvp) - 1U][0] = i;
+					}
 				}
 				break;
 			case NO_QUOTING:
@@ -1173,15 +1272,21 @@ dispatch_line(const char args[], int *count, char sep, int regexp, int quotes,
 			case ARG:
 			case QARG:
 				assert(0 && "Dispatch line state machine is broken");
+				break;
 		}
 		if(state == ARG || state == QARG)
 		{
+			/* Found another argument. */
+
+			const int end = (args - args_beg) + ((state == ARG) ? i : (i + 1));
 			char *last_arg;
 			const char c = cmdstr[i];
-			/* found another argument */
 			cmdstr[i] = '\0';
-			if(last_end != NULL)
-				*last_end = (args - args_beg) + ((state == ARG) ? i : (i + 1));
+
+			if(DA_SIZE(argvp) != 0U)
+			{
+				argvp[DA_SIZE(argvp) - 1U][1] = end;
+			}
 
 			*count = add_to_string_array(&params, *count, 1, &cmdstr[st]);
 			if(*count == 0)
@@ -1202,13 +1307,26 @@ dispatch_line(const char args[], int *count, char sep, int regexp, int quotes,
 		}
 	}
 
+	if(comments && state == D_QUOTING && strchr(&cmdstr[st], '"') == NULL)
+	{
+		state = BEGIN;
+		--st;
+		if(DA_SIZE(argvp) != 0U)
+		{
+			DA_REMOVE(argvp, &argvp[DA_SIZE(argvp) - 1U]);
+		}
+	}
+
 	free(cmdstr);
 
-	if(*count == 0 || (state != BEGIN && state != NO_QUOTING) ||
+	if(*count == 0 || (size_t)*count != DA_SIZE(argvp) ||
+			(state != BEGIN && state != NO_QUOTING) ||
 			put_into_string_array(&params, *count, NULL) != *count + 1)
 	{
+		free(argvp);
 		free_string_array(params, *count);
-		*count = (state == S_QUOTING || state == D_QUOTING) ? -1 : 0;
+		*count = (state == S_QUOTING || state == D_QUOTING || state == R_QUOTING)
+		       ? -1 : 0;
 		return NULL;
 	}
 
@@ -1217,47 +1335,21 @@ dispatch_line(const char args[], int *count, char sep, int regexp, int quotes,
 		*last_pos = (args - args_beg) + st;
 	}
 
+	*positions = argvp;
 	return params;
-}
-
-/* Checks whether character is command separator.  Special case is space as a
- * separator, which means that any whitespace can be used as separators.
- * Returns non-zero if c is counted to be a separator, otherwise zero is
- * returned. */
-static int
-is_separator(char c, char sep)
-{
-	return (sep == ' ') ? isspace(c) : (c == sep);
-}
-
-TSTATIC void
-unescape(char s[], int regexp)
-{
-	char *p;
-
-	p = s;
-	while(s[0] != '\0')
-	{
-		if(s[0] == '\\' && (!regexp || s[1] == '/'))
-			s++;
-		*p++ = s[0];
-		if(s[0] != '\0')
-		{
-			s++;
-		}
-	}
-	*p = '\0';
 }
 
 char **
 list_udf(void)
 {
-	char **list;
 	char **p;
 	cmd_t *cur;
 
-	if((list = malloc(sizeof(*list)*(inner->udf_count*2 + 1))) == NULL)
+	char **const list = reallocarray(NULL, inner->udf_count*2 + 1, sizeof(*list));
+	if(list == NULL)
+	{
 		return NULL;
+	}
 
 	p = list;
 
@@ -1317,5 +1409,43 @@ list_udf_content(const char beginning[])
 	return content;
 }
 
+char *
+vle_cmds_past_arg(const char args[])
+{
+	while(!is_separator(*args, ' ') && *args != '\0')
+	{
+		++args;
+	}
+	return (char *)args;
+}
+
+char *
+vle_cmds_at_arg(const char args[])
+{
+	while(is_separator(*args, ' '))
+	{
+		++args;
+	}
+	return (char *)args;
+}
+
+char *
+vle_cmds_next_arg(const char args[])
+{
+	args = vle_cmds_past_arg(args);
+	return vle_cmds_at_arg(args);
+}
+
+/* Checks whether character is command separator.  Special case is space as a
+ * separator, which means that any reasonable whitespace can be used as
+ * separators (we don't won't to treat line feeds or similar characters as
+ * separators to allow their appearance as part of arguments).  Returns non-zero
+ * if c is counted to be a separator, otherwise zero is returned. */
+static int
+is_separator(char c, char sep)
+{
+	return (sep == ' ') ? (c == ' ' || c == '\t') : (c == sep);
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

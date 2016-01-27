@@ -24,10 +24,19 @@
 #include "../cfg/config.h"
 #include "../cfg/hist.h"
 #include "../modes/menu.h"
+#include "../ui/ui.h"
 #include "../utils/string_array.h"
-#include "../commands.h"
-#include "../ui.h"
+#include "../cmd_core.h"
 #include "menus.h"
+
+enum
+{
+	CMDHISTORY_MENU,
+	FSEARCHHISTORY_MENU,
+	BSEARCHHISTORY_MENU,
+	PROMPTHISTORY_MENU,
+	FILTERHISTORY_MENU,
+};
 
 static int show_history(FileView *view, int type, hist_t *hist,
 		const char title[]);
@@ -37,35 +46,35 @@ int
 show_cmdhistory_menu(FileView *view)
 {
 	return show_history(view, CMDHISTORY_MENU, &cfg.cmd_hist,
-			" Command Line History ");
+			"Command Line History");
 }
 
 int
 show_fsearchhistory_menu(FileView *view)
 {
 	return show_history(view, FSEARCHHISTORY_MENU, &cfg.search_hist,
-			" Search History ");
+			"Search History");
 }
 
 int
 show_bsearchhistory_menu(FileView *view)
 {
 	return show_history(view, BSEARCHHISTORY_MENU, &cfg.search_hist,
-			" Search History ");
+			"Search History");
 }
 
 int
 show_prompthistory_menu(FileView *view)
 {
 	return show_history(view, PROMPTHISTORY_MENU, &cfg.prompt_hist,
-			" Prompt History ");
+			"Prompt History");
 }
 
 int
 show_filterhistory_menu(FileView *view)
 {
 	return show_history(view, FILTERHISTORY_MENU, &cfg.filter_hist,
-			" Filter History ");
+			"Filter History");
 }
 
 /* Returns non-zero if status bar message should be saved. */
@@ -75,9 +84,9 @@ show_history(FileView *view, int type, hist_t *hist, const char title[])
 	int i;
 	static menu_info m;
 
-	init_menu_info(&m, type, strdup("History disabled or empty"));
-	m.title = strdup(title);
+	init_menu_info(&m, strdup(title), strdup("History disabled or empty"));
 	m.execute_handler = &execute_history_cb;
+	m.extra_data = type;
 
 	for(i = 0; i <= hist->pos; i++)
 	{
@@ -90,19 +99,19 @@ show_history(FileView *view, int type, hist_t *hist, const char title[])
 static int
 execute_history_cb(FileView *view, menu_info *m)
 {
-	switch(m->type)
+	switch(m->extra_data)
 	{
 		case CMDHISTORY_MENU:
-			save_command_history(m->items[m->pos]);
-			exec_commands(m->items[m->pos], view, GET_COMMAND);
+			cfg_save_command_history(m->items[m->pos]);
+			exec_commands(m->items[m->pos], view, CIT_COMMAND);
 			break;
 		case FSEARCHHISTORY_MENU:
-			save_search_history(m->items[m->pos]);
-			exec_commands(m->items[m->pos], view, GET_FSEARCH_PATTERN);
+			cfg_save_search_history(m->items[m->pos]);
+			exec_commands(m->items[m->pos], view, CIT_FSEARCH_PATTERN);
 			break;
 		case BSEARCHHISTORY_MENU:
-			save_search_history(m->items[m->pos]);
-			exec_commands(m->items[m->pos], view, GET_BSEARCH_PATTERN);
+			cfg_save_search_history(m->items[m->pos]);
+			exec_commands(m->items[m->pos], view, CIT_BSEARCH_PATTERN);
 			break;
 	}
 
@@ -110,4 +119,4 @@ execute_history_cb(FileView *view, menu_info *m)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

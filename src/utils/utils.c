@@ -23,57 +23,109 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <winioctl.h>
+
+#include "utf8.h"
 #endif
 
-#include <regex.h>
-
-#include <unistd.h> /* chdir() */
+#include <sys/types.h> /* pid_t */
+#include <unistd.h>
 
 #include <ctype.h> /* isalnum() isalpha() */
+#include <errno.h> /* errno */
 #include <stddef.h> /* size_t */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* free() malloc() */
-#include <string.h> /* strdup() strchr() strlen() strpbrk() */
+#include <string.h> /* strdup() strchr() strlen() strpbrk() strtol() */
 #include <wchar.h> /* wcwidth() */
 
 #include "../cfg/config.h"
-#include "../fuse.h"
+#include "../compat/fs_limits.h"
+#include "../compat/os.h"
+#include "../engine/keys.h"
+#include "../int/fuse.h"
+#include "../modes/dialogs/msg_dialog.h"
+#include "../ui/cancellation.h"
+#include "../background.h"
+#include "../registers.h"
+#include "../status.h"
 #include "env.h"
+#include "file_streams.h"
 #include "fs.h"
-#include "fs_limits.h"
 #include "log.h"
 #include "macros.h"
 #include "path.h"
 #include "str.h"
 
 #ifdef _WIN32
-
 static void unquote(char quoted[]);
-
 #endif
+static int is_line_spec(const char str[]);
 
 int
 vifm_system(char command[])
 {
 #ifdef _WIN32
-	system("cls");
+	/* The check is primarily for tests, otherwise screen is reset. */
+	if(curr_stats.load_stage != 0)
+	{
+		system("cls");
+	}
 #endif
 	LOG_INFO_MSG("Shell command: %s", command);
 	return run_in_shell_no_cls(command);
 }
 
 int
+process_cmd_output(const char descr[], const char cmd[], int user_sh,
+		cmd_output_handler handler, void *arg)
+{
+	FILE *file, *err;
+	char *line;
+	pid_t pid;
+
+	LOG_INFO_MSG("Capturing output of the command: %s", cmd);
+
+	pid = background_and_capture((char *)cmd, user_sh, &file, &err);
+	if(pid == (pid_t)-1)
+	{
+		return 1;
+	}
+
+	show_progress("", 0);
+
+	ui_cancellation_reset();
+	ui_cancellation_enable();
+
+	wait_for_data_from(pid, file, 0);
+
+	line = NULL;
+	while((line = read_line(file, line)) != NULL)
+	{
+		show_progress(descr, 1000);
+		handler(line, arg);
+		wait_for_data_from(pid, file, 0);
+	}
+
+	ui_cancellation_disable();
+
+	fclose(file);
+	show_errors_from_file(err, descr);
+
+	return 0;
+}
+
+int
 vifm_chdir(const char path[])
 {
 	char curr_path[PATH_MAX];
-	if(getcwd(curr_path, sizeof(curr_path)) == curr_path)
+	if(get_cwd(curr_path, sizeof(curr_path)) == curr_path)
 	{
 		if(stroscmp(curr_path, path) == 0)
 		{
 			return 0;
 		}
 	}
-	return chdir(path);
+	return os_chdir(path);
 }
 
 char *
@@ -99,8 +151,11 @@ expand_envvars(const char str[], int escape_vals)
 			char *q = var_name;
 			const char *var_value;
 
-			while((isalnum(*p) || *p == '_') && q - var_name < sizeof(var_name) - 1)
+			while((isalnum(*p) || *p == '_') &&
+					(size_t)(q - var_name) < sizeof(var_name) - 1)
+			{
 				*q++ = *p++;
+			}
 			*q = '\0';
 
 			var_value = env_get(var_name);
@@ -109,7 +164,7 @@ expand_envvars(const char str[], int escape_vals)
 				char *escaped_var_value = NULL;
 				if(escape_vals)
 				{
-					escaped_var_value = escape_filename(var_value, 1);
+					escaped_var_value = shell_like_escape(var_value, 1);
 					var_value = escaped_var_value;
 				}
 
@@ -183,40 +238,6 @@ friendly_size_notation(uint64_t num, int str_size, char *str)
 	return u > 0;
 }
 
-int
-get_regexp_cflags(const char pattern[])
-{
-	int result = REG_EXTENDED;
-	if(regexp_should_ignore_case(pattern))
-	{
-		result |= REG_ICASE;
-	}
-	return result;
-}
-
-int
-regexp_should_ignore_case(const char pattern[])
-{
-	int ignore_case = cfg.ignore_case;
-	if(cfg.ignore_case && cfg.smart_case)
-	{
-		if(has_uppercase_letters(pattern))
-		{
-			ignore_case = 0;
-		}
-	}
-	return ignore_case;
-}
-
-const char *
-get_regexp_error(int err, regex_t *re)
-{
-	static char buf[360];
-
-	regerror(err, re, buf, sizeof(buf));
-	return buf;
-}
-
 const char *
 enclose_in_dquotes(const char str[])
 {
@@ -254,7 +275,7 @@ make_name_unique(const char filename[])
 #endif
 	i = 0;
 
-	while(path_exists(unique))
+	while(path_exists(unique, DEREF))
 	{
 		sprintf(unique + len - 2, "%d", ++i);
 	}
@@ -292,7 +313,7 @@ extract_cmd_name(const char line[], int raw, size_t buf_len, char buf[])
 		result++;
 	}
 #endif
-	snprintf(buf, MIN(result - line + 1, buf_len), "%s", line);
+	copy_str(buf, MIN((size_t)(result - line + 1), buf_len), line);
 #ifdef _WIN32
 	if(!raw && left_quote && right_quote)
 	{
@@ -301,7 +322,7 @@ extract_cmd_name(const char line[], int raw, size_t buf_len, char buf[])
 #endif
 	if(!raw)
 	{
-		remove_mount_prefixes(buf);
+		fuse_strip_mount_metadata(buf);
 	}
 	result = skip_whitespace(result);
 
@@ -330,10 +351,18 @@ vifm_wcwidth(wchar_t wc)
 	{
 		return ((size_t)wc < (size_t)L' ') ? 2 : 1;
 	}
-	else
+	return width;
+}
+
+int
+vifm_wcswidth(const wchar_t str[], size_t n)
+{
+	int width = 0;
+	while(*str != L'\0' && n--)
 	{
-		return width;
+		width += vifm_wcwidth(*str++);
 	}
+	return width;
 }
 
 char *
@@ -411,6 +440,23 @@ escape_for_dquotes(const char string[], size_t offset)
 }
 
 void
+expand_percent_escaping(char s[])
+{
+	char *p;
+
+	p = s;
+	while(s[0] != '\0')
+	{
+		if(s[0] == '%' && s[1] == '%')
+		{
+			++s;
+		}
+		*p++ = *s++;
+	}
+	*p = '\0';
+}
+
+void
 expand_squotes_escaping(char s[])
 {
 	char *p;
@@ -477,5 +523,108 @@ expand_dquotes_escaping(char s[])
 	*p = '\0';
 }
 
+int
+def_reg(int reg)
+{
+	return (reg == NO_REG_GIVEN) ? DEFAULT_REG_NAME : reg;
+}
+
+int
+def_count(int count)
+{
+	return (count == NO_COUNT_GIVEN) ? 1 : count;
+}
+
+char *
+parse_file_spec(const char spec[], int *line_num)
+{
+	char *path_buf;
+	const char *colon;
+	const size_t bufs_len = 2 + strlen(spec) + 1 + 1;
+
+	path_buf = malloc(bufs_len);
+	if(path_buf == NULL)
+	{
+		return NULL;
+	}
+
+	if(is_path_absolute(spec) || spec[0] == '~')
+	{
+		path_buf[0] = '\0';
+	}
+	else
+	{
+		copy_str(path_buf, bufs_len, "./");
+	}
+
+#ifdef _WIN32
+	colon = strchr(spec + (is_path_absolute(spec) ? 2 : 0), ':');
+	if(colon != NULL && !is_line_spec(colon + 1))
+	{
+		colon = NULL;
+	}
+#else
+	colon = strchr(spec, ':');
+	while(colon != NULL)
+	{
+		if(is_line_spec(colon + 1))
+		{
+			char path[bufs_len];
+			strcpy(path, path_buf);
+			strncat(path, spec, colon - spec);
+			if(path_exists(path, NODEREF))
+			{
+				break;
+			}
+		}
+
+		colon = strchr(colon + 1, ':');
+	}
+#endif
+
+	if(colon != NULL)
+	{
+		strncat(path_buf, spec, colon - spec);
+		*line_num = atoi(colon + 1);
+	}
+	else
+	{
+		strcat(path_buf, spec);
+		*line_num = 1;
+
+		while(!path_exists(path_buf, NODEREF) && strchr(path_buf, ':') != NULL)
+		{
+			break_atr(path_buf, ':');
+		}
+	}
+
+	chomp(path_buf);
+
+#ifdef _WIN32
+	to_forward_slash(path_buf);
+#endif
+
+	return replace_tilde(path_buf);
+}
+
+/* Checks whether str points to a valid line number.  Returns non-zero if so,
+ * otherwise zero is returned. */
+static int
+is_line_spec(const char str[])
+{
+	char *endptr;
+	errno = 0;
+	(void)strtol(str, &endptr, 10);
+	return (endptr != str && errno == 0 && *endptr == ':');
+}
+
+int
+is_graphics_viewer(const char viewer[])
+{
+	/* %pw and %ph can be useful for text output, but %px and %py are useful
+	 * for graphics and basically must have both. */
+	return (strstr(viewer, "%px") != NULL && strstr(viewer, "%py") != NULL);
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

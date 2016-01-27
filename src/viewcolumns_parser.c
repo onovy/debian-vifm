@@ -18,38 +18,38 @@
 
 #include "viewcolumns_parser.h"
 
-#include "utils/macros.h"
-#include "column_view.h"
-
 #include <ctype.h> /* isdigit() */
 #include <stddef.h> /* NULL */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* free() */
 #include <string.h> /* strchr() strdup() strtok_r() */
 
-#ifdef _WIN32
-#include "utils/str.h" /* strtok_r() */
-#endif
+#include "compat/reallocarray.h"
+#include "ui/column_view.h"
+#include "utils/macros.h"
+#include "utils/str.h"
 
-static column_info_t * parse_all(map_name_cb cn, const char *str, size_t *len);
-static int parse(map_name_cb cn, const char *str, column_info_t *info);
+static column_info_t * parse_all(map_name_cb cn, const char str[], size_t *len,
+		void *arg);
+static int parse(map_name_cb cn, const char str[], column_info_t *info,
+		void *arg);
 static void load_defaults(column_info_t *info);
-static const char * parse_align(const char *str, column_info_t *info);
-static const char * parse_width(const char *str, column_info_t *info);
-static const char * parse_name(map_name_cb cn, const char *str,
-		column_info_t *info);
-static const char * parse_cropping(const char *str, column_info_t *info);
+static const char * parse_align(const char str[], column_info_t *info);
+static const char * parse_width(const char str[], column_info_t *info);
+static const char * parse_name(map_name_cb cn, const char str[],
+		column_info_t *info, void *arg);
+static const char * parse_cropping(const char str[], column_info_t *info);
 static int extend_column_list(column_info_t **list, size_t *len);
 static void add_all(columns_t columns, add_column_cb ac,
 		const column_info_t *list, size_t len);
 
 int
 parse_columns(columns_t columns, add_column_cb ac, map_name_cb cn,
-		const char *str)
+		const char str[], void *arg)
 {
 	column_info_t *list;
 	size_t list_len;
-	if((list = parse_all(cn, str, &list_len)) != NULL)
+	if((list = parse_all(cn, str, &list_len, arg)) != NULL)
 	{
 		add_all(columns, ac, list, list_len);
 		free(list);
@@ -58,9 +58,9 @@ parse_columns(columns_t columns, add_column_cb ac, map_name_cb cn,
 	return 1;
 }
 
-/* Parses format string. Returns list of size *len or NULL on error. */
+/* Parses format string.  Returns list of size *len or NULL on error. */
 static column_info_t *
-parse_all(map_name_cb cn, const char *str, size_t *len)
+parse_all(map_name_cb cn, const char str[], size_t *len, void *arg)
 {
 	char *saveptr;
 	char *str_copy;
@@ -75,10 +75,11 @@ parse_all(map_name_cb cn, const char *str, size_t *len)
 		return NULL;
 	}
 
+	saveptr = NULL;
 	for(token = str_copy; (token = strtok_r(token, ",", &saveptr)); token = NULL)
 	{
 		column_info_t info;
-		if(parse(cn, token, &info) != 0)
+		if(parse(cn, token, &info, arg) != 0)
 		{
 			break;
 		}
@@ -105,16 +106,16 @@ parse_all(map_name_cb cn, const char *str, size_t *len)
 	}
 }
 
-/* Parses single column description. Returns zero on successful parsing. */
+/* Parses single column description.  Returns zero on successful parsing. */
 static int
-parse(map_name_cb cn, const char *str, column_info_t *info)
+parse(map_name_cb cn, const char str[], column_info_t *info, void *arg)
 {
 	load_defaults(info);
 	if((str = parse_align(str, info)) != NULL)
 	{
 		if((str = parse_width(str, info)) != NULL)
 		{
-			if((str = parse_name(cn, str, info)) != NULL)
+			if((str = parse_name(cn, str, info, arg)) != NULL)
 			{
 				str = parse_cropping(str, info);
 			}
@@ -138,12 +139,17 @@ load_defaults(column_info_t *info)
 /* Parses alignment type part of format string. Returns pointer to next char to
  * parse or NULL on error. */
 static const char *
-parse_align(const char *str, column_info_t *info)
+parse_align(const char str[], column_info_t *info)
 {
 	if(*str == '-')
 	{
 		info->align = AT_LEFT;
-		str++;
+		++str;
+	}
+	else if(*str == '*')
+	{
+		info->align = AT_DYN;
+		++str;
 	}
 	return str;
 }
@@ -151,7 +157,7 @@ parse_align(const char *str, column_info_t *info)
 /* Parses width part of format string. Returns pointer to next char to parse or
  * NULL on error. */
 static const char *
-parse_width(const char *str, column_info_t *info)
+parse_width(const char str[], column_info_t *info)
 {
 	if(isdigit(*str))
 	{
@@ -195,7 +201,7 @@ parse_width(const char *str, column_info_t *info)
 /* Parses name part of format string. Returns pointer to next char to parse or
  * NULL on error. */
 static const char *
-parse_name(map_name_cb cn, const char *str, column_info_t *info)
+parse_name(map_name_cb cn, const char str[], column_info_t *info, void *arg)
 {
 	if(*str == '{')
 	{
@@ -203,9 +209,10 @@ parse_name(map_name_cb cn, const char *str, column_info_t *info)
 		if(closing_brace != NULL)
 		{
 			char name[16];
-			size_t len = MIN(sizeof(name), closing_brace - (str + 1) + 1);
-			(void)snprintf(name, len, "%s", str + 1);
-			if((info->column_id = cn(name)) >= 0)
+			const size_t len = MIN(sizeof(name),
+					(size_t)(closing_brace - (str + 1) + 1));
+			(void)copy_str(name, len, str + 1);
+			if((info->column_id = cn(name, arg)) >= 0)
 			{
 				return closing_brace + 1;
 			}
@@ -217,7 +224,7 @@ parse_name(map_name_cb cn, const char *str, column_info_t *info)
 /* Parses cropping part of format string. Returns pointer to next char to parse
  * or NULL on error. */
 static const char *
-parse_cropping(const char *str, column_info_t *info)
+parse_cropping(const char str[], column_info_t *info)
 {
 	int dot_count = strspn(str, ".");
 	switch(dot_count)
@@ -245,7 +252,7 @@ static int
 extend_column_list(column_info_t **list, size_t *len)
 {
 	static column_info_t *mem_ptr;
-	mem_ptr = realloc(*list, (*len + 1)*sizeof(column_info_t));
+	mem_ptr = reallocarray(*list, *len + 1, sizeof(column_info_t));
 	if(mem_ptr == NULL)
 	{
 		return 1;
@@ -268,4 +275,4 @@ add_all(columns_t columns, add_column_cb ac, const column_info_t *list,
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

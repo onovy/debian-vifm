@@ -20,30 +20,19 @@
 #ifndef VIFM__UTILS__STR_H__
 #define VIFM__UTILS__STR_H__
 
+#include <inttypes.h> /* PRIu64 */
 #include <stddef.h> /* size_t wchar_t */
 
-#if defined(_WIN64)
-#define WPRINTF_MBSTR L"s"
-#define WPRINTF_WSTR L"ls"
-#define PRINTF_PID_T "%llu"
-#define PRINTF_SIZE_T "%llu"
-#define TIME_T "%lld"
-#elif defined(_WIN32)
+#include "test_helpers.h"
+
+#if defined(_WIN32) && !defined(_WIN64)
 #define WPRINTF_MBSTR L"S"
 #define WPRINTF_WSTR L"s"
-#define PRINTF_PID_T "%d"
-#define PRINTF_SIZE_T "%u"
-#define TIME_T "%ld"
+#define PRINTF_ULL PRIu64
 #else
 #define WPRINTF_MBSTR L"s"
 #define WPRINTF_WSTR L"ls"
-#define PRINTF_PID_T "%d"
-#define TIME_T "%ld"
-#if defined(_LP64)
-#define PRINTF_SIZE_T "%lu"
-#else
-#define PRINTF_SIZE_T "%u"
-#endif
+#define PRINTF_ULL "llu"
 #endif
 
 /* Various string functions. */
@@ -56,13 +45,18 @@
 /* Removes at most one trailing newline character. */
 void chomp(char str[]);
 
-/* Removes all trailing whitespace. Returns new length of the string. */
-size_t trim_right(char *text);
-
 /* Converts multibyte string to a wide string.  On success returns newly
  * allocated string, which should be freed by the caller, otherwise NULL is
  * returned. */
 wchar_t * to_wide(const char s[]);
+
+/* Same as to_wide() except that it never fails due to conversion errors and
+ * returns something, thus returns NULL only on memory allocation failure. */
+wchar_t * to_wide_force(const char s[]);
+
+/* Calculates length of multibyte string after converting it to wide string.
+ * Returns the length. */
+size_t wide_len(const char s[]);
 
 /* Duplicates a wide-character string.  Returns pointer to new string or NULL on
  * error. */
@@ -72,18 +66,40 @@ wchar_t * vifm_wcsdup(const wchar_t ws[]);
  * so, otherwise zero is returned. */
 int starts_with(const char str[], const char prefix[]);
 
+/* Checks whether *str starts with the given prefix and advances *str to point
+ * past the prefix.  Returns non-zero if prefix was skipped, otherwise zero is
+ * returned. */
+int skip_prefix(const char **str, const char prefix[]);
+
+/* Checks whether str ends with the given suffix and removes it if found.
+ * Returns non-zero if it's so, otherwise zero is returned. */
+int cut_suffix(char str[], const char suffix[]);
+
 /* Checks whether str starts with the given prefix of specified length.  Returns
  * non-zero if it's so, otherwise zero is returned. */
 int starts_withn(const char str[], const char prefix[], size_t prefix_len);
 
-int ends_with(const char *str, const char *suffix);
+/* Checks whether str ends with the given suffix.  Returns non-zero if it's so,
+ * otherwise zero is returned. */
+int ends_with(const char str[], const char suffix[]);
+
+/* Checks whether the string starts and ends with specified mark characters.
+ * Substring can't be empty.  The string can't consist of single mark character
+ * when they are equal.  Returns non-zero if so, otherwise zero is returned. */
+int surrounded_with(const char str[], char left, char right);
 
 char * to_multibyte(const wchar_t *s);
 
-void strtolower(char *s);
+/* Converts characters of the string to lower case while they fit in the buffer.
+ * Returns zero on success or non-zero if output buffer is too small. */
+int str_to_lower(const char str[], char buf[], size_t buf_len);
+
+/* Converts characters of the string to upper case while they fit in the buffer.
+ * Returns zero on success or non-zero if output buffer is too small. */
+int str_to_upper(const char str[], char buf[], size_t buf_len);
 
 /* Converts all characters of the string s to their lowercase equivalents. */
-void wcstolower(wchar_t s[]);
+void wcstolower(wchar_t str[]);
 
 /* Replaces first occurrence of the c character in the str with '\0'.  Nothing
  * is done if the character isn't found. */
@@ -93,10 +109,9 @@ void break_at(char str[], char c);
  * Nothing is done if the character isn't found. */
 void break_atr(char str[], char c);
 
-char * skip_non_whitespace(const char *str);
-
-/* Skips consecutive whitespace characters. */
-char * skip_whitespace(const char *str);
+/* Skips consecutive whitespace characters.  Returns pointer to the next
+ * character in the str. */
+char * skip_whitespace(const char str[]);
 
 /* Checks if the c is one of characters in the list string. c cannot be '\0'. */
 int char_is_one_of(const char *list, char c);
@@ -124,8 +139,55 @@ char * after_first(const char str[], char c);
  * failed. */
 int replace_string(char **str, const char with[]);
 
-/* Adds a character to the end of a string. */
-char * strcatch(char *str, char c);
+/* Same as replace_string(), but also allows "to" to be NULL, in which case
+ * *str is freed and set to NULL. */
+int update_string(char **str, const char to[]);
+
+/* Adds a character to the end of the string.  Returns the str argument. */
+char * strcatch(char str[], char c);
+
+/* Prepends prefix to a string.  Might reallocate the string.  Updates *len
+ * appropriately.  Returns zero on success, otherwise non-zero is returned. */
+int strprepend(char **str, size_t *len, const char prefix[]);
+
+/* Appends single character to a string.  Might reallocate it.  Updates *len
+ * appropriately.  Returns zero on success, otherwise non-zero is returned. */
+int strappendch(char **str, size_t *len, char c);
+
+/* Appends suffix to a string.  Might reallocate the string.  Updates *len
+ * appropriately.  Returns zero on success, otherwise non-zero is returned. */
+int strappend(char **str, size_t *len, const char suffix[]);
+
+/* Appends single character to statically allocated string of current length
+ * *len which has size as its limit.  Updates *len appropriately.  Returns zero
+ * if string didn't overflow, otherwise non-zero is returned. */
+int sstrappendch(char str[], size_t *len, size_t size, char c);
+
+/* Appends suffix to statically allocated string of current length *len which
+ * has size as its limit.  Updates *len appropriately.  Returns zero if string
+ * didn't overflow, otherwise non-zero is returned. */
+int sstrappend(char str[], size_t *len, size_t size, const char suffix[]);
+
+/* Pads buffer pointed to by str to be at least of width "width + 1". */
+void stralign(char str[], size_t width, char pad, int left_align);
+
+/* Ensures that str is of width (in UTF-8 characters) less than or equal to
+ * max_width and is left aligned putting ellipsis on the right side if needed.
+ * Changes the string in place.  Returns the str unless max_width is zero in
+ * which case NULL is returned. */
+char * left_ellipsis(char str[], size_t max_width);
+
+/* Ensures that str is of width (in UTF-8 characters) less than or equal to
+ * max_width and is right aligned putting ellipsis on the left side if needed.
+ * Changes the string in place.  Returns the str unless max_width is zero in
+ * which case NULL is returned. */
+char * right_ellipsis(char str[], size_t max_width);
+
+/* "Breaks" single line it two parts (before and after "%=" separator), and
+ * re-formats it filling specified width by putting "left part", padded centre
+ * followed by "right part".  Frees the str.  Returns re-formatted string in
+ * newly allocated buffer. */
+char * break_in_two(char str[], size_t max);
 
 /* A wrapper of swprintf() functions to make its differences on various
  * platforms transparently in other parts of the program. */
@@ -138,9 +200,17 @@ const char * extract_part(const char str[], char separator, char part_buf[]);
 /* Skips all leading characters of the str which are equal to the c. */
 char * skip_char(const char str[], char c);
 
-/* Escapes chars symbols in the string.  Returns new string, caller should free
- * it. */
+/* Escapes chars symbols in the string with backslashes.  Returns new string,
+ * caller should free it. */
 char * escape_chars(const char string[], const char chars[]);
+
+/* Escapes chars symbols in the string using the with as escape code.  Returns
+ * new string, caller should free it. */
+char * escape_chars_with(const char string[], const char chars[], char with);
+
+/* Unescapes string in place (removes extra slashes).  regexp flag narrows set
+ * of unescaped characters to "/". */
+void unescape(char s[], int regexp);
 
 /* Returns non-zero if the string is NULL or empty. */
 int is_null_or_empty(const char string[]);
@@ -185,7 +255,7 @@ size_t copy_substr(char dst[], size_t dst_len, const char src[],
 		char terminator);
 
 /* Converts string into integer handling underflow and overflow.  Returns
- * converted number, which is INT_MIN/INT_MAX in case underflow/overflow is
+ * converted number, which is INT_MIN/INT_MAX in case of underflow/overflow
  * happened. */
 int str_to_int(const char str[]);
 
@@ -193,8 +263,7 @@ int str_to_int(const char str[]);
  * character. */
 void replace_char(char str[], char from, char to);
 
-/*
- * Splits string on a separator multiple times returning next part.  *state must
+/* Splits string on a separator multiple times returning next part.  *state must
  * be NULL for the first call.  Usage example:
  *   char *part = input, *state = NULL;
  *   while((part = split_and_get(part, ':', &state)) != NULL)
@@ -207,15 +276,33 @@ void replace_char(char str[], char from, char to);
  *   while((prefix = split_and_get(prefix, ':', &state)) != NULL)
  *   {
  *     process <prefix>;
- *   }
- */
+ *   } */
 char * split_and_get(char str[], char sep, char **state);
 
-#if defined(_WIN32) && !defined(strtok_r)
+/* Like split_and_get(), but works on comma-separated list with double commas
+ * signifying literal comma character. */
+char * split_and_get_dc(char str[], char **state);
+
+/* Counts lines in the text.  Considers wrapping around max_width column unless
+ * it's equal to INT_MAX. */
+int count_lines(const char text[], int max_width);
+
+#ifdef _WIN32
+
+/* Same as strstr(), but in case insensitive way. */
+char * strcasestr(const char haystack[], const char needle[]);
+
+#ifndef strtok_r
 #define strtok_r(str, delim, saveptr) (*(saveptr) = strtok((str), (delim)))
 #endif
+
+#endif
+
+TSTATIC_DEFS(
+	void squash_double_commas(char str[]);
+)
 
 #endif /* VIFM__UTILS__STR_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

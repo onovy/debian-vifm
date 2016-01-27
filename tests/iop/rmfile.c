@@ -1,45 +1,51 @@
-#include "seatest.h"
-
-#include <stdio.h> /* FILE fopen() fclose() */
+#include <stic.h>
 
 #include <unistd.h> /* F_OK access() rmdir() */
 
+#include "../../src/compat/os.h"
 #include "../../src/io/iop.h"
 #include "../../src/utils/fs.h"
+#include "../../src/utils/utils.h"
 
-static const char *const FILE_NAME = "file-to-remove";
-static const char *const DIRECTORY_NAME = "directory-to-remove";
+#include "utils.h"
 
-static void
-test_file_is_removed(void)
+#define DIRECTORY_NAME SANDBOX_PATH "/directory-to-remove"
+#define FILE_NAME SANDBOX_PATH "/file-to-remove"
+
+static int not_windows(void);
+
+TEST(file_is_removed)
 {
-	FILE *const f = fopen(FILE_NAME, "w");
-	fclose(f);
-	assert_int_equal(0, access(FILE_NAME, F_OK));
+	create_test_file(FILE_NAME);
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 		};
-		assert_int_equal(0, iop_rmfile(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(iop_rmfile(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access(FILE_NAME, F_OK));
+	assert_failure(access(FILE_NAME, F_OK));
 }
 
-static void
-test_directory_is_not_removed(void)
+TEST(directory_is_not_removed)
 {
-	make_dir(DIRECTORY_NAME, 0700);
+	os_mkdir(DIRECTORY_NAME, 0700);
 	assert_true(is_dir(DIRECTORY_NAME));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = DIRECTORY_NAME,
 		};
-		assert_false(iop_rmfile(&args) == 0);
+		ioe_errlst_init(&args.result.errors);
+
+		assert_failure(iop_rmfile(&args));
+
+		assert_true(args.result.errors.error_count != 0);
+		ioe_errlst_free(&args.result.errors);
 	}
 
 	assert_true(is_dir(DIRECTORY_NAME));
@@ -47,64 +53,54 @@ test_directory_is_not_removed(void)
 	rmdir(DIRECTORY_NAME);
 }
 
-#ifndef _WIN32
-
-static void
-test_symlink_is_removed_but_not_its_target(void)
+/* Creating symbolic links on Windows requires administrator rights. */
+TEST(symlink_is_removed_but_not_its_target, IF(not_windows))
 {
-	FILE *const f = fopen(FILE_NAME, "w");
-	fclose(f);
-	assert_int_equal(0, access(FILE_NAME, F_OK));
+	create_test_file(FILE_NAME);
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 			.arg2.target = "link",
 		};
-		assert_int_equal(0, iop_ln(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(iop_ln(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(0, access("link", F_OK));
+	assert_success(access("link", F_OK));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = "link",
 		};
-		assert_int_equal(0, iop_rmfile(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(iop_rmfile(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access("link", F_OK));
+	assert_failure(access("link", F_OK));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = FILE_NAME,
 		};
-		assert_int_equal(0, iop_rmfile(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(iop_rmfile(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access(FILE_NAME, F_OK));
+	assert_failure(access(FILE_NAME, F_OK));
 }
 
-#endif
-
-void
-rmfile_tests(void)
+static int
+not_windows(void)
 {
-	test_fixture_start();
-
-	run_test(test_file_is_removed);
-	run_test(test_directory_is_not_removed);
-
-#ifndef _WIN32
-	/* Creating symbolic links on Windows requires administrator rights. */
-	run_test(test_symlink_is_removed_but_not_its_target);
-#endif
-
-	test_fixture_end();
+	return get_env_type() != ET_WIN;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

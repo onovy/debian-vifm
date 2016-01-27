@@ -1,78 +1,67 @@
-#include "seatest.h"
-
-#include <stdio.h> /* FILE fopen() fclose() */
+#include <stic.h>
 
 #include <unistd.h> /* F_OK access() */
 
+#include "../../src/compat/os.h"
 #include "../../src/io/iop.h"
 #include "../../src/io/ior.h"
 #include "../../src/utils/fs.h"
 
-static const char *const FILE_NAME = "file-to-remove";
-static const char *const DIRECTORY_NAME = "directory-to-remove";
+#include "utils.h"
 
-static void
-test_empty_directory_is_removed(void)
+#define DIRECTORY_NAME SANDBOX_PATH "/directory-to-remove"
+#define FILE_NAME DIRECTORY_NAME "/file-to-remove"
+
+TEST(empty_directory_is_removed)
 {
-	make_dir(DIRECTORY_NAME, 0700);
+	os_mkdir(DIRECTORY_NAME, 0700);
 	assert_true(is_dir(DIRECTORY_NAME));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = DIRECTORY_NAME,
 		};
-		assert_int_equal(0, iop_rmdir(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(iop_rmdir(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access(DIRECTORY_NAME, F_OK));
+	assert_failure(access(DIRECTORY_NAME, F_OK));
 }
 
-static void
-test_non_empty_directory_is_not_removed(void)
+TEST(non_empty_directory_is_not_removed)
 {
-	make_dir(DIRECTORY_NAME, 0700);
+	os_mkdir(DIRECTORY_NAME, 0700);
 	assert_true(is_dir(DIRECTORY_NAME));
-
-	assert_int_equal(0, chdir(DIRECTORY_NAME));
-	{
-		FILE *const f = fopen(FILE_NAME, "w");
-		fclose(f);
-		assert_int_equal(0, access(FILE_NAME, F_OK));
-	}
-	assert_int_equal(0, chdir(".."));
+	create_test_file(FILE_NAME);
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = DIRECTORY_NAME,
 		};
-		assert_false(iop_rmdir(&args) == 0);
+		ioe_errlst_init(&args.result.errors);
+
+		assert_failure(iop_rmdir(&args));
+
+		assert_true(args.result.errors.error_count != 0);
+		ioe_errlst_free(&args.result.errors);
 	}
 
 	assert_true(is_dir(DIRECTORY_NAME));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.path = DIRECTORY_NAME,
 		};
-		assert_int_equal(0, ior_rm(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(ior_rm(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access(DIRECTORY_NAME, F_OK));
-}
-
-void
-rmdir_tests(void)
-{
-	test_fixture_start();
-
-	run_test(test_empty_directory_is_removed);
-	run_test(test_non_empty_directory_is_not_removed);
-
-	test_fixture_end();
+	assert_failure(access(DIRECTORY_NAME, F_OK));
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

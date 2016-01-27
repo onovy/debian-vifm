@@ -1,53 +1,69 @@
-/* UTF-8 isn't used on Windows yet. */
-#ifndef _WIN32
+#include <stic.h>
 
 #include <locale.h> /* setlocale() */
+#include <stddef.h> /* NULL size_t */
 #include <string.h>
-
-#include "seatest.h"
 
 #include "../../src/utils/utf8.h"
 #include "../../src/utils/utils.h"
-#include "../../src/column_view.h"
+#include "../../src/ui/column_view.h"
+
 #include "test.h"
+
+static void column_line_print(const void *data, int column_id, const char buf[],
+		size_t offset);
+static void column1_func(int id, const void *data, size_t buf_len, char buf[]);
+static void column2_func(int id, const void *data, size_t buf_len, char buf[]);
+static int locale_works(void);
 
 static const size_t MAX_WIDTH = 20;
 static char print_buffer[80 + 1];
 
-static void
-column_line_print(const void *data, int column_id, const char *buf,
-		size_t offset)
+static const char *col1_str;
+
+SETUP_ONCE()
 {
-	strncpy(print_buffer + get_normal_utf8_string_widthn(print_buffer, offset),
-			buf, strlen(buf));
+	(void)setlocale(LC_ALL, "");
+	if(!locale_works())
+	{
+		(void)setlocale(LC_ALL, "en_US.utf8");
+	}
 }
 
-static void
-column1_func(int id, const void *data, size_t buf_len, char *buf)
+SETUP()
 {
-	snprintf(buf, buf_len + 1, "%s", "师从螺丝刀йклмнопрстуфхцчшщьыъэюя");
+	print_next = &column_line_print;
+	col1_next = &column1_func;
+	col2_next = &column2_func;
+
+	col1_str = "师从螺丝刀йклмнопрстуфхцчшщьыъэюя";
 }
 
-static void
-column2_func(int id, const void *data, size_t buf_len, char *buf)
-{
-	snprintf(buf, buf_len + 1, "%s", "яюэъыьщшчцхфутсрпонмлкйизжёедгв推");
-}
-
-static void
-setup(void)
-{
-	print_next = column_line_print;
-	col1_next = column1_func;
-	col2_next = column2_func;
-}
-
-static void
-teardown(void)
+TEARDOWN()
 {
 	print_next = NULL;
 	col1_next = NULL;
 	col2_next = NULL;
+}
+
+static void
+column_line_print(const void *data, int column_id, const char buf[],
+		size_t offset)
+{
+	strncpy(print_buffer +
+			utf8_nstrsnlen(print_buffer, offset), buf, strlen(buf));
+}
+
+static void
+column1_func(int id, const void *data, size_t buf_len, char buf[])
+{
+	snprintf(buf, buf_len + 1, "%s", col1_str);
+}
+
+static void
+column2_func(int id, const void *data, size_t buf_len, char buf[])
+{
+	snprintf(buf, buf_len + 1, "%s", "яюэъыьщшчцхфутсрпонмлкйизжёедгв推");
 }
 
 static void
@@ -56,7 +72,7 @@ perform_test(column_info_t column_infos[], size_t count, size_t max_width)
 	size_t i;
 
 	columns_t cols = columns_create();
-	for(i = 0; i < count; i++)
+	for(i = 0; i < count; ++i)
 	{
 		columns_add_column(cols, column_infos[i]);
 	}
@@ -67,11 +83,9 @@ perform_test(column_info_t column_infos[], size_t count, size_t max_width)
 	columns_free(cols);
 }
 
-static void
-test_not_truncating_short_utf8_ok(void)
+TEST(not_truncating_short_utf8_ok, IF(locale_works))
 {
-	static column_info_t column_infos[1] =
-	{
+	static column_info_t column_infos[1] = {
 		{ .column_id = COL1_ID, .full_width = 33UL,    .text_width = 33UL,
 		  .align = AT_LEFT,     .sizing = ST_ABSOLUTE, .cropping = CT_TRUNCATE, },
 	};
@@ -82,11 +96,9 @@ test_not_truncating_short_utf8_ok(void)
 	assert_string_equal(expected, print_buffer);
 }
 
-static void
-test_donot_add_ellipsis_short_utf8_ok(void)
+TEST(donot_add_ellipsis_short_utf8_ok, IF(locale_works))
 {
-	static column_info_t column_infos[1] =
-	{
+	static column_info_t column_infos[1] = {
 		{ .column_id = COL1_ID, .full_width = 33UL,    .text_width = 33UL,
 		  .align = AT_LEFT,     .sizing = ST_ABSOLUTE, .cropping = CT_ELLIPSIS, },
 	};
@@ -97,11 +109,9 @@ test_donot_add_ellipsis_short_utf8_ok(void)
 	assert_string_equal(expected, print_buffer);
 }
 
-static void
-test_truncating_ok(void)
+TEST(truncating_ok, IF(locale_works))
 {
-	static column_info_t column_infos[2] =
-	{
+	static column_info_t column_infos[2] = {
 		{ .column_id = COL1_ID, .full_width = 10UL,    .text_width = 10UL,
 		  .align = AT_LEFT,     .sizing = ST_ABSOLUTE, .cropping = CT_TRUNCATE, },
 		{ .column_id = COL2_ID, .full_width = 10UL,    .text_width = 10UL,
@@ -114,11 +124,9 @@ test_truncating_ok(void)
 	assert_string_equal(expected, print_buffer);
 }
 
-static void
-test_none_cropping_allows_for_correct_gaps(void)
+TEST(none_cropping_allows_for_correct_gaps, IF(locale_works))
 {
-	static column_info_t column_infos[2] =
-	{
+	static column_info_t column_infos[2] = {
 		{ .column_id = COL1_ID, .full_width = 10UL,    .text_width = 10UL,
 		  .align = AT_LEFT,     .sizing = ST_AUTO,     .cropping = CT_NONE, },
 		{ .column_id = COL2_ID, .full_width = 4UL,     .text_width = 4UL,
@@ -131,11 +139,9 @@ test_none_cropping_allows_for_correct_gaps(void)
 	assert_string_equal(expected, print_buffer);
 }
 
-static void
-test_add_ellipsis_ok(void)
+TEST(add_ellipsis_ok, IF(locale_works))
 {
-	static column_info_t column_infos[2] =
-	{
+	static column_info_t column_infos[2] = {
 		{ .column_id = COL1_ID, .full_width = 10UL,    .text_width = 10UL,
 		  .align = AT_LEFT,     .sizing = ST_ABSOLUTE, .cropping = CT_ELLIPSIS, },
 		{ .column_id = COL2_ID, .full_width = 10UL,    .text_width = 10UL,
@@ -148,11 +154,9 @@ test_add_ellipsis_ok(void)
 	assert_string_equal(expected, print_buffer);
 }
 
-static void
-test_filling(void)
+TEST(filling, IF(locale_works))
 {
-	static column_info_t column_infos[1] =
-	{
+	static column_info_t column_infos[1] = {
 		{ .column_id = COL1_ID, .full_width = 0UL, .text_width = 0UL,
 		  .align = AT_LEFT,     .sizing = ST_AUTO, .cropping = CT_NONE, },
 	};
@@ -169,11 +173,9 @@ test_filling(void)
 	assert_string_equal(expected, print_buffer);
 }
 
-static void
-test_right_filling(void)
+TEST(right_filling, IF(locale_works))
 {
-	static column_info_t column_infos[1] =
-	{
+	static column_info_t column_infos[1] = {
 		{ .column_id = COL2_ID, .full_width = 0UL, .text_width = 0UL,
 		  .align = AT_RIGHT,    .sizing = ST_AUTO, .cropping = CT_ELLIPSIS, },
 	};
@@ -190,43 +192,29 @@ test_right_filling(void)
 	assert_string_equal(expected, print_buffer);
 }
 
-void
-utf8_tests(void)
+TEST(wide_right_ellipsis_ok, IF(locale_works))
 {
-	test_fixture_start();
+	/* A gap might appear after removing several characters to insert ellipsis in
+	 * their place, make sure that it's filled with spaces to obtain requested
+	 * width. */
 
-	(void)setlocale(LC_ALL, "");
-	if(vifm_wcwidth(L'丝') != 2)
-	{
-		(void)setlocale(LC_ALL, "en_US.utf8");
-	}
+	static column_info_t column_infos[1] = {
+		{ .column_id = COL1_ID, .full_width = 0UL, .text_width = 0UL,
+		  .align = AT_RIGHT,    .sizing = ST_AUTO, .cropping = CT_ELLIPSIS, },
+	};
+	static const char expected[] = " ...螺丝刀师从螺丝刀";
 
-	fixture_setup(setup);
-	fixture_teardown(teardown);
+	col1_str = ",师从螺丝刀师从螺丝刀";
+	perform_test(column_infos, ARRAY_LEN(column_infos), MAX_WIDTH);
 
-	if(vifm_wcwidth(L'丝') == 2)
-	{
-		run_test(test_not_truncating_short_utf8_ok);
-		run_test(test_donot_add_ellipsis_short_utf8_ok);
-		run_test(test_truncating_ok);
-		run_test(test_none_cropping_allows_for_correct_gaps);
-		run_test(test_add_ellipsis_ok);
-		run_test(test_filling);
-		run_test(test_right_filling);
-	}
-
-	test_fixture_end();
+	assert_string_equal(expected, print_buffer);
 }
 
-#else
-
-void
-utf8_tests(void)
+static int
+locale_works(void)
 {
-	/* UTF-8 isn't used on Windows yet. */
+	return (vifm_wcwidth(L'丝') == 2);
 }
-
-#endif
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

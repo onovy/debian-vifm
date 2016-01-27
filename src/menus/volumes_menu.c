@@ -25,11 +25,11 @@
 #include <string.h> /* strdup() */
 
 #include "../modes/menu.h"
+#include "../ui/ui.h"
 #include "../utils/fs.h"
 #include "../utils/str.h"
 #include "../utils/string_array.h"
 #include "../filelist.h"
-#include "../ui.h"
 #include "menus.h"
 
 static int execute_volumes_cb(FileView *view, menu_info *m);
@@ -37,23 +37,21 @@ static int execute_volumes_cb(FileView *view, menu_info *m);
 int
 show_volumes_menu(FileView *view)
 {
-	TCHAR c;
-	TCHAR vol_name[MAX_PATH];
-	TCHAR file_buf[MAX_PATH];
+	char c;
+	char vol_name[MAX_PATH];
+	char file_buf[MAX_PATH];
 
 	static menu_info m;
-	init_menu_info(&m, VOLUMES_MENU, strdup("No volumes mounted"));
-	m.title = strdup(" Mounted Volumes ");
+	init_menu_info(&m, strdup("Mounted Volumes"), strdup("No volumes mounted"));
 	m.execute_handler = &execute_volumes_cb;
 
-	for(c = TEXT('a'); c < TEXT('z'); c++)
+	for(c = 'a'; c <= 'z'; ++c)
 	{
 		if(drive_exists(c))
 		{
-			TCHAR drive[] = TEXT("?:\\");
-			drive[0] = c;
-			if(GetVolumeInformation(drive, vol_name, MAX_PATH, NULL, NULL, NULL,
-					file_buf, MAX_PATH))
+			const char drive[] = { c, ':', '\\', '\0' };
+			if(GetVolumeInformationA(drive, vol_name, sizeof(vol_name), NULL, NULL,
+					NULL, file_buf, sizeof(file_buf)))
 			{
 				char item_buf[MAX_PATH + 5];
 				snprintf(item_buf, sizeof(item_buf), "%s  %s ", drive, vol_name);
@@ -76,10 +74,10 @@ execute_volumes_cb(FileView *view, menu_info *m)
 	if(change_directory(view, path_buf) >= 0)
 	{
 		load_dir_list(view, 0);
-		move_to_list_pos(view, 0);
+		flist_set_pos(view, 0);
 	}
 	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

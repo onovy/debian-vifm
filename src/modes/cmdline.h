@@ -22,27 +22,25 @@
 
 #include <stddef.h> /* wchar_t */
 
-#ifdef TEST
-#include "../utils/fs_limits.h"
-#endif
 #include "../utils/test_helpers.h"
 
+/* Submodes of command-line mode. */
 typedef enum
 {
-	CMD_SUBMODE,
-	MENU_CMD_SUBMODE,
-	SEARCH_FORWARD_SUBMODE,
-	SEARCH_BACKWARD_SUBMODE,
-	MENU_SEARCH_FORWARD_SUBMODE,
-	MENU_SEARCH_BACKWARD_SUBMODE,
-	VSEARCH_FORWARD_SUBMODE,
-	VSEARCH_BACKWARD_SUBMODE,
-	PROMPT_SUBMODE,
-	VIEW_SEARCH_FORWARD_SUBMODE,
-	VIEW_SEARCH_BACKWARD_SUBMODE,
-	FILTER_SUBMODE,
+	CLS_COMMAND,      /* Regular command-line command. */
+	CLS_MENU_COMMAND, /* Menu command-line command. */
+	CLS_MENU_FSEARCH, /* Forward search in menu mode. */
+	CLS_MENU_BSEARCH, /* Backward search in menu mode. */
+	CLS_FSEARCH,      /* Forward search in normal mode. */
+	CLS_BSEARCH,      /* Backward search in normal mode. */
+	CLS_VFSEARCH,     /* Forward search in visual mode. */
+	CLS_VBSEARCH,     /* Backward search in visual mode. */
+	CLS_VWFSEARCH,    /* Forward search in view mode. */
+	CLS_VWBSEARCH,    /* Backward search in view mode. */
+	CLS_FILTER,       /* Filter value. */
+	CLS_PROMPT,       /* Input request. */
 }
-CMD_LINE_SUBMODES;
+CmdLineSubmode;
 
 typedef void (*prompt_cb)(const char renponse[]);
 
@@ -53,7 +51,7 @@ typedef int (*complete_cmd_func)(const char cmd[], void *arg);
 /* Initializes command-line mode. */
 void init_cmdline_mode(void);
 
-void enter_cmdline_mode(CMD_LINE_SUBMODES cl_sub_mode, const wchar_t *cmd,
+void enter_cmdline_mode(CmdLineSubmode cl_sub_mode, const wchar_t *cmd,
 		void *ptr);
 
 /* Enters command-line editing mode with prompt submode activated.  cmd
@@ -66,13 +64,15 @@ void enter_prompt_mode(const wchar_t prompt[], const char cmd[], prompt_cb cb,
 void redraw_cmdline(void);
 
 #ifdef TEST
+#include "../compat/fs_limits.h"
 
 typedef enum
 {
 	HIST_NONE,
 	HIST_GO,
 	HIST_SEARCH
-}HIST;
+}
+HIST;
 
 /* Holds state of the command-line editing mode. */
 typedef struct
@@ -98,14 +98,17 @@ typedef struct
 	int old_top;              /* for search_mode */
 	int old_pos;              /* for search_mode */
 	int line_edited;          /* Cache for whether input line changed flag. */
+	int entered_by_mapping;   /* The mode was entered by a mapping. */
+	int expanding_abbrev;     /* Abbreviation expansion is in progress. */
 }
 line_stats_t;
 #endif
 TSTATIC_DEFS(
 	int line_completion(line_stats_t *stat);
+	const wchar_t * extract_abbrev(line_stats_t *stat, int *pos, int *no_remap);
 )
 
 #endif /* VIFM__MODES__CMDLINE_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

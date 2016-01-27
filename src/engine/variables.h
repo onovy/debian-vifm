@@ -42,9 +42,8 @@ const char * local_getenv(const char *envname);
  */
 void clear_variables(void);
 
-/* Processes :let command arguments
- * Returns non-zero on error
- */
+/* Processes :let command arguments.  Returns non-zero on error, otherwise zero
+ * is returned. */
 int let_variables(const char *cmd);
 
 /* Processes :unlet command arguments
@@ -58,4 +57,4 @@ void complete_variables(const char *cmd, const char **start);
 #endif /* VIFM__ENGINE__VARIABLES_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -19,42 +19,47 @@
 
 #include "apropos_menu.h"
 
-#include <stddef.h> /* NULL */
+#include <ctype.h> /* isdigit() */
+#include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* malloc() free() */
+#include <stdlib.h> /* free() */
 #include <string.h> /* strdup() strchr() strlen() */
 
 #include "../cfg/config.h"
+#include "../modes/dialogs/msg_dialog.h"
+#include "../ui/statusbar.h"
+#include "../ui/ui.h"
 #include "../utils/macros.h"
 #include "../utils/str.h"
+#include "../utils/test_helpers.h"
 #include "../macros.h"
 #include "../running.h"
 #include "../status.h"
-#include "../ui.h"
 #include "menus.h"
 
 static int execute_apropos_cb(FileView *view, menu_info *m);
+TSTATIC int parse_apropos_line(const char line[], char section[],
+		size_t section_len, char topic[], size_t topic_len);
 
 int
 show_apropos_menu(FileView *view, const char args[])
 {
 	char *cmd;
 	int save_msg;
-	custom_macro_t macros[] =
-	{
+	custom_macro_t macros[] = {
 		{ .letter = 'a', .value = args, .uses_left = 1, .group = -1 },
 	};
 
 	static menu_info m;
-	init_menu_info(&m, APROPOS_MENU, format_str("No matches for \'%s\'", args));
+	init_menu_info(&m, format_str("Apropos %s", args),
+			format_str("No matches for \'%s\'", args));
 	m.args = strdup(args);
-	m.title = format_str(" Apropos %s ", args);
 	m.execute_handler = &execute_apropos_cb;
 
 	status_bar_message("apropos...");
 
 	cmd = expand_custom_macros(cfg.apropos_prg, ARRAY_LEN(macros), macros);
-	save_msg = capture_output_to_menu(view, cmd, &m);
+	save_msg = capture_output_to_menu(view, cmd, 0, &m);
 	free(cmd);
 	return save_msg;
 }
@@ -64,50 +69,71 @@ show_apropos_menu(FileView *view, const char args[])
 static int
 execute_apropos_cb(FileView *view, menu_info *m)
 {
-	char *line;
-	char *man_page;
-	char *free_this;
-	char *num_str;
+	char section[64], topic[64];
 	char command[256];
+	int exit_code;
 
-	free_this = man_page = line = strdup(m->items[m->pos]);
-	if(free_this == NULL)
+	if(parse_apropos_line(m->items[m->pos], section, sizeof(section), topic,
+				sizeof(topic)) != 0)
 	{
-		show_error_msg("Memory Error", "Unable to allocate enough memory");
+		curr_stats.save_msg = 1;
 		return 1;
 	}
 
-	if((num_str = strchr(line, '(')))
+	snprintf(command, sizeof(command), "man %s %s", section, topic);
+
+	curr_stats.skip_shellout_redraw = 1;
+	exit_code = shellout(command, PAUSE_NEVER, 1);
+	curr_stats.skip_shellout_redraw = 0;
+
+	if(exit_code != 0)
 	{
-		int z = 0;
-
-		num_str++;
-		while(num_str[z] != ')')
-		{
-			z++;
-			if(z > 40)
-			{
-				free(free_this);
-				return 1;
-			}
-		}
-
-		num_str[z] = '\0';
-		line = strchr(line, ' ');
-		if(line != NULL)
-		{
-			line[0] = '\0';
-
-			snprintf(command, sizeof(command), "man %s %s", num_str, man_page);
-
-			curr_stats.skip_shellout_redraw = 1;
-			shellout(command, 0, 1);
-			curr_stats.skip_shellout_redraw = 0;
-		}
+		status_bar_errorf("man view command failed with code: %d", exit_code);
+		curr_stats.save_msg = 1;
 	}
-	free(free_this);
+
 	return 1;
 }
 
+/* Parses apropos output line and extracts section number and topic.  On error
+ * prints status bar message and returns non-zero, otherwise zero is
+ * returned. */
+TSTATIC int
+parse_apropos_line(const char line[], char section[], size_t section_len,
+		char topic[], size_t topic_len)
+{
+	const char *sec_l, *sec_r;
+	const char *sep;
+
+	sec_l = strchr(line, '(');
+	if(sec_l == NULL)
+	{
+		status_bar_error("Failed to find section number.");
+		return 1;
+	}
+
+	/* Check for "([^\s()]+)" format. */
+	sec_r = sec_l + 1 + strcspn(sec_l + 1, " \t()");
+	if(sec_r == sec_l + 1 || *sec_r != ')')
+	{
+		status_bar_error("Wrong section number format.");
+		return 1;
+	}
+
+	/* sep can't be NULL as we found '(' above. */
+	sep = strpbrk(line, " (");
+
+	if(section_len == 0 || section_len - 1 < (size_t)(sec_r - (sec_l + 1)) ||
+			topic_len == 0 || topic_len - 1 < (size_t)(sep - line))
+	{
+		status_bar_error("Internal buffer is too small.");
+		return 1;
+	}
+
+	copy_str(topic, sep - line + 1, line);
+	copy_str(section, sec_r - (sec_l + 1) + 1, sec_l + 1);
+	return 0;
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -20,12 +20,18 @@
 #ifndef VIFM__MENUS__APROPOS_MENU_H__
 #define VIFM__MENUS__APROPOS_MENU_H__
 
-#include "../ui.h"
+#include "../ui/ui.h"
+#include "../utils/test_helpers.h"
 
 /* Returns non-zero if status bar message should be saved. */
 int show_apropos_menu(FileView *view, const char args[]);
 
+TSTATIC_DEFS(
+	int parse_apropos_line(const char line[], char section[], size_t section_len,
+		char topic[], size_t topic_len);
+)
+
 #endif /* VIFM__MENUS__APROPOS_MENU_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

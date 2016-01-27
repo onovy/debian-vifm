@@ -1,88 +1,69 @@
-#include "seatest.h"
-
-#include <stdio.h> /* FILE fopen() fclose() */
+#include <stic.h>
 
 #include <unistd.h> /* F_OK access() */
 
+#include "../../src/compat/os.h"
 #include "../../src/io/ior.h"
 #include "../../src/utils/fs.h"
 
-static const char *const FILE_NAME = "file-to-remove";
-static const char *const DIRECTORY_NAME = "directory-to-remove";
+#include "utils.h"
 
-static void
-test_file_is_removed(void)
+#define DIRECTORY_NAME SANDBOX_PATH "/directory-to-remove"
+#define FILE_NAME "file-to-remove"
+
+TEST(file_is_removed)
 {
-	{
-		FILE *const f = fopen(FILE_NAME, "w");
-		fclose(f);
-		assert_int_equal(0, access(FILE_NAME, F_OK));
-	}
+	create_empty_file(SANDBOX_PATH "/" FILE_NAME);
 
 	{
-		io_args_t args =
-		{
-			.arg1.src = FILE_NAME,
+		io_args_t args = {
+			.arg1.src = SANDBOX_PATH "/" FILE_NAME,
 		};
-		assert_int_equal(0, ior_rm(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(ior_rm(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access(FILE_NAME, F_OK));
+	assert_failure(access(SANDBOX_PATH "/" FILE_NAME, F_OK));
 }
 
-static void
-test_empty_directory_is_removed(void)
+TEST(empty_directory_is_removed)
 {
-	make_dir(DIRECTORY_NAME, 0700);
-	assert_int_equal(0, access(DIRECTORY_NAME, F_OK));
+	os_mkdir(DIRECTORY_NAME, 0700);
+	assert_success(access(DIRECTORY_NAME, F_OK));
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.src = DIRECTORY_NAME,
 		};
-		assert_int_equal(0, ior_rm(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(ior_rm(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access(DIRECTORY_NAME, F_OK));
+	assert_failure(access(DIRECTORY_NAME, F_OK));
 }
 
-static void
-test_non_empty_directory_is_removed(void)
+TEST(non_empty_directory_is_removed)
 {
-	make_dir(DIRECTORY_NAME, 0700);
-	assert_int_equal(0, access(DIRECTORY_NAME, F_OK));
-
-	assert_int_equal(0, chdir(DIRECTORY_NAME));
-	{
-		FILE *const f = fopen(FILE_NAME, "w");
-		fclose(f);
-		assert_int_equal(0, access(FILE_NAME, F_OK));
-	}
-	assert_int_equal(0, chdir(".."));
+	os_mkdir(DIRECTORY_NAME, 0700);
+	assert_success(access(DIRECTORY_NAME, F_OK));
+	create_empty_file(DIRECTORY_NAME "/" FILE_NAME);
 
 	{
-		io_args_t args =
-		{
+		io_args_t args = {
 			.arg1.src = DIRECTORY_NAME,
 		};
-		assert_int_equal(0, ior_rm(&args));
+		ioe_errlst_init(&args.result.errors);
+
+		assert_success(ior_rm(&args));
+		assert_int_equal(0, args.result.errors.error_count);
 	}
 
-	assert_int_equal(-1, access(DIRECTORY_NAME, F_OK));
-}
-
-void
-rm_tests(void)
-{
-	test_fixture_start();
-
-	run_test(test_file_is_removed);
-	run_test(test_empty_directory_is_removed);
-	run_test(test_non_empty_directory_is_removed);
-
-	test_fixture_end();
+	assert_failure(access(DIRECTORY_NAME, F_OK));
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

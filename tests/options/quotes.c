@@ -1,50 +1,36 @@
-#include "seatest.h"
+#include <stic.h>
 
 #include "../../src/engine/options.h"
 
 extern const char *value;
 
-static void
-test_no_quotes(void)
+TEST(no_quotes)
 {
 	value = NULL;
-	set_options("fusehome=a\\ b");
+	set_options("fusehome=a\\ b", OPT_GLOBAL);
 	assert_string_equal("a b", value);
 
 	value = NULL;
-	set_options("fh=a\\ b\\ c");
+	set_options("fh=a\\ b\\ c", OPT_GLOBAL);
 	assert_string_equal("a b c", value);
 
-	set_options("so=name");
+	set_options("so=name", OPT_GLOBAL);
 }
 
-static void
-test_single_quotes(void)
+TEST(single_quotes)
 {
-	set_options("fusehome='a b'");
+	set_options("fusehome='a b'", OPT_GLOBAL);
 	assert_string_equal("a b", value);
 }
 
-static void
-test_double_quotes(void)
+TEST(double_quotes)
 {
-	set_options("fusehome=\"a b\"");
+	set_options("fusehome=\"a b\"", OPT_GLOBAL);
 	assert_string_equal("a b", value);
 
-	set_options("fusehome=\"a \\\" b\"");
+	set_options("fusehome=\"a \\\" b\"", OPT_GLOBAL);
 	assert_string_equal("a \" b", value);
 }
 
-void
-test_quotes(void)
-{
-	test_fixture_start();
-
-	run_test(test_no_quotes);
-	run_test(test_single_quotes);
-	run_test(test_double_quotes);
-
-	test_fixture_end();
-}
-
-/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0: */
+/* vim: set cinoptions+=t0 filetype=c : */

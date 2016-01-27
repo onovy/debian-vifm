@@ -20,7 +20,7 @@
 #ifndef VIFM__MENUS__UNDOLIST_MENU_H__
 #define VIFM__MENUS__UNDOLIST_MENU_H__
 
-#include "../ui.h"
+#include "../ui/ui.h"
 
 /* Returns non-zero if status bar message should be saved. */
 int show_undolist_menu(FileView *view, int with_details);
@@ -28,4 +28,4 @@ int show_undolist_menu(FileView *view, int with_details);
 #endif /* VIFM__MENUS__UNDOLIST_MENU_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

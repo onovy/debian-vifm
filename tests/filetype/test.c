@@ -1,48 +1,31 @@
-#include <assert.h>
+#include "test.h"
 
-#include "seatest.h"
-
+#include "../../src/utils/matcher.h"
 #include "../../src/filetype.h"
-#include "../../src/status.h"
 
-void filetype_tests(void);
-void filextype_tests(void);
-void classes_tests(void);
-void replace_double_comma_tests(void);
-void description_tests(void);
-void find_program_tests(void);
-
-static void
-setup(void)
+void
+set_programs(const char pattern[], const char programs[], int for_x, int in_x)
 {
-	config_filetypes(NULL);
+	char *error;
+	matcher_t *m;
+
+	assert_non_null(m = matcher_alloc(pattern, 0, 1, &error));
+	assert_null(error);
+
+	ft_set_programs(m, programs, for_x, in_x);
 }
 
-static void
-teardown(void)
+void
+set_viewers(const char pattern[], const char viewers[])
 {
-	reset_all_file_associations(0);
-}
+	char *error;
+	matcher_t *m;
 
-static void
-all_tests(void)
-{
-	filetype_tests();
-	filextype_tests();
-	classes_tests();
-	replace_double_comma_tests();
-	description_tests();
-	find_program_tests();
-}
+	assert_non_null(m = matcher_alloc(pattern, 0, 1, &error));
+	assert_null(error);
 
-int
-main(int argc, char **argv)
-{
-	suite_setup(setup);
-	suite_teardown(teardown);
-
-	return run_tests(all_tests) == 0;
+	ft_set_viewers(m, viewers);
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

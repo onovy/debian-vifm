@@ -19,10 +19,12 @@
 #include "opt_handlers.h"
 
 #include <curses.h> /* stdscr wnoutrefresh() */
+#include <regex.h> /* regex_t regcomp() regexec() regfree() */
 
 #include <assert.h> /* assert() */
+#include <ctype.h> /* isdigit() */
 #include <limits.h> /* INT_MIN */
-#include <stddef.h> /* NULL */
+#include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* snprintf() */
 #include <stdlib.h> /* abs() free() */
 #include <string.h> /* memcpy() memmove() strchr() strdup() strlen() strncat()
@@ -31,21 +33,25 @@
 #include "cfg/config.h"
 #include "engine/options.h"
 #include "engine/text_buffer.h"
+#include "int/term_title.h"
 #include "modes/view.h"
+#include "ui/column_view.h"
+#include "ui/fileview.h"
+#include "ui/quickview.h"
+#include "ui/statusbar.h"
+#include "ui/ui.h"
 #include "utils/log.h"
 #include "utils/macros.h"
+#include "utils/regexp.h"
 #include "utils/str.h"
 #include "utils/string_array.h"
 #include "utils/utils.h"
-#include "column_view.h"
 #include "filelist.h"
-#include "quickview.h"
 #include "search.h"
 #include "sort.h"
 #include "status.h"
 #include "trash.h"
 #include "types.h"
-#include "ui.h"
 #include "viewcolumns_parser.h"
 
 /* TODO: provide default primitive type based handlers (see *prg_handler). */
@@ -74,30 +80,36 @@ optinit_t;
 
 static void init_classify(optval_t *val);
 static void init_cpoptions(optval_t *val);
+static void init_dirsize(optval_t *val);
+static const char * to_endpoint(int i, char buffer[]);
 static void init_timefmt(optval_t *val);
-static void init_trash_dir(optval_t *val);
+static void init_trashdir(optval_t *val);
 static void init_lsview(optval_t *val);
 static void init_shortmess(optval_t *val);
+static void init_iooptions(optval_t *val);
 static void init_number(optval_t *val);
 static void init_numberwidth(optval_t *val);
 static void init_relativenumber(optval_t *val);
 static void init_sort(optval_t *val);
 static void init_sortorder(optval_t *val);
 static void init_tuioptions(optval_t *val);
-static void init_viewcolumns(optval_t *val);
+static void init_wordchars(optval_t *val);
 static void load_options_defaults(void);
 static void add_options(void);
+static void load_sort_option_inner(FileView *view, char sort_keys[]);
 static void aproposprg_handler(OPT_OP op, optval_t val);
 static void autochpos_handler(OPT_OP op, optval_t val);
 static void cdpath_handler(OPT_OP op, optval_t val);
+static void chaselinks_handler(OPT_OP op, optval_t val);
 static void classify_handler(OPT_OP op, optval_t val);
-static int str_to_classify(const char str[],
-		char decorations[FILE_TYPE_COUNT][2]);
+static int str_to_classify(const char str[], char decorations[FT_COUNT][2]);
 static const char * pick_out_decoration(const char classify_item[],
 		FileType *type);
 static void columns_handler(OPT_OP op, optval_t val);
 static void confirm_handler(OPT_OP op, optval_t val);
 static void cpoptions_handler(OPT_OP op, optval_t val);
+static void deleteprg_handler(OPT_OP op, optval_t val);
+static void dirsize_handler(OPT_OP op, optval_t val);
 static void dotdirs_handler(OPT_OP op, optval_t val);
 static void fastrun_handler(OPT_OP op, optval_t val);
 static void fillchars_handler(OPT_OP op, optval_t val);
@@ -112,9 +124,13 @@ static void hlsearch_handler(OPT_OP op, optval_t val);
 static void iec_handler(OPT_OP op, optval_t val);
 static void ignorecase_handler(OPT_OP op, optval_t val);
 static void incsearch_handler(OPT_OP op, optval_t val);
+static void iooptions_handler(OPT_OP op, optval_t val);
+static int parse_range(const char range[], int *from, int *to);
+static int parse_endpoint(const char **str, int *endpoint);
 static void laststatus_handler(OPT_OP op, optval_t val);
 static void lines_handler(OPT_OP op, optval_t val);
 static void locateprg_handler(OPT_OP op, optval_t val);
+static void mintimeoutlen_handler(OPT_OP op, optval_t val);
 static void scroll_line_down(FileView *view);
 static void rulerformat_handler(OPT_OP op, optval_t val);
 static void runexec_handler(OPT_OP op, optval_t val);
@@ -127,24 +143,41 @@ static void slowfs_handler(OPT_OP op, optval_t val);
 #endif
 static void smartcase_handler(OPT_OP op, optval_t val);
 static void sortnumbers_handler(OPT_OP op, optval_t val);
-static void lsview_handler(OPT_OP op, optval_t val);
-static void number_handler(OPT_OP op, optval_t val);
-static void numberwidth_handler(OPT_OP op, optval_t val);
-static void relativenumber_handler(OPT_OP op, optval_t val);
-static void update_num_type(NumberingType num_type, int enable);
-static void sort_handler(OPT_OP op, optval_t val);
-static void sortorder_handler(OPT_OP op, optval_t val);
-static void viewcolumns_handler(OPT_OP op, optval_t val);
+static void lsview_global(OPT_OP op, optval_t val);
+static void lsview_local(OPT_OP op, optval_t val);
+static void number_global(OPT_OP op, optval_t val);
+static void number_local(OPT_OP op, optval_t val);
+static void numberwidth_global(OPT_OP op, optval_t val);
+static void numberwidth_local(OPT_OP op, optval_t val);
+static void set_numberwidth(FileView *view, int *num_width, int width);
+static void relativenumber_global(OPT_OP op, optval_t val);
+static void relativenumber_local(OPT_OP op, optval_t val);
+static void update_num_type(FileView *view, NumberingType *num_type,
+		NumberingType type, int enable);
+static void sort_global(OPT_OP op, optval_t val);
+static void sort_local(OPT_OP op, optval_t val);
+static void set_sort(FileView *view, char sort_keys[], char order[]);
+static void sortgroups_global(OPT_OP op, optval_t val);
+static void sortgroups_local(OPT_OP op, optval_t val);
+static void set_sortgroups(FileView *view, char **opt, char value[]);
+static void sorting_changed(FileView *view);
+static void sortorder_global(OPT_OP op, optval_t val);
+static void sortorder_local(OPT_OP op, optval_t val);
+static void set_sortorder(FileView *view, int ascending, char sort_keys[]);
+static void viewcolumns_global(OPT_OP op, optval_t val);
+static void viewcolumns_local(OPT_OP op, optval_t val);
+static void set_viewcolumns(FileView *view, const char view_columns[]);
 static void set_view_columns_option(FileView *view, const char value[],
 		int update_ui);
 static void add_column(columns_t columns, column_info_t column_info);
-static int map_name(const char *name);
+static int map_name(const char name[], void *arg);
 static void resort_view(FileView * view);
 static void statusline_handler(OPT_OP op, optval_t val);
 static void syscalls_handler(OPT_OP op, optval_t val);
 static void tabstop_handler(OPT_OP op, optval_t val);
 static void timefmt_handler(OPT_OP op, optval_t val);
 static void timeoutlen_handler(OPT_OP op, optval_t val);
+static void title_handler(OPT_OP op, optval_t val);
 static void trash_handler(OPT_OP op, optval_t val);
 static void trashdir_handler(OPT_OP op, optval_t val);
 static void tuioptions_handler(OPT_OP op, optval_t val);
@@ -154,50 +187,70 @@ static void vixcmd_handler(OPT_OP op, optval_t val);
 static void vifminfo_handler(OPT_OP op, optval_t val);
 static void vimhelp_handler(OPT_OP op, optval_t val);
 static void wildmenu_handler(OPT_OP op, optval_t val);
+static void wordchars_handler(OPT_OP op, optval_t val);
 static void wrap_handler(OPT_OP op, optval_t val);
 static void text_option_changed(void);
 static void wrapscan_handler(OPT_OP op, optval_t val);
 
-static const char * sort_enum[] = {
-	"ext",
-	"name",
+static const char *sort_enum[] = {
+	/* SK_* start with 1. */
+	[0] = "",
+
+	[SK_BY_EXTENSION]     = "ext",
+	[SK_BY_NAME]          = "name",
+	[SK_BY_SIZE]          = "size",
+	[SK_BY_TIME_ACCESSED] = "atime",
+	[SK_BY_TIME_CHANGED]  = "ctime",
+	[SK_BY_TIME_MODIFIED] = "mtime",
+	[SK_BY_INAME]         = "iname",
+	[SK_BY_DIR]           = "dir",
+	[SK_BY_TYPE]          = "type",
+	[SK_BY_FILEEXT]       = "fileext",
+	[SK_BY_NITEMS]        = "nitems",
+	[SK_BY_GROUPS]        = "groups",
 #ifndef _WIN32
-	"gid",
-	"gname",
-	"mode",
-	"uid",
-	"uname",
+	[SK_BY_GROUP_ID]      = "gid",
+	[SK_BY_GROUP_NAME]    = "gname",
+	[SK_BY_MODE]          = "mode",
+	[SK_BY_OWNER_ID]      = "uid",
+	[SK_BY_OWNER_NAME]    = "uname",
+	[SK_BY_PERMISSIONS]   = "perms",
+	[SK_BY_NLINKS]        = "nlinks",
 #endif
-	"size",
-	"atime",
-	"ctime",
-	"mtime",
-	"iname",
-#ifndef _WIN32
-	"perms",
-#endif
-	"type",
 };
-ARRAY_GUARD(sort_enum, SK_COUNT);
+ARRAY_GUARD(sort_enum, 1 + SK_COUNT);
 
 static const char cpoptions_list[] = "fst";
 static const char * cpoptions_vals = cpoptions_list;
-#define cpoptions_count ARRAY_LEN(cpoptions_list)
+#define cpoptions_count (ARRAY_LEN(cpoptions_list) - 1)
 
-static const char * dotdirs_vals[] = {
+/* Possible values of 'dotdirs'. */
+static const char *dotdirs_vals[] = {
 	"rootparent",
 	"nonrootparent",
 };
 ARRAY_GUARD(dotdirs_vals, NUM_DOT_DIRS);
 
-static const char shortmess_list[] = "T";
+/* Possible flags of 'iooptions'. */
+static const char *iooptions_vals[] = {
+	"fastfilecloning",
+};
+
+/* Possible flags of 'shortmess' and their count. */
+static const char shortmess_list[] = "Tp";
 static const char *shortmess_vals = shortmess_list;
-#define shortmess_count ARRAY_LEN(shortmess_list)
+#define shortmess_count (ARRAY_LEN(shortmess_list) - 1)
 
 /* Possible flags of 'tuioptions' and their count. */
 static const char tuioptions_list[] = "ps";
 static const char *tuioptions_vals = tuioptions_list;
-#define tuioptions_count ARRAY_LEN(tuioptions_list)
+#define tuioptions_count (ARRAY_LEN(tuioptions_list) - 1)
+
+/* Possible values of 'dirsize' option. */
+static const char *dirsize_enum[] = {
+	"size",
+	"nitems",
+};
 
 /* Possible keys of 'fillchars' option. */
 static const char *fillchars_enum[] = {
@@ -208,22 +261,25 @@ static const char *fillchars_enum[] = {
 static const char *sort_types[] = {
 	"ext",   "+ext",   "-ext",
 	"name",  "+name",  "-name",
-#ifndef _WIN32
-	"gid",   "+gid",   "-gid",
-	"gname", "+gname", "-gname",
-	"mode",  "+mode",  "-mode",
-	"uid",   "+uid",   "-uid",
-	"uname", "+uname", "-uname",
-#endif
 	"size",  "+size",  "-size",
 	"atime", "+atime", "-atime",
 	"ctime", "+ctime", "-ctime",
 	"mtime", "+mtime", "-mtime",
 	"iname", "+iname", "-iname",
+	"dir",     "+dir",     "-dir",
+	"type",    "+type",    "-type",
+	"fileext", "+fileext", "-fileext",
+	"nitems",  "+nitems",  "-nitems",
+	"groups",  "+groups",  "-groups",
 #ifndef _WIN32
-	"perms", "+perms", "-perms",
+	"gid",    "+gid",    "-gid",
+	"gname",  "+gname",  "-gname",
+	"mode",   "+mode",   "-mode",
+	"uid",    "+uid",    "-uid",
+	"uname",  "+uname",  "-uname",
+	"perms",  "+perms",  "-perms",
+	"nlinks", "+nlinks", "-nlinks",
 #endif
-	"type", "+type", "-type",
 };
 ARRAY_GUARD(sort_types, SK_COUNT*3);
 
@@ -239,6 +295,7 @@ static const char *vifminfo_set[] = {
 	"filetypes",
 	"commands",
 	"bookmarks",
+	"bmarks",
 	"tui",
 	"dhistory",
 	"state",
@@ -263,237 +320,271 @@ static struct
 	OPT_TYPE type;
 	int val_count;
 	const char **vals;
-	opt_handler handler;
+	opt_handler global_handler;
+	opt_handler local_handler;
 	optinit_t initializer;
 	optval_t val;
 }
-options[] =
-{
-	/* global options */
+options[] = {
+	/* Global options. */
 	{ "aproposprg", "",
-	  OPT_STR, 0, NULL, &aproposprg_handler,
+	  OPT_STR, 0, NULL, &aproposprg_handler, NULL,
 	  { .ref.str_val = &cfg.apropos_prg },
 	},
 	{ "autochpos", "",
-	  OPT_BOOL, 0, NULL, &autochpos_handler,
+	  OPT_BOOL, 0, NULL, &autochpos_handler, NULL,
 	  { .ref.bool_val = &cfg.auto_ch_pos },
 	},
 	{ "cdpath", "cd",
-	  OPT_STRLIST, 0, NULL, &cdpath_handler,
+	  OPT_STRLIST, 0, NULL, &cdpath_handler, NULL,
 	  { .ref.str_val = &cfg.cd_path },
 	},
+	{ "chaselinks", "",
+	  OPT_BOOL, 0, NULL, &chaselinks_handler, NULL,
+	  { .ref.bool_val = &cfg.chase_links },
+	},
 	{ "classify", "",
-	  OPT_STRLIST, 0, NULL, &classify_handler,
+	  OPT_STRLIST, 0, NULL, &classify_handler, NULL,
 	  { .init = &init_classify },
 	},
 	{ "columns", "co",
-	  OPT_INT, 0, NULL, &columns_handler,
+	  OPT_INT, 0, NULL, &columns_handler, NULL,
 	  { .ref.int_val = &cfg.columns },
 	},
 	{ "confirm", "cf",
-	  OPT_BOOL, 0, NULL, &confirm_handler,
+	  OPT_BOOL, 0, NULL, &confirm_handler, NULL,
 	  { .ref.bool_val = &cfg.confirm },
 	},
 	{ "cpoptions", "cpo",
-	  OPT_CHARSET, cpoptions_count, &cpoptions_vals, &cpoptions_handler,
+	  OPT_CHARSET, cpoptions_count, &cpoptions_vals, &cpoptions_handler, NULL,
 	  { .init = &init_cpoptions },
 	},
+	{ "deleteprg", "",
+	  OPT_STR, 0, NULL, &deleteprg_handler, NULL,
+	  { .ref.str_val = &empty },
+	},
+	{ "dirsize", "",
+	  OPT_ENUM, ARRAY_LEN(dirsize_enum), dirsize_enum, &dirsize_handler, NULL,
+	  { .init = &init_dirsize },
+	},
 	{ "dotdirs", "",
-	  OPT_SET, ARRAY_LEN(dotdirs_vals), dotdirs_vals, &dotdirs_handler,
+	  OPT_SET, ARRAY_LEN(dotdirs_vals), dotdirs_vals, &dotdirs_handler, NULL,
 	  { .ref.set_items = &cfg.dot_dirs },
 	},
 	{ "fastrun", "",
-	  OPT_BOOL, 0, NULL, &fastrun_handler,
+	  OPT_BOOL, 0, NULL, &fastrun_handler, NULL,
 	  { .ref.bool_val = &cfg.fast_run },
 	},
 	{ "fillchars", "fcs",
 		OPT_STRLIST, ARRAY_LEN(fillchars_enum), fillchars_enum, &fillchars_handler,
+		NULL,
 	  { .ref.str_val = &empty },
 	},
 	{ "findprg", "",
-	  OPT_STR, 0, NULL, &findprg_handler,
+	  OPT_STR, 0, NULL, &findprg_handler, NULL,
 	  { .ref.str_val = &cfg.find_prg },
 	},
 	{ "followlinks", "",
-	  OPT_BOOL, 0, NULL, &followlinks_handler,
+	  OPT_BOOL, 0, NULL, &followlinks_handler, NULL,
 	  { .ref.bool_val = &cfg.follow_links },
 	},
 	{ "fusehome", "",
-	  OPT_STR, 0, NULL, &fusehome_handler,
+	  OPT_STR, 0, NULL, &fusehome_handler, NULL,
 	  { .ref.str_val = &cfg.fuse_home },
 	},
 	{ "gdefault", "gd",
-	  OPT_BOOL, 0, NULL, &gdefault_handler,
+	  OPT_BOOL, 0, NULL, &gdefault_handler, NULL,
 	  { .ref.bool_val = &cfg.gdefault },
 	},
 	{ "grepprg", "",
-	  OPT_STR, 0, NULL, &grepprg_handler,
+	  OPT_STR, 0, NULL, &grepprg_handler, NULL,
 	  { .ref.str_val = &cfg.grep_prg },
 	},
 	{ "history", "hi",
-	  OPT_INT, 0, NULL, &history_handler,
+	  OPT_INT, 0, NULL, &history_handler, NULL,
 	  { .ref.int_val = &cfg.history_len },
 	},
 	{ "hlsearch", "hls",
-	  OPT_BOOL, 0, NULL, &hlsearch_handler,
+	  OPT_BOOL, 0, NULL, &hlsearch_handler, NULL,
 	  { .ref.bool_val = &cfg.hl_search },
 	},
 	{ "iec", "",
-	  OPT_BOOL, 0, NULL, &iec_handler,
+	  OPT_BOOL, 0, NULL, &iec_handler, NULL,
 	  { .ref.bool_val = &cfg.use_iec_prefixes },
 	},
 	{ "ignorecase", "ic",
-	  OPT_BOOL, 0, NULL, &ignorecase_handler,
+	  OPT_BOOL, 0, NULL, &ignorecase_handler, NULL,
 	  { .ref.bool_val = &cfg.ignore_case },
 	},
 	{ "incsearch", "is",
-	  OPT_BOOL, 0, NULL, &incsearch_handler ,
+	  OPT_BOOL, 0, NULL, &incsearch_handler , NULL,
 	  { .ref.bool_val = &cfg.inc_search },
 	},
+	{ "iooptions", "",
+	  OPT_SET, ARRAY_LEN(iooptions_vals), iooptions_vals, &iooptions_handler,
+		NULL,
+	  { .init = &init_iooptions },
+	},
 	{ "laststatus", "ls",
-	  OPT_BOOL, 0, NULL, &laststatus_handler,
-	  { .ref.bool_val = &cfg.last_status },
+	  OPT_BOOL, 0, NULL, &laststatus_handler, NULL,
+	  { .ref.bool_val = &cfg.display_statusline },
 	},
 	{ "lines", "",
-	  OPT_INT, 0, NULL, &lines_handler,
+	  OPT_INT, 0, NULL, &lines_handler, NULL,
 	  { .ref.int_val = &cfg.lines },
 	},
 	{ "locateprg", "",
-	  OPT_STR, 0, NULL, &locateprg_handler,
+	  OPT_STR, 0, NULL, &locateprg_handler, NULL,
 	  { .ref.str_val = &cfg.locate_prg },
 	},
+	{ "mintimeoutlen", "",
+	  OPT_INT, 0, NULL, &mintimeoutlen_handler, NULL,
+	  { .ref.int_val = &cfg.min_timeout_len },
+	},
 	{ "rulerformat", "ruf",
-	  OPT_STR, 0, NULL, &rulerformat_handler,
+	  OPT_STR, 0, NULL, &rulerformat_handler, NULL,
 	  { .ref.str_val = &cfg.ruler_format },
 	},
 	{ "runexec", "",
-	  OPT_BOOL, 0, NULL, &runexec_handler,
+	  OPT_BOOL, 0, NULL, &runexec_handler, NULL,
 	  { .ref.bool_val = &cfg.auto_execute },
 	},
 	{ "scrollbind", "scb",
-	  OPT_BOOL, 0, NULL, &scrollbind_handler,
+	  OPT_BOOL, 0, NULL, &scrollbind_handler, NULL,
 	  { .ref.bool_val = &cfg.scroll_bind },
 	},
 	{ "scrolloff", "so",
-	  OPT_INT, 0, NULL, &scrolloff_handler,
+	  OPT_INT, 0, NULL, &scrolloff_handler, NULL,
 	  { .ref.int_val = &cfg.scroll_off },
 	},
 	{ "shell", "sh",
-	  OPT_STR, 0, NULL, &shell_handler,
+	  OPT_STR, 0, NULL, &shell_handler, NULL,
 	  { .ref.str_val = &cfg.shell },
 	},
 	{ "shortmess", "shm",
-	  OPT_CHARSET, shortmess_count, &shortmess_vals, &shortmess_handler,
+	  OPT_CHARSET, shortmess_count, &shortmess_vals, &shortmess_handler, NULL,
 	  { .init = &init_shortmess },
 	},
 #ifndef _WIN32
 	{ "slowfs", "",
-	  OPT_STRLIST, 0, NULL, &slowfs_handler,
+	  OPT_STRLIST, 0, NULL, &slowfs_handler, NULL,
 	  { .ref.str_val = &cfg.slow_fs_list },
 	},
 #endif
 	{ "smartcase", "scs",
-	  OPT_BOOL, 0, NULL, &smartcase_handler,
+	  OPT_BOOL, 0, NULL, &smartcase_handler, NULL,
 	  { .ref.bool_val = &cfg.smart_case },
 	},
 	{ "sortnumbers", "",
-	  OPT_BOOL, 0, NULL, &sortnumbers_handler,
+	  OPT_BOOL, 0, NULL, &sortnumbers_handler, NULL,
 	  { .ref.bool_val = &cfg.sort_numbers },
 	},
 	{ "statusline", "stl",
-	  OPT_STR, 0, NULL, &statusline_handler,
+	  OPT_STR, 0, NULL, &statusline_handler, NULL,
 	  { .ref.str_val = &cfg.status_line },
 	},
 	{ "syscalls", "",
-	  OPT_BOOL, 0, NULL, &syscalls_handler,
+	  OPT_BOOL, 0, NULL, &syscalls_handler, NULL,
 	  { .ref.bool_val = &cfg.use_system_calls },
 	},
 	{ "tabstop", "ts",
-	  OPT_INT, 0, NULL, &tabstop_handler,
+	  OPT_INT, 0, NULL, &tabstop_handler, NULL,
 	  { .ref.int_val = &cfg.tab_stop },
 	},
 	{ "timefmt", "",
-	  OPT_STR, 0, NULL, &timefmt_handler,
+	  OPT_STR, 0, NULL, &timefmt_handler, NULL,
 	  { .init = &init_timefmt },
 	},
 	{ "timeoutlen", "tm",
-	  OPT_INT, 0, NULL, &timeoutlen_handler,
+	  OPT_INT, 0, NULL, &timeoutlen_handler, NULL,
 	  { .ref.int_val = &cfg.timeout_len },
 	},
+	{ "title", "",
+	  OPT_BOOL, 0, NULL, &title_handler, NULL,
+	  { .ref.int_val = &cfg.set_title },
+	},
 	{ "trash", "",
-	  OPT_BOOL, 0, NULL, &trash_handler,
+	  OPT_BOOL, 0, NULL, &trash_handler, NULL,
 	  { .ref.bool_val = &cfg.use_trash },
 	},
 	{ "trashdir", "",
-	  OPT_STRLIST, 0, NULL, &trashdir_handler,
-	  { .init = &init_trash_dir },
+	  OPT_STRLIST, 0, NULL, &trashdir_handler, NULL,
+	  { .init = &init_trashdir },
 	},
 	{ "tuioptions", "to",
-	  OPT_CHARSET, tuioptions_count, &tuioptions_vals, &tuioptions_handler,
+	  OPT_CHARSET, tuioptions_count, &tuioptions_vals, &tuioptions_handler, NULL,
 	  { .init = &init_tuioptions },
 	},
 	{ "undolevels", "ul",
-	  OPT_INT, 0, NULL, &undolevels_handler,
+	  OPT_INT, 0, NULL, &undolevels_handler, NULL,
 	  { .ref.int_val = &cfg.undo_levels },
 	},
 	{ "vicmd", "",
-	  OPT_STR, 0, NULL, &vicmd_handler,
+	  OPT_STR, 0, NULL, &vicmd_handler, NULL,
 	  { .ref.str_val = &cfg.vi_command },
 	},
 	{ "vixcmd", "",
-	  OPT_STR, 0, NULL, &vixcmd_handler,
+	  OPT_STR, 0, NULL, &vixcmd_handler, NULL,
 	  { .ref.str_val = &cfg.vi_x_command },
 	},
 	{ "vifminfo", "",
-	  OPT_SET, ARRAY_LEN(vifminfo_set), vifminfo_set, &vifminfo_handler,
+	  OPT_SET, ARRAY_LEN(vifminfo_set), vifminfo_set, &vifminfo_handler, NULL,
 	  { .ref.set_items = &cfg.vifm_info },
 	},
 	{ "vimhelp", "",
-	  OPT_BOOL, 0, NULL, &vimhelp_handler,
+	  OPT_BOOL, 0, NULL, &vimhelp_handler, NULL,
 	  { .ref.bool_val = &cfg.use_vim_help },
 	},
 	{ "wildmenu", "wmnu",
-	  OPT_BOOL, 0, NULL, &wildmenu_handler,
+	  OPT_BOOL, 0, NULL, &wildmenu_handler, NULL,
 	  { .ref.bool_val = &cfg.wild_menu },
 	},
+	{ "wordchars", "",
+	  OPT_STRLIST, 0, NULL, &wordchars_handler, NULL,
+	  { .init = &init_wordchars },
+	},
 	{ "wrap", "",
-	  OPT_BOOL, 0, NULL, &wrap_handler,
+	  OPT_BOOL, 0, NULL, &wrap_handler, NULL,
 	  { .ref.bool_val = &cfg.wrap_quick_view },
 	},
 	{ "wrapscan", "ws",
-	  OPT_BOOL, 0, NULL, &wrapscan_handler,
+	  OPT_BOOL, 0, NULL, &wrapscan_handler, NULL,
 	  { .ref.bool_val = &cfg.wrap_scan },
 	},
 
 	/* Local options. */
-
 	{ "lsview", "",
-	  OPT_BOOL, 0, NULL, &lsview_handler,
+	  OPT_BOOL, 0, NULL, &lsview_global, &lsview_local,
 	  { .init = &init_lsview },
 	},
 	{ "number", "nu",
-	  OPT_BOOL, 0, NULL, &number_handler,
+	  OPT_BOOL, 0, NULL, &number_global, &number_local,
 	  { .init = &init_number },
 	},
 	{ "numberwidth", "nuw",
-	  OPT_INT, 0, NULL, &numberwidth_handler,
+	  OPT_INT, 0, NULL, &numberwidth_global, &numberwidth_local,
 	  { .init = &init_numberwidth },
 	},
 	{ "relativenumber", "rnu",
-	  OPT_BOOL, 0, NULL, &relativenumber_handler,
+	  OPT_BOOL, 0, NULL, &relativenumber_global, &relativenumber_local,
 	  { .init = &init_relativenumber },
 	},
 	{ "sort", "",
-	  OPT_STRLIST, ARRAY_LEN(sort_types), sort_types, &sort_handler,
+	  OPT_STRLIST, ARRAY_LEN(sort_types), sort_types, &sort_global, &sort_local,
 	  { .init = &init_sort },
 	},
+	{ "sortgroups", "",
+	  OPT_STR, 0, NULL, &sortgroups_global, &sortgroups_local,
+	  { .ref.str_val = &empty },
+	},
 	{ "sortorder", "",
-	  OPT_ENUM, ARRAY_LEN(sortorder_enum), sortorder_enum, &sortorder_handler,
+	  OPT_ENUM, ARRAY_LEN(sortorder_enum), sortorder_enum, &sortorder_global,
+	  &sortorder_local,
 	  { .init = &init_sortorder },
 	},
 	{ "viewcolumns", "",
-	  OPT_STRLIST, 0, NULL, &viewcolumns_handler,
-	  { .init = &init_viewcolumns },
+	  OPT_STRLIST, 0, NULL, &viewcolumns_global, &viewcolumns_local,
+	  { .ref.str_val = &empty },
 	},
 };
 
@@ -522,7 +613,7 @@ classify_to_str(void)
 	size_t len = 0;
 	int filetype;
 	buf[0] = '\0';
-	for(filetype = 0; filetype < FILE_TYPE_COUNT; filetype++)
+	for(filetype = 0; filetype < FT_COUNT; ++filetype)
 	{
 		const char prefix[2] = { cfg.decorations[filetype][DECORATION_PREFIX] };
 		const char suffix[2] = { cfg.decorations[filetype][DECORATION_SUFFIX] };
@@ -556,6 +647,22 @@ init_cpoptions(optval_t *val)
 	val->str_val = buf;
 }
 
+/* Initializes 'dirsize' option from cfg.view_dir_size variable. */
+static void
+init_dirsize(optval_t *val)
+{
+	val->enum_item = (cfg.view_dir_size == VDS_SIZE ? 0 : 1);
+}
+
+/* Convenience function to format an endpoint inside the buffer, which should be
+ * large enough.  Returns the buffer. */
+static const char *
+to_endpoint(int i, char buffer[])
+{
+	sprintf(buffer, "%d", i);
+	return buffer;
+}
+
 static void
 init_timefmt(optval_t *val)
 {
@@ -563,7 +670,7 @@ init_timefmt(optval_t *val)
 }
 
 static void
-init_trash_dir(optval_t *val)
+init_trashdir(optval_t *val)
 {
 	val->str_val = cfg.trash_dir;
 }
@@ -571,15 +678,24 @@ init_trash_dir(optval_t *val)
 static void
 init_lsview(optval_t *val)
 {
-	val->bool_val = curr_view->ls_view;
+	val->bool_val = curr_view->ls_view_g;
 }
 
+/* Initializes 'shortmess' from current configuration state. */
 static void
 init_shortmess(optval_t *val)
 {
 	static char buf[32];
-	snprintf(buf, sizeof(buf), "%s", cfg.trunc_normal_sb_msgs ? "T" : "");
+	snprintf(buf, sizeof(buf), "%s%s", cfg.trunc_normal_sb_msgs ? "T" : "",
+			cfg.shorten_title_paths ? "p" : "");
 	val->str_val = buf;
+}
+
+/* Initializes value of 'iooptions' from configuration. */
+static void
+init_iooptions(optval_t *val)
+{
+	val->set_items = (cfg.fast_file_cloning != 0) << 0;
 }
 
 /* Default-initializes whether to display file numbers. */
@@ -622,30 +738,85 @@ init_tuioptions(optval_t *val)
 {
 	static char buf[32];
 	snprintf(buf, sizeof(buf), "%s%s",
-			cfg.filelist_col_padding ? "p" : "",
+			cfg.extra_padding ? "p" : "",
 			cfg.side_borders_visible ? "s" : "");
 	val->str_val = buf;
 }
 
+/* Formats 'wordchars' initial value from cfg.word_chars array. */
 static void
-init_viewcolumns(optval_t *val)
+init_wordchars(optval_t *val)
 {
-	val->str_val = "";
+	static char *str;
+
+	size_t i;
+	size_t len;
+
+	/* This is for the case when cfg.word_chars is empty, so that we won't return
+	 * NULL as initial value. */
+	replace_string(&str, "");
+
+	len = 0U;
+	i = 0U;
+	while(i < sizeof(cfg.word_chars))
+	{
+		int l, r;
+
+		while(i < sizeof(cfg.word_chars) && !cfg.word_chars[i])
+		{
+			++i;
+		}
+		l = i;
+		while(i < sizeof(cfg.word_chars) && cfg.word_chars[i])
+		{
+			++i;
+		}
+		r = i - 1;
+
+		if((size_t)l < sizeof(cfg.word_chars))
+		{
+			char left[16];
+			char range[32];
+
+			if(len != 0U)
+			{
+				(void)strappendch(&str, &len, ',');
+			}
+
+			if(r == l)
+			{
+				snprintf(range, sizeof(range), "%s", to_endpoint(l, left));
+			}
+			else
+			{
+				char right[16];
+				snprintf(range, sizeof(range), "%s-%s", to_endpoint(l, left),
+						to_endpoint(r, right));
+			}
+			(void)strappend(&str, &len, range);
+		}
+	}
+
+	val->str_val = str;
 }
 
 static void
 load_options_defaults(void)
 {
 	size_t i;
-	for(i = 0; i < ARRAY_LEN(options); i++)
+	for(i = 0U; i < ARRAY_LEN(options); ++i)
 	{
 		if(options[i].initializer.init != NULL)
 		{
 			options[i].initializer.init(&options[i].val);
 		}
-		else
+		else if(options[i].type == OPT_STR || options[i].type == OPT_STRLIST)
 		{
 			options[i].val.str_val = *options[i].initializer.ref.str_val;
+		}
+		else
+		{
+			options[i].val.int_val = *options[i].initializer.ref.int_val;
 		}
 	}
 }
@@ -653,40 +824,124 @@ load_options_defaults(void)
 static void
 add_options(void)
 {
-	int i;
-	for(i = 0; i < ARRAY_LEN(options); i++)
+	size_t i;
+	for(i = 0U; i < ARRAY_LEN(options); ++i)
 	{
-		add_option(options[i].name, options[i].abbr, options[i].type,
-				options[i].val_count, options[i].vals, options[i].handler,
+		add_option(options[i].name, options[i].abbr, options[i].type, OPT_GLOBAL,
+				options[i].val_count, options[i].vals, options[i].global_handler,
 				options[i].val);
+
+		if(options[i].local_handler != NULL)
+		{
+			add_option(options[i].name, options[i].abbr, options[i].type, OPT_LOCAL,
+					options[i].val_count, options[i].vals, options[i].local_handler,
+					options[i].val);
+		}
 	}
 }
 
 void
-load_local_options(FileView *view)
+reset_local_options(FileView *view)
+{
+	optval_t val;
+
+	memcpy(view->sort, view->sort_g, sizeof(view->sort));
+	load_sort_option_inner(view, view->sort);
+
+	fview_set_lsview(view, view->ls_view_g);
+	val.int_val = view->ls_view_g;
+	set_option("lsview", val, OPT_LOCAL);
+
+	view->num_type = view->num_type_g;
+	val.bool_val = view->num_type_g & NT_SEQ;
+	set_option("number", val, OPT_LOCAL);
+	val.bool_val = view->num_type_g & NT_REL;
+	set_option("relativenumber", val, OPT_LOCAL);
+
+	view->num_width = view->num_width_g;
+	val.int_val = view->num_width_g;
+	set_option("numberwidth", val, OPT_LOCAL);
+
+	replace_string(&view->view_columns, view->view_columns_g);
+	set_viewcolumns(view, view->view_columns);
+	val.str_val = view->view_columns;
+	set_option("viewcolumns", val, OPT_LOCAL);
+
+	replace_string(&view->sort_groups, view->sort_groups_g);
+	val.str_val = view->sort_groups;
+	set_option("sortgroups", val, OPT_LOCAL);
+}
+
+void
+load_view_options(FileView *view)
 {
 	optval_t val;
 
 	load_sort_option(view);
 
 	val.str_val = view->view_columns;
-	set_option("viewcolumns", val);
+	set_option("viewcolumns", val, OPT_LOCAL);
+	val.str_val = view->view_columns_g;
+	set_option("viewcolumns", val, OPT_GLOBAL);
+
+	val.str_val = view->sort_groups;
+	set_option("sortgroups", val, OPT_LOCAL);
+	val.str_val = view->sort_groups_g;
+	set_option("sortgroups", val, OPT_GLOBAL);
 
 	val.bool_val = view->ls_view;
-	set_option("lsview", val);
+	set_option("lsview", val, OPT_LOCAL);
+	val.bool_val = view->ls_view_g;
+	set_option("lsview", val, OPT_GLOBAL);
 
 	val.bool_val = view->num_type & NT_SEQ;
-	set_option("number", val);
+	set_option("number", val, OPT_LOCAL);
+	val.bool_val = view->num_type_g & NT_SEQ;
+	set_option("number", val, OPT_GLOBAL);
 
 	val.int_val = view->num_width;
-	set_option("numberwidth", val);
+	set_option("numberwidth", val, OPT_LOCAL);
+	val.int_val = view->num_width_g;
+	set_option("numberwidth", val, OPT_GLOBAL);
 
-	val.int_val = view->num_type & NT_REL;
-	set_option("relativenumber", val);
+	val.bool_val = view->num_type & NT_REL;
+	set_option("relativenumber", val, OPT_LOCAL);
+	val.bool_val = view->num_type_g & NT_REL;
+	set_option("relativenumber", val, OPT_GLOBAL);
+}
+
+void
+clone_local_options(const FileView *from, FileView *to)
+{
+	replace_string(&to->view_columns, from->view_columns);
+	replace_string(&to->view_columns_g, from->view_columns_g);
+
+	to->num_width = from->num_width;
+	to->num_width_g = from->num_width_g;
+
+	to->num_type = from->num_type;
+	to->num_type_g = from->num_type_g;
+
+	replace_string(&to->sort_groups, from->sort_groups);
+	replace_string(&to->sort_groups_g, from->sort_groups_g);
+
+	memcpy(to->sort, from->sort, sizeof(to->sort));
+	memcpy(to->sort_g, from->sort_g, sizeof(to->sort_g));
+
+	to->ls_view_g = from->ls_view_g;
+	fview_set_lsview(to, from->ls_view);
 }
 
 void
 load_sort_option(FileView *view)
+{
+	load_sort_option_inner(view, view->sort);
+	load_sort_option_inner(view, view->sort_g);
+}
+
+/* Loads sorting related options ("sort" and "sortorder"). */
+static void
+load_sort_option_inner(FileView *view, char sort_keys[])
 {
 	/* This approximate maximum length also includes "+" or "-" sign and a
 	 * comma (",") between items. */
@@ -697,19 +952,20 @@ load_sort_option(FileView *view)
 	optval_t val;
 	char opt_val[MAX_SORT_KEY_LEN*SK_COUNT];
 	size_t opt_val_len = 0U;
+	OPT_SCOPE scope = (sort_keys == view->sort) ? OPT_LOCAL : OPT_GLOBAL;
 
 	opt_val[0] = '\0';
 
-	ui_view_sort_list_ensure_well_formed(view->sort);
+	ui_view_sort_list_ensure_well_formed(view, sort_keys);
 
 	/* Produce a string, which represents a list of sorting keys. */
 	i = -1;
-	while(++i < SK_COUNT && abs(view->sort[i]) <= SK_LAST)
+	while(++i < SK_COUNT && abs(sort_keys[i]) <= SK_LAST)
 	{
-		const int sort_option = view->sort[i];
+		const int sort_option = sort_keys[i];
 		const char *const comma = (opt_val_len == 0U) ? "" : ",";
 		const char option_mark = (sort_option < 0) ? '-' : '+';
-		const char *const option_name = sort_enum[abs(sort_option) - 1];
+		const char *const option_name = sort_enum[abs(sort_option)];
 
 		opt_val_len += snprintf(opt_val + opt_val_len,
 				sizeof(opt_val) - opt_val_len, "%s%c%s", comma, option_mark,
@@ -717,31 +973,42 @@ load_sort_option(FileView *view)
 	}
 
 	val.str_val = opt_val;
-	set_option("sort", val);
+	set_option("sort", val, scope);
 
-	val.enum_item = (view->sort[0] < 0);
-	set_option("sortorder", val);
+	val.enum_item = (sort_keys[0] < 0);
+	set_option("sortorder", val, scope);
 }
 
 int
-process_set_args(const char *args)
+process_set_args(const char args[], int global, int local)
 {
 	int set_options_error;
 	const char *text_buffer;
+	OPT_SCOPE scope;
 
-	text_buffer_clear();
+	assert((global || local) && "At least one type of options must be changed.");
+
+	vle_tb_clear(vle_err);
 
 	/* Call of set_options() can change error. */
 	error = 0;
-	set_options_error = set_options(args) != 0;
-	error = error || set_options_error;
-	text_buffer = text_buffer_get();
+	if(local && global)
+	{
+		scope = OPT_ANY;
+	}
+	else
+	{
+		scope = local ? OPT_LOCAL : OPT_GLOBAL;
+	}
+	set_options_error = (set_options(args, scope) != 0);
+	error |= set_options_error;
+	text_buffer = vle_tb_get_data(vle_err);
 
 	if(error)
 	{
-		text_buffer_add("Invalid argument for :set command");
+		vle_tb_append_line(vle_err, "Invalid argument for :set command");
 		/* We just modified text buffer and can't use text_buffer variable. */
-		status_bar_error(text_buffer_get());
+		status_bar_error(vle_tb_get_data(vle_err));
 	}
 	else if(text_buffer[0] != '\0')
 	{
@@ -774,17 +1041,33 @@ cdpath_handler(OPT_OP op, optval_t val)
 	(void)replace_string(&cfg.cd_path, val.str_val);
 }
 
+/* Whether directory path should always be resolved to real path (no symbolic
+ * links). */
+static void
+chaselinks_handler(OPT_OP op, optval_t val)
+{
+	cfg.chase_links = val.bool_val;
+
+	/* Trigger paths update. */
+	(void)change_directory(other_view, other_view->curr_dir);
+	(void)change_directory(curr_view, curr_view->curr_dir);
+	ui_views_update_titles();
+}
+
 static void
 classify_handler(OPT_OP op, optval_t val)
 {
-	char decorations[FILE_TYPE_COUNT][2] = {};
+	char decorations[FT_COUNT][2] = {};
 
 	if(str_to_classify(val.str_val, decorations) == 0)
 	{
-		assert(sizeof(cfg.decorations) == sizeof(decorations) && "Arrays diverged.");
+		assert(sizeof(cfg.decorations) == sizeof(decorations) && "Arrays diverged");
 		memcpy(&cfg.decorations, &decorations, sizeof(cfg.decorations));
 
-		update_screen(UT_REDRAW);
+		/* 'classify' option affects columns layout, hence views must be reloaded as
+		 * loading list of files performs calculation of filename properties. */
+		ui_view_schedule_reload(curr_view);
+		ui_view_schedule_reload(other_view);
 	}
 	else
 	{
@@ -792,14 +1075,14 @@ classify_handler(OPT_OP op, optval_t val)
 	}
 
 	init_classify(&val);
-	set_option("classify", val);
+	set_option("classify", val, OPT_GLOBAL);
 }
 
 /* Fills the decorations array with parsed classification values from the str.
  * It's assumed that decorations array is zeroed.  Returns zero on success,
  * otherwise non-zero is returned. */
 static int
-str_to_classify(const char str[], char decorations[FILE_TYPE_COUNT][2])
+str_to_classify(const char str[], char decorations[FT_COUNT][2])
 {
 	char *saveptr;
 	char *str_copy;
@@ -814,25 +1097,26 @@ str_to_classify(const char str[], char decorations[FILE_TYPE_COUNT][2])
 	}
 
 	error_encountered = 0;
+	saveptr = NULL;
 	for(token = str_copy; (token = strtok_r(token, ",", &saveptr)); token = NULL)
 	{
 		FileType type;
 		const char *suffix = pick_out_decoration(token, &type);
 		if(suffix == NULL)
 		{
-			text_buffer_addf("Invalid filetype: %s", token);
+			vle_tb_append_linef(vle_err, "Invalid filetype: %s", token);
 			error_encountered = 1;
 		}
 		else
 		{
 			if(strlen(token) > 1)
 			{
-				text_buffer_addf("Invalid prefix: %s", token);
+				vle_tb_append_linef(vle_err, "Invalid prefix: %s", token);
 				error_encountered = 1;
 			}
 			if(strlen(suffix) > 1)
 			{
-				text_buffer_addf("Invalid suffix: %s", suffix);
+				vle_tb_append_linef(vle_err, "Invalid suffix: %s", suffix);
 				error_encountered = 1;
 			}
 		}
@@ -854,7 +1138,7 @@ static const char *
 pick_out_decoration(const char classify_item[], FileType *type)
 {
 	int filetype;
-	for(filetype = 0; filetype < FILE_TYPE_COUNT; filetype++)
+	for(filetype = 0; filetype < FT_COUNT; ++filetype)
 	{
 		char name[16];
 		char *item_name;
@@ -887,7 +1171,7 @@ columns_handler(OPT_OP op, optval_t val)
 	if(val.int_val < MIN_TERM_WIDTH)
 	{
 		val.int_val = MIN_TERM_WIDTH;
-		text_buffer_addf("At least %d columns needed", MIN_TERM_WIDTH);
+		vle_tb_append_linef(vle_err, "At least %d columns needed", MIN_TERM_WIDTH);
 		error = 1;
 	}
 
@@ -900,7 +1184,7 @@ columns_handler(OPT_OP op, optval_t val)
 
 	/* Need to update value of option in case it was corrected above. */
 	val.int_val = cfg.columns;
-	set_option("columns", val);
+	set_option("columns", val, OPT_GLOBAL);
 }
 
 static void
@@ -944,6 +1228,21 @@ cpoptions_handler(OPT_OP op, optval_t val)
 	}
 }
 
+/* Handles updates of the 'deleteprg' option. */
+static void
+deleteprg_handler(OPT_OP op, optval_t val)
+{
+	replace_string(&cfg.delete_prg, val.str_val);
+}
+
+/* Handles changes to the way directory size is displayed in a view. */
+static void
+dirsize_handler(OPT_OP op, optval_t val)
+{
+	cfg.view_dir_size = val.enum_item;
+	update_screen(UT_REDRAW);
+}
+
 static void
 dotdirs_handler(OPT_OP op, optval_t val)
 {
@@ -963,6 +1262,9 @@ fillchars_handler(OPT_OP op, optval_t val)
 {
 	char *new_val = strdup(val.str_val);
 	char *part = new_val, *state = NULL;
+
+	(void)replace_string(&cfg.border_filler, " ");
+
 	while((part = split_and_get(part, ',', &state)) != NULL)
 	{
 		if(starts_with_lit(part, "vborder:"))
@@ -972,7 +1274,8 @@ fillchars_handler(OPT_OP op, optval_t val)
 		else
 		{
 			break_at(part, ':');
-			text_buffer_addf("Unknown key for 'fillchars' option: %s", part);
+			vle_tb_append_linef(vle_err, "Unknown key for 'fillchars' option: %s",
+					part);
 			break;
 		}
 	}
@@ -1002,7 +1305,7 @@ reset_fillchars(void)
 	}
 
 	val.str_val = value;
-	set_option("fillchars", val);
+	set_option("fillchars", val, OPT_GLOBAL);
 }
 
 static void
@@ -1022,11 +1325,11 @@ fusehome_handler(OPT_OP op, optval_t val)
 {
 	char *const expanded_path = expand_path(val.str_val);
 	/* Set cfg.fuse_home in the correct way. */
-	if(set_fuse_home(expanded_path) != 0)
+	if(cfg_set_fuse_home(expanded_path) != 0)
 	{
 		/* Reset the 'fusehome' options to its previous value. */
 		val.str_val = cfg.fuse_home;
-		set_option("fusehome", val);
+		set_option("fusehome", val, OPT_GLOBAL);
 	}
 	free(expanded_path);
 }
@@ -1046,7 +1349,7 @@ grepprg_handler(OPT_OP op, optval_t val)
 static void
 history_handler(OPT_OP op, optval_t val)
 {
-	resize_history(MAX(0, val.int_val));
+	cfg_resize_histories(val.int_val);
 }
 
 static void
@@ -1080,11 +1383,84 @@ incsearch_handler(OPT_OP op, optval_t val)
 	cfg.inc_search = val.bool_val;
 }
 
+/* Handles changes of 'iooptions'.  Updates related configuration values. */
+static void
+iooptions_handler(OPT_OP op, optval_t val)
+{
+	cfg.fast_file_cloning = ((val.set_items & 1) != 0);
+}
+
+/* Parses range, which can be shortened to single endpoint if first element
+ * matches last one.  Returns non-zero on error, otherwise zero is returned. */
+static int
+parse_range(const char range[], int *from, int *to)
+{
+	const char *p = range;
+
+	if(parse_endpoint(&p, from) != 0)
+	{
+		vle_tb_append_linef(vle_err, "Wrong range: %s", range);
+		return 1;
+	}
+	if(*p == '-')
+	{
+		++p;
+		if(parse_endpoint(&p, to) != 0)
+		{
+			vle_tb_append_linef(vle_err, "Wrong range: %s", range);
+			return 1;
+		}
+	}
+	else
+	{
+		*to = *from;
+	}
+
+	if(*p != '\0')
+	{
+		vle_tb_append_linef(vle_err, "Wrong range: %s", range);
+		return 1;
+	}
+
+	if(*from > *to)
+	{
+		vle_tb_append_linef(vle_err, "Inversed range: %s", range);
+		return 1;
+	}
+
+	return 0;
+}
+
+/* Parses single endpoint of a range.  It's either a number or a character.
+ * Returns non-zero on error, otherwise zero is returned. */
+static int
+parse_endpoint(const char **str, int *endpoint)
+{
+	if(isdigit(**str))
+	{
+		char *endptr;
+		const long int val = strtol(*str, &endptr, 10);
+		if(val < 0 || val >= 256)
+		{
+			vle_tb_append_linef(vle_err, "Wrong value: %ld", val);
+			return 1;
+		}
+		*str = endptr;
+		*endpoint = val;
+	}
+	else
+	{
+		*endpoint = **str;
+		++*str;
+	}
+	return 0;
+}
+
 static void
 laststatus_handler(OPT_OP op, optval_t val)
 {
-	cfg.last_status = val.bool_val;
-	if(cfg.last_status)
+	cfg.display_statusline = val.bool_val;
+	if(cfg.display_statusline)
 	{
 		if(curr_stats.split == VSPLIT)
 		{
@@ -1114,7 +1490,7 @@ lines_handler(OPT_OP op, optval_t val)
 	if(val.int_val < MIN_TERM_HEIGHT)
 	{
 		val.int_val = MIN_TERM_HEIGHT;
-		text_buffer_addf("At least %d lines needed", MIN_TERM_HEIGHT);
+		vle_tb_append_linef(vle_err, "At least %d lines needed", MIN_TERM_HEIGHT);
 		error = 1;
 	}
 
@@ -1128,13 +1504,29 @@ lines_handler(OPT_OP op, optval_t val)
 
 	/* Need to update value of option in case it was corrected above. */
 	val.int_val = cfg.lines;
-	set_option("lines", val);
+	set_option("lines", val, OPT_GLOBAL);
 }
 
 static void
 locateprg_handler(OPT_OP op, optval_t val)
 {
 	(void)replace_string(&cfg.locate_prg, val.str_val);
+}
+
+/* Minimum period on waiting for the input.  Works together with timeoutlen. */
+static void
+mintimeoutlen_handler(OPT_OP op, optval_t val)
+{
+	if(val.int_val <= 0)
+	{
+		vle_tb_append_linef(vle_err, "Argument must be > 0: %d", val.int_val);
+		error = 1;
+		val.int_val = 1;
+		set_option("mintimeoutlen", val, OPT_GLOBAL);
+		return;
+	}
+
+	cfg.min_timeout_len = val.int_val;
 }
 
 static void
@@ -1174,15 +1566,17 @@ scrolloff_handler(OPT_OP op, optval_t val)
 {
 	if(val.int_val < 0)
 	{
-		text_buffer_addf("Invalid scroll size: %d", val.int_val);
+		vle_tb_append_linef(vle_err, "Invalid scroll size: %d", val.int_val);
 		error = 1;
-		reset_option_to_default("scrolloff");
+		reset_option_to_default("scrolloff", OPT_GLOBAL);
 		return;
 	}
 
 	cfg.scroll_off = val.int_val;
 	if(cfg.scroll_off > 0)
-		move_to_list_pos(curr_view, curr_view->list_pos);
+	{
+		fview_cursor_redraw(curr_view);
+	}
 }
 
 static void
@@ -1191,12 +1585,15 @@ shell_handler(OPT_OP op, optval_t val)
 	cfg_set_shell(val.str_val);
 }
 
+/* Handles changes of 'shortmess' option by expanding flags into actual option
+ * values. */
 static void
 shortmess_handler(OPT_OP op, optval_t val)
 {
 	const char *p;
 
 	cfg.trunc_normal_sb_msgs = 0;
+	cfg.shorten_title_paths = 0;
 
 	p = val.str_val;
 	while(*p != '\0')
@@ -1205,8 +1602,14 @@ shortmess_handler(OPT_OP op, optval_t val)
 		{
 			cfg.trunc_normal_sb_msgs = 1;
 		}
-		p++;
+		else if(*p == 'p')
+		{
+			cfg.shorten_title_paths = 1;
+		}
+		++p;
 	}
+
+	ui_views_update_titles();
 }
 
 #ifndef _WIN32
@@ -1232,155 +1635,396 @@ sortnumbers_handler(OPT_OP op, optval_t val)
 	redraw_lists();
 }
 
-/* Handles switch that controls columns vs. list like view. */
+/* Handles switch that controls column vs. ls-like view in global option. */
 static void
-lsview_handler(OPT_OP op, optval_t val)
+lsview_global(OPT_OP op, optval_t val)
 {
-	curr_view->ls_view = val.bool_val;
-
-	if(curr_view->ls_view)
+	curr_view->ls_view_g = val.bool_val;
+	if(curr_stats.global_local_settings)
 	{
-		column_info_t column_info =
-		{
-			.column_id = SK_BY_NAME, .full_width = 0UL, .text_width = 0UL,
-			.align = AT_LEFT,        .sizing = ST_AUTO, .cropping = CT_ELLIPSIS,
-		};
-
-		columns_clear(curr_view->columns);
-		columns_add_column(curr_view->columns, column_info);
-		redraw_current_view();
-	}
-	else
-	{
-		load_view_columns_option(curr_view, curr_view->view_columns);
+		other_view->ls_view_g = val.bool_val;
 	}
 }
 
-/* Handles file numbers displaying toggle. */
+/* Handles switch that controls column vs. ls-like view in local option. */
 static void
-number_handler(OPT_OP op, optval_t val)
+lsview_local(OPT_OP op, optval_t val)
 {
-	update_num_type(NT_SEQ, val.bool_val);
-}
-
-/* Handles changes of minimum width of file number field. */
-static void
-numberwidth_handler(OPT_OP op, optval_t val)
-{
-	curr_view->num_width = val.int_val;
-
-	if(ui_view_displays_numbers(curr_view))
+	fview_set_lsview(curr_view, val.bool_val);
+	if(curr_stats.global_local_settings)
 	{
-		redraw_current_view();
+		fview_set_lsview(other_view, val.bool_val);
 	}
 }
 
-/* Handles relative file numbers displaying toggle. */
+/* Handles file numbers displaying toggle in global option. */
 static void
-relativenumber_handler(OPT_OP op, optval_t val)
+number_global(OPT_OP op, optval_t val)
 {
-	update_num_type(NT_REL, val.bool_val);
+	update_num_type(curr_view, &curr_view->num_type_g, NT_SEQ, val.bool_val);
+	if(curr_stats.global_local_settings)
+	{
+		update_num_type(other_view, &other_view->num_type_g, NT_SEQ, val.bool_val);
+	}
+}
+
+/* Handles file numbers displaying toggle in local option. */
+static void
+number_local(OPT_OP op, optval_t val)
+{
+	update_num_type(curr_view, &curr_view->num_type, NT_SEQ, val.bool_val);
+	if(curr_stats.global_local_settings)
+	{
+		update_num_type(other_view, &other_view->num_type, NT_SEQ, val.bool_val);
+	}
+}
+
+/* Handles changes of minimum width of file number field in global option. */
+static void
+numberwidth_global(OPT_OP op, optval_t val)
+{
+	set_numberwidth(curr_view, &curr_view->num_width_g, val.int_val);
+	if(curr_stats.global_local_settings)
+	{
+		set_numberwidth(other_view, &other_view->num_width_g, val.int_val);
+	}
+}
+
+/* Handles changes of minimum width of file number field in local option. */
+static void
+numberwidth_local(OPT_OP op, optval_t val)
+{
+	set_numberwidth(curr_view, &curr_view->num_width, val.int_val);
+	if(curr_stats.global_local_settings)
+	{
+		set_numberwidth(other_view, &other_view->num_width, val.int_val);
+	}
+}
+
+/* Sets number width for the view. */
+static void
+set_numberwidth(FileView *view, int *num_width, int width)
+{
+	*num_width = width;
+
+	if(ui_view_displays_numbers(view))
+	{
+		redraw_view(view);
+	}
+}
+
+/* Handles relative file numbers displaying toggle in global option. */
+static void
+relativenumber_global(OPT_OP op, optval_t val)
+{
+	update_num_type(curr_view, &curr_view->num_type_g, NT_REL, val.bool_val);
+	if(curr_stats.global_local_settings)
+	{
+		update_num_type(other_view, &other_view->num_type_g, NT_REL, val.bool_val);
+	}
+}
+
+/* Handles relative file numbers displaying toggle in local option. */
+static void
+relativenumber_local(OPT_OP op, optval_t val)
+{
+	update_num_type(curr_view, &curr_view->num_type, NT_REL, val.bool_val);
+	if(curr_stats.global_local_settings)
+	{
+		update_num_type(other_view, &other_view->num_type, NT_REL, val.bool_val);
+	}
 }
 
 /* Handles toggling of boolean number related option and updates current view if
  * needed. */
 static void
-update_num_type(NumberingType num_type, int enable)
+update_num_type(FileView *view, NumberingType *num_type, NumberingType type,
+		int enable)
 {
-	const int old_num_type = curr_view->num_type;
+	const NumberingType old_num_type = *num_type;
 
-	curr_view->num_type = enable
-	                    ? (old_num_type | num_type)
-	                    : (old_num_type & ~num_type);
+	*num_type = enable
+	          ? (old_num_type | type)
+	          : (old_num_type & ~type);
 
-	if(curr_view->num_type != old_num_type)
+	if(*num_type != old_num_type)
 	{
-		redraw_current_view();
+		redraw_view(view);
 	}
 }
 
+/* Handler for global 'sort' option, parses the value and checks it for
+ * correctness. */
 static void
-sort_handler(OPT_OP op, optval_t val)
+sort_global(OPT_OP op, optval_t val)
 {
-	char *p = val.str_val - 1;
-	int i;
+	char *const value = strdup(val.str_val);
 
-	i = 0;
-	do
+	set_sort(curr_view, curr_view->sort_g, value);
+	if(curr_stats.global_local_settings)
 	{
-		char key[32];
-		char *t;
-		int minus;
+		set_sort(other_view, other_view->sort_g, value);
+	}
+
+	free(value);
+}
+
+/* Handler for local 'sort' option, parses the value and checks it for
+ * correctness. */
+static void
+sort_local(OPT_OP op, optval_t val)
+{
+	char *const value = strdup(val.str_val);
+
+	/* Make sure we don't sort unsorted custom view on :restart. */
+	char *const sort = curr_stats.restart_in_progress
+	                 ? ui_view_sort_list_get(curr_view)
+	                 : curr_view->sort;
+	set_sort(curr_view, sort, value);
+	if(curr_stats.global_local_settings)
+	{
+		/* Make sure we don't sort unsorted custom view on :restart. */
+		char *const sort = curr_stats.restart_in_progress
+		                 ? ui_view_sort_list_get(other_view)
+		                 : other_view->sort;
+		set_sort(other_view, sort, value);
+	}
+
+	free(value);
+}
+
+/* Sets sorting value for the view. */
+static void
+set_sort(FileView *view, char sort_keys[], char order[])
+{
+	char *part = order, *state = NULL;
+	int key_count = 0;
+
+	while((part = split_and_get(part, ',', &state)) != NULL)
+	{
+		char *name = part;
+		int reverse = 0;
 		int pos;
-		int j;
+		int key_pos;
 
-		t = p + 1;
-		p = strchr(t, ',');
-		if(p == NULL)
-			p = t + strlen(t);
+		if(*name == '-' || *name == '+')
+		{
+			reverse = (*name == '-');
+			++name;
+		}
 
-		minus = (*t == '-');
-		if(*t == '-' || *t == '+')
-			t++;
-
-		snprintf(key, MIN(p - t + 1, sizeof(key)), "%s", t);
-
-		pos = string_array_pos((char **)sort_enum, ARRAY_LEN(sort_enum), key);
+		pos = string_array_pos((char **)&sort_enum[1], ARRAY_LEN(sort_enum) - 1,
+				name);
 		if(pos == -1)
 		{
-			if(key[0] != '\0')
+			if(name[0] != '\0')
 			{
-				text_buffer_addf("Skipped unknown 'sort' value: %s", key);
+				vle_tb_append_linef(vle_err, "Skipped unknown 'sort' value: %s", name);
 				error = 1;
 			}
 			continue;
 		}
-		pos++;
+		++pos;
 
-		for(j = 0; j < i; j++)
-			if(abs(curr_view->sort[j]) == pos)
+		for(key_pos = 0; key_pos < key_count; ++key_pos)
+		{
+			if(abs(sort_keys[key_pos]) == pos)
+			{
 				break;
+			}
+		}
 
-		if(minus)
-			curr_view->sort[j] = -pos;
-		else
-			curr_view->sort[j] = pos;
-		if(j == i)
-			i++;
+		sort_keys[key_pos] = reverse ? -pos : pos;
+
+		if(key_pos == key_count)
+		{
+			++key_count;
+		}
 	}
-	while(*p != '\0');
 
-	if(i < SK_COUNT)
+	if(key_count < SK_COUNT)
 	{
-		curr_view->sort[i] = SK_NONE;
+		sort_keys[key_count] = SK_NONE;
 	}
-	ui_view_sort_list_ensure_well_formed(curr_view->sort);
+	ui_view_sort_list_ensure_well_formed(view, sort_keys);
 
-	reset_view_sort(curr_view);
-	resort_view(curr_view);
-	move_to_list_pos(curr_view, curr_view->list_pos);
-	load_sort_option(curr_view);
+	if(sort_keys == view->sort)
+	{
+		sorting_changed(view);
+	}
+
+	load_sort_option_inner(view, sort_keys);
 }
 
+/* Handles global 'sortgroup' option changes. */
 static void
-sortorder_handler(OPT_OP op, optval_t val)
+sortgroups_global(OPT_OP op, optval_t val)
 {
-	if((val.enum_item ? -1 : +1)*curr_view->sort[0] < 0)
-	{
-		curr_view->sort[0] = -curr_view->sort[0];
+	char *const value = strdup(val.str_val);
 
-		resort_view(curr_view);
-		load_sort_option(curr_view);
+	set_sortgroups(curr_view, &curr_view->sort_groups_g, value);
+	if(curr_stats.global_local_settings)
+	{
+		set_sortgroups(other_view, &other_view->sort_groups_g, value);
+	}
+
+	free(value);
+}
+
+/* Handles local 'sortgroup' option changes. */
+static void
+sortgroups_local(OPT_OP op, optval_t val)
+{
+	char *const value = strdup(val.str_val);
+
+	set_sortgroups(curr_view, &curr_view->sort_groups, value);
+	sorting_changed(curr_view);
+	if(curr_stats.global_local_settings)
+	{
+		set_sortgroups(other_view, &other_view->sort_groups, value);
+		sorting_changed(other_view);
+	}
+
+	free(value);
+}
+
+/* Sets sort_groups fields (*opt) of the view to the value handling malformed
+ * values correctly. */
+static void
+set_sortgroups(FileView *view, char **opt, char value[])
+{
+	OPT_SCOPE scope = (opt == &view->sort_groups) ? OPT_LOCAL : OPT_GLOBAL;
+	int failure = 0;
+
+	char *first = NULL;
+	char *group = value, *state = NULL;
+	while((group = split_and_get(group, ',', &state)) != NULL)
+	{
+		regex_t regex;
+		const int err = regcomp(&regex, group, REG_EXTENDED | REG_ICASE);
+		if(err != 0)
+		{
+			vle_tb_append_linef(vle_err, "Regexp error in %s: %s", group,
+					get_regexp_error(err, &regex));
+			failure = 1;
+		}
+		regfree(&regex);
+
+		if(first == NULL)
+		{
+			first = strdup(group);
+		}
+	}
+
+	if(failure)
+	{
+		optval_t val = { .str_val = *opt };
+
+		free(first);
+		error = 1;
+		set_option("viewcolumns", val, scope);
+		return;
+	}
+
+	if(first != NULL)
+	{
+		if(scope == OPT_LOCAL)
+		{
+			regfree(&view->primary_group);
+			(void)regcomp(&view->primary_group, first, REG_EXTENDED | REG_ICASE);
+		}
+		free(first);
+	}
+
+	replace_string(opt, value);
+}
+
+/* Reacts on changes of view sorting. */
+static void
+sorting_changed(FileView *view)
+{
+	/* Reset search results, which might be outdated after resorting. */
+	view->matches = 0;
+	fview_sorting_updated(view);
+	resort_view(view);
+}
+
+/* Handles global 'sortorder' option and corrects ordering for primary sorting
+ * key. */
+static void
+sortorder_global(OPT_OP op, optval_t val)
+{
+	set_sortorder(curr_view, (val.enum_item == 1) ? 0 : 1, curr_view->sort_g);
+	if(curr_stats.global_local_settings)
+	{
+		set_sortorder(other_view, (val.enum_item == 1) ? 0 : 1, other_view->sort_g);
 	}
 }
 
-/* Handler of local to a view 'viewcolumns' option, which defines custom view
- * columns. */
+/* Handles local 'sortorder' option and corrects ordering for primary sorting
+ * key. */
 static void
-viewcolumns_handler(OPT_OP op, optval_t val)
+sortorder_local(OPT_OP op, optval_t val)
 {
-	const int update_columns_ui = ui_view_displays_columns(curr_view);
-	set_view_columns_option(curr_view, val.str_val, update_columns_ui);
+	set_sortorder(curr_view, (val.enum_item == 1) ? 0 : 1, curr_view->sort);
+	if(curr_stats.global_local_settings)
+	{
+		set_sortorder(other_view, (val.enum_item == 1) ? 0 : 1, other_view->sort);
+	}
+}
+
+/* Updates sorting order for the view. */
+static void
+set_sortorder(FileView *view, int ascending, char sort_keys[])
+{
+	if((ascending ? +1 : -1)*sort_keys[0] < 0)
+	{
+		sort_keys[0] = -sort_keys[0];
+
+		if(sort_keys == view->sort)
+		{
+			resort_view(view);
+			load_sort_option(view);
+		}
+	}
+}
+
+/* Handler of global 'viewcolumns' option, which defines custom view columns. */
+static void
+viewcolumns_global(OPT_OP op, optval_t val)
+{
+	char *const value = strdup(val.str_val);
+
+	replace_string(&curr_view->view_columns_g, value);
+	if(curr_stats.global_local_settings)
+	{
+		replace_string(&other_view->view_columns_g, value);
+	}
+
+	free(value);
+}
+
+/* Handler of local 'viewcolumns' option, which defines custom view columns. */
+static void
+viewcolumns_local(OPT_OP op, optval_t val)
+{
+	char *const value = strdup(val.str_val);
+
+	set_viewcolumns(curr_view, value);
+	if(curr_stats.global_local_settings)
+	{
+		set_viewcolumns(other_view, value);
+	}
+
+	free(value);
+}
+
+/* Setups view columns for the view. */
+static void
+set_viewcolumns(FileView *view, const char view_columns[])
+{
+	const int update_columns_ui = ui_view_displays_columns(view);
+	set_view_columns_option(view, view_columns, update_columns_ui);
 }
 
 void
@@ -1403,20 +2047,23 @@ set_view_columns_option(FileView *view, const char value[], int update_ui)
 		columns_clear(columns);
 	}
 
-	if(parse_columns(columns, add_column, map_name, new_value) != 0)
+	if(parse_columns(columns, &add_column, &map_name, new_value, view) != 0)
 	{
 		optval_t val;
 
-		text_buffer_add("Invalid format of 'viewcolumns' option");
+		vle_tb_append_line(vle_err, "Invalid format of 'viewcolumns' option");
 		error = 1;
 
 		if(update_ui)
 		{
-			(void)parse_columns(columns, add_column, map_name, view->view_columns);
+			const char *old_value = (view->view_columns[0] == '\0')
+			                      ? DEFAULT_VIEW_COLUMNS
+			                      : view->view_columns;
+			(void)parse_columns(columns, &add_column, &map_name, old_value, view);
 		}
 
 		val.str_val = view->view_columns;
-		set_option("viewcolumns", val);
+		set_option("viewcolumns", val, OPT_LOCAL);
 	}
 	else
 	{
@@ -1426,7 +2073,7 @@ set_view_columns_option(FileView *view, const char value[], int update_ui)
 		(void)replace_string(&view->view_columns, value);
 		if(update_ui)
 		{
-			redraw_view(view);
+			ui_view_schedule_redraw(view);
 		}
 	}
 }
@@ -1444,15 +2091,23 @@ add_column(columns_t columns, column_info_t column_info)
 
 /* Maps column name to column id.  Returns column id. */
 static int
-map_name(const char *name)
+map_name(const char name[], void *arg)
 {
-	if(*name != '\0')
+	int pos;
+
+	/* Handle secondary key (designated by {}). */
+	if(*name == '\0')
 	{
-		int pos;
-		pos = string_array_pos((char **)sort_enum, ARRAY_LEN(sort_enum), name);
-		return (pos >= 0) ? (pos + 1) : -1;
+		const FileView *const view = arg;
+		const char *const sort = curr_stats.restart_in_progress
+		                       ? ui_view_sort_list_get(view)
+		                       : view->sort;
+		return (int)get_secondary_key((SortingKey)abs(sort[0]));
 	}
-	return get_secondary_key(abs(curr_view->sort[0]));
+
+	pos = string_array_pos((char **)&sort_enum[1], ARRAY_LEN(sort_enum) - 1,
+			name);
+	return (pos >= 0) ? (pos + 1) : -1;
 }
 
 void
@@ -1460,17 +2115,16 @@ load_geometry(void)
 {
 	optval_t val;
 	val.int_val = cfg.columns;
-	set_option("columns", val);
+	set_option("columns", val, OPT_GLOBAL);
 	val.int_val = cfg.lines;
-	set_option("lines", val);
+	set_option("lines", val, OPT_GLOBAL);
 }
 
 static void
 resort_view(FileView * view)
 {
 	resort_dir_list(1, view);
-	draw_dir_list(view);
-	refresh_view_win(view);
+	ui_view_schedule_redraw(curr_view);
 }
 
 static void
@@ -1493,9 +2147,9 @@ tabstop_handler(OPT_OP op, optval_t val)
 {
 	if(val.int_val <= 0)
 	{
-		text_buffer_addf("Argument must be positive: %d", val.int_val);
+		vle_tb_append_linef(vle_err, "Argument must be positive: %d", val.int_val);
 		error = 1;
-		reset_option_to_default("tabstop");
+		reset_option_to_default("tabstop", OPT_GLOBAL);
 		return;
 	}
 
@@ -1514,19 +2168,36 @@ timefmt_handler(OPT_OP op, optval_t val)
 	redraw_lists();
 }
 
+/* Maximum period on waiting for the input.  Works together with
+ * mintimeoutlen. */
 static void
 timeoutlen_handler(OPT_OP op, optval_t val)
 {
 	if(val.int_val < 0)
 	{
-		text_buffer_addf("Argument must be >= 0: %d", val.int_val);
+		vle_tb_append_linef(vle_err, "Argument must be >= 0: %d", val.int_val);
 		error = 1;
 		val.int_val = 0;
-		set_option("timeoutlen", val);
+		set_option("timeoutlen", val, OPT_GLOBAL);
 		return;
 	}
 
 	cfg.timeout_len = val.int_val;
+}
+
+/* Whether to update terminal title according to current location or not. */
+static void
+title_handler(OPT_OP op, optval_t val)
+{
+	cfg.set_title = val.bool_val;
+	if(cfg.set_title)
+	{
+		ui_view_title_update(curr_view);
+	}
+	else
+	{
+		term_title_update(NULL);
+	}
 }
 
 static void
@@ -1543,7 +2214,7 @@ trashdir_handler(OPT_OP op, optval_t val)
 	{
 		/* Reset the 'trashdir' option to its previous value. */
 		val.str_val = cfg.trash_dir;
-		set_option("trashdir", val);
+		set_option("trashdir", val, OPT_GLOBAL);
 	}
 	free(expanded_path);
 }
@@ -1555,7 +2226,7 @@ tuioptions_handler(OPT_OP op, optval_t val)
 	const char *p;
 
 	/* Turn all flags off. */
-	cfg.filelist_col_padding = 0;
+	cfg.extra_padding = 0;
 	cfg.side_borders_visible = 0;
 
 	/* And set the ones present in the value. */
@@ -1565,7 +2236,7 @@ tuioptions_handler(OPT_OP op, optval_t val)
 		switch(*p)
 		{
 			case 'p':
-				cfg.filelist_col_padding = 1;
+				cfg.extra_padding = 1;
 				break;
 			case 's':
 				cfg.side_borders_visible = 1;
@@ -1591,18 +2262,14 @@ static void
 vicmd_handler(OPT_OP op, optval_t val)
 {
 	(void)replace_string(&cfg.vi_command, val.str_val);
-	cfg.vi_cmd_bg = ends_with(cfg.vi_command, "&");
-	if(cfg.vi_cmd_bg)
-		cfg.vi_command[strlen(cfg.vi_command) - 1] = '\0';
+	cfg.vi_cmd_bg = cut_suffix(cfg.vi_command, "&");
 }
 
 static void
 vixcmd_handler(OPT_OP op, optval_t val)
 {
 	(void)replace_string(&cfg.vi_x_command, val.str_val);
-	cfg.vi_x_cmd_bg = ends_with(cfg.vi_x_command, "&");
-	if(cfg.vi_x_cmd_bg)
-		cfg.vi_x_command[strlen(cfg.vi_x_command) - 1] = '\0';
+	cfg.vi_x_cmd_bg = cut_suffix(cfg.vi_x_command, "&");
 }
 
 static void
@@ -1621,6 +2288,37 @@ static void
 wildmenu_handler(OPT_OP op, optval_t val)
 {
 	cfg.wild_menu = val.bool_val;
+}
+
+/* Handles setting value of 'wordchars' by parsing list of ranges into character
+ * array. */
+static void
+wordchars_handler(OPT_OP op, optval_t val)
+{
+	char word_chars[256] = { };
+
+	char *new_val = strdup(val.str_val);
+	char *part = new_val, *state = NULL;
+	while((part = split_and_get(part, ',', &state)) != NULL)
+	{
+		int from, to;
+		if(parse_range(part, &from, &to) != 0)
+		{
+			error = 1;
+			break;
+		}
+
+		while(from < to)
+		{
+			word_chars[from++] = 1;
+		}
+	}
+	free(new_val);
+
+	if(part == NULL)
+	{
+		memcpy(&cfg.word_chars, &word_chars, sizeof(cfg.word_chars));
+	}
 }
 
 static void
@@ -1652,4 +2350,4 @@ wrapscan_handler(OPT_OP op, optval_t val)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

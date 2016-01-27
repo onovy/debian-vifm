@@ -1,33 +1,79 @@
-#include "seatest.h"
+#include <stic.h>
 
 #include "../../src/engine/options.h"
 
-extern int fastrun;
 extern const char *value;
 
-static void
-test_colon(void)
+TEST(colon)
 {
 	optval_t val = { .str_val = "/home/tmp" };
-	fastrun = 0;
-	set_option("fusehome", val);
+	set_option("fusehome", val, OPT_GLOBAL);
 
-	assert_true(set_options("fusehome=/tmp") == 0);
+	assert_true(set_options("fusehome=/tmp", OPT_GLOBAL) == 0);
 	assert_string_equal("/tmp", value);
 
-	assert_true(set_options("fusehome:/var/fuse") == 0);
+	assert_true(set_options("fusehome:/var/fuse", OPT_GLOBAL) == 0);
 	assert_string_equal("/var/fuse", value);
 }
 
-void
-input_tests(void)
+TEST(comments)
 {
-	test_fixture_start();
+	optval_t val = { .str_val = "/home/tmp" };
+	set_option("fusehome", val, OPT_GLOBAL);
 
-	run_test(test_colon);
+	assert_true(set_options("fusehome=/tmp \"bla", OPT_GLOBAL) == 0);
+	assert_string_equal("/tmp", value);
 
-	test_fixture_end();
+	assert_true(set_options("fusehome:/var/fuse \"comment", OPT_GLOBAL) == 0);
+	assert_string_equal("/var/fuse", value);
+}
+
+TEST(unmatched_quote)
+{
+	assert_failure(set_options("fusehome='/tmp", OPT_GLOBAL));
+	assert_failure(set_options("fusehome=\"/var/fuse", OPT_GLOBAL));
+}
+
+TEST(print_all_pseudo_option)
+{
+	assert_success(set_options("all", OPT_GLOBAL));
+}
+
+TEST(reset_all_pseudo_option)
+{
+	extern int fastrun;
+
+	optval_t val = { .bool_val = 1 };
+
+	fastrun = val.bool_val;
+	set_option("fastrun", val, OPT_GLOBAL);
+	assert_success(set_options("all&", OPT_GLOBAL));
+	assert_false(fastrun);
+
+	fastrun = val.bool_val;
+	set_option("fastrun", val, OPT_GLOBAL);
+	assert_success(set_options("all &", OPT_GLOBAL));
+	assert_false(fastrun);
+
+	fastrun = val.bool_val;
+	set_option("fastrun", val, OPT_GLOBAL);
+	assert_success(set_options("all   &", OPT_GLOBAL));
+	assert_false(fastrun);
+}
+
+TEST(wrong_all_pseudo_option_suffixes)
+{
+	assert_failure(set_options("all!", OPT_GLOBAL));
+	assert_failure(set_options("all !", OPT_GLOBAL));
+	assert_failure(set_options("all #", OPT_GLOBAL));
+	assert_failure(set_options("all#", OPT_GLOBAL));
+}
+
+TEST(wrong_all_pseudo_option_prefixes)
+{
+	assert_failure(set_options("noall", OPT_GLOBAL));
+	assert_failure(set_options("invall", OPT_GLOBAL));
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

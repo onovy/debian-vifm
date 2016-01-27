@@ -31,22 +31,25 @@
 
 /* Various functions to work with paths */
 
-void chosp(char *path);
+/* Like chomp() but removes trailing slashes. */
+void chosp(char path[]);
 
 int ends_with_slash(const char *path);
 
-/* Checks if path starts with given base path. */
-int path_starts_with(const char *path, const char *begin);
+/* Checks if the path starts with given prefix. */
+int path_starts_with(const char path[], const char prefix[]);
 
-/* Checks if two paths point to the same location, treating ending slashes
- * correctly.  Returns non-zero for same path. */
+/* Checks if two paths are equal, nothing is dereferenced.  Returns non-zero for
+ * same paths, otherwise zero is returned. */
 int paths_are_equal(const char s[], const char t[]);
 
 /* Removes excess slashes, "../" and "./" from the path.  buf will always
  * contain trailing forward slash. */
 void canonicalize_path(const char directory[], char buf[], size_t buf_size);
 
-const char * make_rel_path(const char *path, const char *base);
+/* Converts the path to make it relative to the base path.  Returns pointer to a
+ * statically allocated buffer. */
+const char * make_rel_path(const char path[], const char base[]);
 
 int is_path_absolute(const char *path);
 
@@ -54,11 +57,17 @@ int is_root_dir(const char *path);
 
 int is_unc_root(const char *path);
 
-char * escape_filename(const char *string, int quote_percent);
+/* Escapes the string for the purpose of inserting it into the shell or
+ * command-line.  quote_percent means prepend percent sign with a percent sign.
+ * Returns new string, caller should free it. */
+char * shell_like_escape(const char string[], int quote_percent);
 
-/* Replaces leading path to home directory with a tilde.  Returns pointer to a
- * statically allocated buffer of size PATH_MAX. */
-char * replace_home_part(const char directory[]);
+/* Replaces leading path to home directory with a tilde, trims trailing slash.
+ * Returns pointer to a statically allocated buffer of size PATH_MAX. */
+char * replace_home_part(const char path[]);
+
+/* Same as replace_home_part(), but doesn't perform trailing slash trimming. */
+char * replace_home_part_strict(const char path[]);
 
 /* Expands tilde in the front of the path.  Returns newly allocated string
  * without tilde. */
@@ -72,8 +81,8 @@ char * replace_tilde(char path[]);
  * slashes. */
 char * get_last_path_component(const char path[]);
 
-/* Modifies path. */
-void remove_last_path_component(char *path);
+/* Truncates last component from the path. */
+void remove_last_path_component(char path[]);
 
 /* Checks if path could refer to a real file system object. */
 int is_path_well_formed(const char *path);
@@ -81,6 +90,10 @@ int is_path_well_formed(const char *path);
 /* Checks if path could refer to a real file system object. And modifies path to
  * something meaningful if the check failed. */
 void ensure_path_well_formed(char *path);
+
+/* Ensures that path to a file is of canonic absolute form.  No trailing slash
+ * in the buffer.  Returns zero on success, otherwise non-zero is returned. */
+int to_canonic_path(const char path[], char buf[], size_t buf_len);
 
 /* Checks if path contains slash (also checks for backward slash on Windows). */
 int contains_slash(const char *path);
@@ -101,8 +114,8 @@ void split_ext(char path[], int *root_len, const char **ext_pos);
  * extension, which points to trailing null character for an empty extension. */
 char * get_ext(const char path[]);
 
-/* Removes file name from path. */
-void exclude_file_name(char *path);
+/* Removes file name from path.  Does nothing if path refers to a directory. */
+void exclude_file_name(char path[]);
 
 /* Checks whether path equals to ".." or "../".  Returns non-zero if it is,
  * otherwise zero is returned. */
@@ -118,6 +131,13 @@ int is_builtin_dir(const char name[]);
  * non-zero is returned. */
 int find_cmd_in_path(const char cmd[], size_t path_len, char path[]);
 
+/* Generates file name inside temporary directory. */
+void generate_tmp_file_name(const char prefix[], char buf[], size_t buf_len);
+
+/* Uses environment variables to determine the correct place.  Returns path to
+ * tmp directory. */
+const char * get_tmpdir(void);
+
 #ifdef _WIN32
 
 int is_unc_path(const char *path);
@@ -126,9 +146,13 @@ void to_forward_slash(char path[]);
 
 void to_back_slash(char path[]);
 
+#else
+
+#define is_unc_path(path) (0)
+
 #endif
 
 #endif /* VIFM__UTILS__PATH_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

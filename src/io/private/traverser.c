@@ -18,11 +18,10 @@
 
 #include "traverser.h"
 
-#include <dirent.h> /* DIR dirent opendir() readdir() closedir() */
-
 #include <stddef.h> /* NULL */
 #include <stdlib.h> /* free() */
 
+#include "../../compat/os.h"
 #include "../../utils/fs.h"
 #include "../../utils/path.h"
 #include "../../utils/str.h"
@@ -61,7 +60,7 @@ traverse_subtree(const char path[], subtree_visitor visitor, void *param)
 	int result;
 	VisitResult enter_result;
 
-	dir = opendir(path);
+	dir = os_opendir(path);
 	if(dir == NULL)
 	{
 		return 1;
@@ -70,38 +69,42 @@ traverse_subtree(const char path[], subtree_visitor visitor, void *param)
 	enter_result = visitor(path, VA_DIR_ENTER, param);
 	if(enter_result == VR_ERROR)
 	{
-		(void)closedir(dir);
+		(void)os_closedir(dir);
 		return 1;
 	}
 
 	result = 0;
-	while((d = readdir(dir)) != NULL)
+	while((d = os_readdir(dir)) != NULL)
 	{
-		if(!is_builtin_dir(d->d_name))
-		{
-			char *const full_path = format_str("%s/%s", path, d->d_name);
-			if(entry_is_link(full_path, d))
-			{
-				/* Tread symbolic links to directories as files as well. */
-				result = visitor(full_path, VA_FILE, param);
-			}
-			else if(entry_is_dir(full_path, d))
-			{
-				result = traverse_subtree(full_path, visitor, param);
-			}
-			else
-			{
-				result = visitor(full_path, VA_FILE, param);
-			}
-			free(full_path);
+		char *full_path;
 
-			if(result != 0)
-			{
-				break;
-			}
+		if(is_builtin_dir(d->d_name))
+		{
+			continue;
+		}
+
+		full_path = format_str("%s/%s", path, d->d_name);
+		if(entry_is_link(full_path, d))
+		{
+			/* Treat symbolic links to directories as files as well. */
+			result = visitor(full_path, VA_FILE, param);
+		}
+		else if(entry_is_dir(full_path, d))
+		{
+			result = traverse_subtree(full_path, visitor, param);
+		}
+		else
+		{
+			result = visitor(full_path, VA_FILE, param);
+		}
+		free(full_path);
+
+		if(result != 0)
+		{
+			break;
 		}
 	}
-	(void)closedir(dir);
+	(void)os_closedir(dir);
 
 	if(result == 0 && enter_result != VR_SKIP_DIR_LEAVE &&
 			enter_result != VR_CANCELLED)
@@ -113,4 +116,4 @@ traverse_subtree(const char path[], subtree_visitor visitor, void *param)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

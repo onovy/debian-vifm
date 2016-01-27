@@ -38,11 +38,15 @@ int nentries;
  * returned. */
 int set_trash_dir(const char trash_dir[]);
 
-/* Tries to create trash directory.  Returns zero on success, otherwise non-zero
- * value is returned. */
-int try_create_trash_dir(const char trash_dir[]);
+/* Empties specified trash directory. */
+void trash_empty(const char trash_dir[]);
 
-void empty_trash(void);
+/* Starts process of emptying all trashes in background. */
+void trash_empty_all(void);
+
+/* Callback-like function which triggers some trash-specific updates after file
+ * move/rename. */
+void trash_file_moved(const char src[], const char dst[]);
 
 int add_to_trash(const char path[], const char trash_name[]);
 
@@ -61,21 +65,25 @@ int exists_in_trash(const char trash_name[]);
  * zero on success, otherwise non-zero is returned. */
 int restore_from_trash(const char trash_name[]);
 
-int remove_from_trash(const char trash_name[]);
+/* Generates unique name for a file at base_path location named name (doesn't
+ * have to be base_path/name as long as base_path is at same mount) in a trash
+ * directory.  Returns string containing full path that needs to be freed by
+ * caller, if no trash directory available NULL is returned. */
+char * gen_trash_name(const char base_path[], const char name[]);
 
-/* Generates unique name for a file at base_dir/name in a trash directory.
- * Returns string containing full path that needs to be freed by caller, if no
- * trash directory available NULL is returned. */
-char * gen_trash_name(const char base_dir[], const char name[]);
-
-/* Picks trash directory basing on original directory of a file that is being
+/* Picks trash directory basing on original path for a file that is being
  * trashed.  Returns absolute path to picked trash directory on success which
  * should be freed by the caller, otherwise NULL is returned. */
-char * pick_trash_dir(const char base_dir[]);
+char * pick_trash_dir(const char base_path[]);
 
 /* Checks whether given absolute path points to a file under trash directory.
  * Returns non-zero if so, otherwise zero is returned. */
 int is_under_trash(const char path[]);
+
+/* Checks whether given path belongs to the trash directory.  NULL trash_dir
+ * makes this function act as is_under_trash().  Returns non-zero if so,
+ * otherwise zero is returned. */
+int trash_contains(const char trash_dir[], const char path[]);
 
 /* Checks whether given absolute path points to a trash directory.  Returns
  * non-zero if so, otherwise zero is returned. */
@@ -91,4 +99,4 @@ void trash_prune_dead_entries(void);
 #endif /* VIFM__TRASH_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

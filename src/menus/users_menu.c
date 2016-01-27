@@ -21,7 +21,7 @@
 
 #include <string.h> /* strdup() */
 
-#include "../ui.h"
+#include "../ui/ui.h"
 #include "menus.h"
 
 static int execute_users_cb(FileView *view, menu_info *m);
@@ -30,17 +30,16 @@ int
 show_user_menu(FileView *view, const char command[], int navigate)
 {
 	static menu_info m;
-	const int menu_type = navigate ? USER_NAVIGATE_MENU : USER_MENU;
-	init_menu_info(&m, menu_type, strdup("No results found"));
+	init_menu_info(&m, strdup(command), strdup("No results found"));
+	m.extra_data = navigate;
 
-	m.title = strdup(command);
 	m.execute_handler = &execute_users_cb;
 	if(navigate)
 	{
 		m.key_handler = &filelist_khandler;
 	}
 
-	return capture_output_to_menu(view, command, &m);
+	return capture_output_to_menu(view, command, 1, &m);
 }
 
 /* Callback that is called when menu item is selected.  Should return non-zero
@@ -48,12 +47,13 @@ show_user_menu(FileView *view, const char command[], int navigate)
 static int
 execute_users_cb(FileView *view, menu_info *m)
 {
-	if(m->type == USER_NAVIGATE_MENU)
+	const int navigate = m->extra_data;
+	if(navigate)
 	{
-		goto_selected_file(view, m->items[m->pos], 0);
+		(void)goto_selected_file(view, m->items[m->pos], 0);
 	}
 	return 0;
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -26,15 +26,25 @@
 int add_to_string_array(char ***array, int len, int count, ...);
 
 /* Puts pointer into string array without making a copy.  Reallocates *array.
- * Returns new size of the array, which can be equal to len on reallocation
- * failure. */
+ * item can be NULL.  Returns new size of the array, which can be equal to len
+ * on reallocation failure. */
 int put_into_string_array(char **array[], int len, char item[]);
 
 void remove_from_string_array(char **array, size_t len, int pos);
 
+/* Checks whether item is in the array.  Always uses case sensitive comparison.
+ * Returns non-zero on successful search, otherwise zero is returned. */
 int is_in_string_array(char *array[], size_t len, const char item[]);
 
+/* Checks whether item is in the array.  Always uses case insensitive
+ * comparison.  Returns non-zero on successful search, otherwise zero is
+ * returned. */
 int is_in_string_array_case(char *array[], size_t len, const char item[]);
+
+/* Checks whether item is in the array.  Uses case sensitive or case insensitive
+ * comparison depending on OS case sensitivity.  Returns non-zero on successful
+ * search, otherwise zero is returned. */
+int is_in_string_array_os(char *array[], size_t len, const char item[]);
 
 char ** copy_string_array(char **array, size_t len);
 
@@ -67,6 +77,12 @@ char ** read_file_lines(FILE *f, int *nlines);
  * strings.  Returns NULL for an empty file stream. */
 char ** read_stream_lines(FILE *f, int *nlines);
 
+/* Reads content of the fp stream that doesn't support seek operation (e.g. it
+ * points to a pipe) until end-of-file into null terminated string.  Returns
+ * string of length *read to be freed by caller on success, otherwise NULL is
+ * returned. */
+char * read_nonseekable_stream(FILE *fp, size_t *read);
+
 /* Overwrites file specified by filepath with lines.  Returns zero on success,
  * otherwise non-zero is returned and errno contains error code. */
 int write_file_of_lines(const char filepath[], char *strs[], size_t nstrs);
@@ -74,4 +90,4 @@ int write_file_of_lines(const char filepath[], char *strs[], size_t nstrs);
 #endif /* VIFM__UTILS__STRING_ARRAY_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

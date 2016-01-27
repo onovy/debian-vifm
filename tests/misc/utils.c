@@ -1,0 +1,111 @@
+#include "utils.h"
+
+#include <stddef.h> /* NULL */
+#include <stdio.h> /* fclose() fopen() */
+#include <string.h> /* memset() strcpy() */
+
+#include "../../src/cfg/config.h"
+#include "../../src/engine/options.h"
+#include "../../src/ui/ui.h"
+#include "../../src/utils/dynarray.h"
+#include "../../src/utils/str.h"
+#include "../../src/filelist.h"
+#include "../../src/filtering.h"
+#include "../../src/opt_handlers.h"
+
+void
+opt_handlers_setup(void)
+{
+	update_string(&cfg.slow_fs_list, "");
+	update_string(&cfg.apropos_prg, "");
+	update_string(&cfg.cd_path, "");
+	update_string(&cfg.find_prg, "");
+	update_string(&cfg.fuse_home, "");
+	update_string(&cfg.time_format, "+");
+	update_string(&cfg.vi_command, "");
+	update_string(&cfg.vi_x_command, "");
+	update_string(&cfg.ruler_format, "");
+	update_string(&cfg.status_line, "");
+	update_string(&cfg.grep_prg, "");
+	update_string(&cfg.locate_prg, "");
+	update_string(&cfg.border_filler, "");
+	update_string(&cfg.shell, "");
+
+	init_option_handlers();
+}
+
+void
+opt_handlers_teardown(void)
+{
+	clear_options();
+
+	update_string(&cfg.slow_fs_list, NULL);
+	update_string(&cfg.apropos_prg, NULL);
+	update_string(&cfg.cd_path, NULL);
+	update_string(&cfg.find_prg, NULL);
+	update_string(&cfg.fuse_home, NULL);
+	update_string(&cfg.time_format, NULL);
+	update_string(&cfg.vi_command, NULL);
+	update_string(&cfg.vi_x_command, NULL);
+	update_string(&cfg.ruler_format, NULL);
+	update_string(&cfg.status_line, NULL);
+	update_string(&cfg.grep_prg, NULL);
+	update_string(&cfg.locate_prg, NULL);
+	update_string(&cfg.border_filler, NULL);
+	update_string(&cfg.shell, NULL);
+}
+
+void
+view_setup(FileView *view)
+{
+	view->list_rows = 0;
+	view->filtered = 0;
+	view->list_pos = 0;
+	view->dir_entry = NULL;
+
+	assert_success(filter_init(&view->local_filter.filter, 1));
+	assert_success(filter_init(&view->manual_filter, 1));
+	assert_success(filter_init(&view->auto_filter, 1));
+
+	strcpy(view->curr_dir, "/path");
+	update_string(&view->custom.orig_dir, NULL);
+
+	view->sort[0] = SK_BY_NAME;
+	memset(&view->sort[1], SK_NONE, sizeof(view->sort) - 1);
+}
+
+void
+view_teardown(FileView *view)
+{
+	int i;
+
+	for(i = 0; i < view->list_rows; ++i)
+	{
+		free_dir_entry(view, &view->dir_entry[i]);
+	}
+	dynarray_free(view->dir_entry);
+
+	for(i = 0; i < view->custom.entry_count; ++i)
+	{
+		free_dir_entry(view, &view->custom.entries[i]);
+	}
+	dynarray_free(view->custom.entries);
+
+	filter_dispose(&view->local_filter.filter);
+	filter_dispose(&view->auto_filter);
+	filter_dispose(&view->manual_filter);
+}
+
+void
+create_file(const char path[])
+{
+	FILE *const f = fopen(path, "w");
+	assert_non_null(f);
+	if(f != NULL)
+	{
+		fclose(f);
+	}
+}
+
+/* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

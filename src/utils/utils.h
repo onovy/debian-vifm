@@ -20,13 +20,15 @@
 #ifndef VIFM__UTILS__UTILS_H__
 #define VIFM__UTILS__UTILS_H__
 
-#include <regex.h>
-
+#include <sys/stat.h> /* stat */
 #include <sys/types.h> /* gid_t mode_t uid_t */
 
 #include <stddef.h> /* size_t wchar_t */
 #include <stdint.h> /* uint64_t */
 #include <stdio.h> /* FILE */
+
+#include "../ui/ui.h"
+#include "../status.h"
 
 /* Type of operating environment in which the application is running. */
 typedef enum
@@ -36,18 +38,8 @@ typedef enum
 }
 EnvType;
 
-/* Regular expressions. */
-
-/* Gets flags for compiling a regular expression specified by the pattern taking
- * 'ignorecase' and 'smartcase' options into account.  Returns regex flags. */
-int get_regexp_cflags(const char pattern[]);
-
-/* Decides whether case should be ignored for the pattern.  Considers
- * 'ignorecase' and 'smartcase' options.  Returns non-zero when case should be
- * ignored, otherwise zero is returned. */
-int regexp_should_ignore_case(const char pattern[]);
-
-const char * get_regexp_error(int err, regex_t *re);
+/* Callback for process_cmd_output() function. */
+typedef void (*cmd_output_handler)(const char line[], void *arg);
 
 /* Shell and program running. */
 
@@ -60,6 +52,12 @@ void pause_shell(void);
 
 /* Called after return from a shellout to provide point to recover UI. */
 void recover_after_shellout(void);
+
+/* Invokes handler for each line read from stdout of the command specified via
+ * cmd.  Error stream is displayed separately.  Supports cancellation.  Returns
+ * zero on success, otherwise non-zero is returned. */
+int process_cmd_output(const char descr[], const char cmd[], int user_sh,
+		cmd_output_handler handler, void *arg);
 
 /* Other functions. */
 
@@ -109,9 +107,16 @@ unsigned int get_pid(void);
  * Returns a pointer to the argument list. */
 char * extract_cmd_name(const char line[], int raw, size_t buf_len, char buf[]);
 
-/* Determines columns needed for a wide character.  Returns number of columns,
- * on error default value of 1 is returned. */
+/* Determines columns needed for displaying a wide character.  Extends standard
+ * wcwidth() with support of non-printable characters.  Returns number of
+ * columns, on error default value of 1 is returned. */
 int vifm_wcwidth(wchar_t c);
+
+/* Determines columns needed for displaying a string of wide characters of
+ * length at most n.  Extends standard wcswidth() with support of non-printable
+ * characters.  Returns number of columns, on error default value of 1 is
+ * returned. */
+int vifm_wcswidth(const wchar_t str[], size_t n);
 
 /* Escapes string from offset position until its end for insertion into single
  * quoted string, prefix is not escaped.  Returns newly allocated string. */
@@ -121,11 +126,31 @@ char * escape_for_squotes(const char string[], size_t offset);
  * quoted string, prefix is not escaped.  Returns newly allocated string. */
 char * escape_for_dquotes(const char string[], size_t offset);
 
+/* Expands double percent sequences into single percent character in place. */
+void expand_percent_escaping(char s[]);
+
 /* Expands double ' sequences from single quoted string in place. */
 void expand_squotes_escaping(char s[]);
 
 /* Expands escape sequences from double quoted string (e.g. "\n") in place. */
 void expand_dquotes_escaping(char s[]);
+
+/* Gets correct register to operate on (user choice or the default one).
+ * Returns register name. */
+int def_reg(int reg);
+
+/* Gets correct count (user choice or the default one (1)).  Returns the
+ * count. */
+int def_count(int count);
+
+/* Guesses whether given viewer command is going to display graphics.  Returns
+ * non-zero if it's likely, otherwise zero is returned. */
+int is_graphics_viewer(const char viewer[]);
+
+/* Extracts path and line number from the spec (default line number is 1).
+ * Returns path in as newly allocated string and sets *line_num to line number,
+ * otherwise NULL is returned. */
+char * parse_file_spec(const char spec[], int *line_num);
 
 /* Fills buf of the length buf_len with path to mount point of the path.
  * Returns non-zero on error, otherwise zero is returned. */
@@ -158,6 +183,62 @@ int get_exe_dir(char dir_buf[], size_t dir_buf_len);
  * the type. */
 EnvType get_env_type(void);
 
+/* Determines type of active execution environment.  Returns the type. */
+ExecEnvType get_exec_env_type(void);
+
+/* Determines kind of the shell by its invocation command.  Returns the kind. */
+ShellType get_shell_type(const char shell_cmd[]);
+
+/* Formats command to view documentation in plain-text format.  Returns non-zero
+ * if command that should be run in background, otherwise zero is returned. */
+int format_help_cmd(char cmd[], size_t cmd_size);
+
+/* Displays documentation in plain-text format without detaching from the
+ * terminal. */
+void display_help(const char cmd[]);
+
+/* Suspends process until external signal comes. */
+void wait_for_signal(void);
+
+/* Suspends process as a terminal job. */
+void stop_process(void);
+
+/* Resets terminal to its normal state, if needed.  E.g. after some programs run
+ * by Vifm messed it up. */
+void update_terminal_settings(void);
+
+/* Fills the buffer with string representation of owner user for the entry.  The
+ * as_num flag forces formatting as integer. */
+void get_uid_string(const dir_entry_t *entry, int as_num, size_t buf_len,
+		char buf[]);
+
+/* Fills the buffer with string representation of owner group for the entry.
+ * The as_num flag forces formatting as integer. */
+void get_gid_string(const dir_entry_t *entry, int as_num, size_t buf_len,
+		char buf[]);
+
+/* Reopens real terminal and binds it to stdout.  Returns NULL on error (message
+ * is printed to stderr), otherwise file previously used as stdout is
+ * returned. */
+FILE * reopen_term_stdout(void);
+
+/* Reopens real terminal and binds it to stdin.  Returns non-zero on error
+ * (message is printed to stderr) and zero otherwise. */
+int reopen_term_stdin(void);
+
+/* Executes the command via shell and opens its output for reading.  Returns
+ * NULL on error, otherwise stream valid for reading is returned. */
+FILE * read_cmd_output(const char cmd[]);
+
+/* Gets path to directory where files bundled with Vifm are stored.  Returns
+ * pointer to a statically allocated buffer. */
+const char * get_installed_data_dir(void);
+
+/* Clones timestamps from file specified by from to file at path.  st is a hint
+ * to omit extra file system requests if possible, can be NULL on Windows. */
+void clone_timestamps(const char path[], const char from[],
+		const struct stat *st);
+
 #ifdef _WIN32
 #include "utils_win.h"
 #else
@@ -167,4 +248,4 @@ EnvType get_env_type(void);
 #endif /* VIFM__UTILS__UTILS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

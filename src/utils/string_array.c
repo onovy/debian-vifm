@@ -21,15 +21,16 @@
 #include <assert.h> /* assert() */
 #include <stdarg.h>
 #include <stddef.h> /* NULL size_t */
-#include <stdio.h> /* FILE SEEK_END SEEK_SET fclose() fopen() fprintf() fread()
+#include <stdio.h> /* FILE SEEK_END SEEK_SET fclose() fprintf() fread()
                       ftell() fseek() */
 #include <stdlib.h> /* free() malloc() realloc() */
 #include <string.h> /* strcspn() */
 
-#include "fs_limits.h"
+#include "../compat/fs_limits.h"
+#include "../compat/os.h"
+#include "../compat/reallocarray.h"
 
 static char * read_whole_file(const char filepath[], size_t *read);
-static char * read_nonseekable_stream(FILE *const fp, size_t *read);
 static char * read_seekable_stream(FILE *const fp, size_t *read);
 static size_t get_remaining_stream_size(FILE *const fp);
 static char ** text_to_lines(char text[], size_t text_len, int *nlines);
@@ -41,7 +42,7 @@ add_to_string_array(char ***array, int len, int count, ...)
 	char **p;
 	va_list va;
 
-	p = realloc(*array, sizeof(char *)*(len + count));
+	p = reallocarray(*array, len + count, sizeof(char *));
 	if(p == NULL)
 		return len;
 	*array = p;
@@ -64,7 +65,7 @@ add_to_string_array(char ***array, int len, int count, ...)
 int
 put_into_string_array(char ***array, int len, char item[])
 {
-	char **const arr = realloc(*array, sizeof(char *)*(len + 1));
+	char **const arr = reallocarray(*array, len + 1, sizeof(char *));
 	if(arr != NULL)
 	{
 		*array = arr;
@@ -94,13 +95,25 @@ is_in_string_array_case(char *array[], size_t len, const char item[])
 	return pos >= 0;
 }
 
+int
+is_in_string_array_os(char *array[], size_t len, const char item[])
+{
+#ifndef _WIN32
+	return is_in_string_array(array, len, item);
+#else
+	return is_in_string_array_case(array, len, item);
+#endif
+}
+
 char **
 copy_string_array(char **array, size_t len)
 {
-	char **result = malloc(sizeof(char *)*len);
-	int i;
-	for(i = 0; i < len; i++)
+	char **result = reallocarray(NULL, len, sizeof(char *));
+	size_t i;
+	for(i = 0U; i < len; ++i)
+	{
 		result[i] = strdup(array[i]);
+	}
 	return result;
 }
 
@@ -118,7 +131,7 @@ string_array_pos(char *array[], size_t len, const char item[])
 			}
 		}
 	}
-	return (i < len) ? i : -1;
+	return (i < len) ? (int)i : -1;
 }
 
 int
@@ -135,7 +148,7 @@ string_array_pos_case(char *array[], size_t len, const char item[])
 			}
 		}
 	}
-	return (i < len) ? i : -1;
+	return (i < len) ? (int)i : -1;
 }
 
 void
@@ -189,7 +202,7 @@ read_whole_file(const char filepath[], size_t *read)
 
 	*read = 0U;
 
-	if((fp = fopen(filepath, "rb")) != NULL)
+	if((fp = os_fopen(filepath, "rb")) != NULL)
 	{
 		content = read_seekable_stream(fp, read);
 		fclose(fp);
@@ -214,12 +227,8 @@ read_stream_lines(FILE *f, int *nlines)
 	return (text == NULL) ? NULL : text_to_lines(text, text_len, nlines);
 }
 
-/* Reads content of the fp stream that doesn't support seek operation (e.g. it
- * points to a pipe) until end-of-file into null terminated string.  Returns
- * string of length *read to be freed by caller on success, otherwise NULL is
- * returned. */
-static char *
-read_nonseekable_stream(FILE *const fp, size_t *read)
+char *
+read_nonseekable_stream(FILE *fp, size_t *read)
 {
 	enum { PIECE_LEN = 4096 };
 	char *content = malloc(PIECE_LEN + 1);
@@ -231,7 +240,8 @@ read_nonseekable_stream(FILE *const fp, size_t *read)
 		while((piece_len = fread(content + len, 1, PIECE_LEN, fp)) != 0U)
 		{
 			const size_t new_size = len + piece_len + PIECE_LEN + 1U;
-			if((last_allocated_block = realloc(content, new_size)) == NULL)
+			last_allocated_block = realloc(content, new_size);
+			if(last_allocated_block == NULL)
 			{
 				break;
 			}
@@ -371,7 +381,7 @@ write_file_of_lines(const char filepath[], char *strs[], size_t nstrs)
 	FILE *fp;
 	size_t i;
 
-	if((fp = fopen(filepath, "w")) == NULL)
+	if((fp = os_fopen(filepath, "w")) == NULL)
 	{
 		return 1;
 	}
@@ -386,4 +396,4 @@ write_file_of_lines(const char filepath[], char *strs[], size_t nstrs)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

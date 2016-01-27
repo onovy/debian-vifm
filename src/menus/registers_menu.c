@@ -21,16 +21,15 @@
 
 #include <string.h> /* strdup() */
 
+#include "../ui/ui.h"
 #include "../registers.h"
-#include "../ui.h"
 #include "menus.h"
 
 int
 show_register_menu(FileView *view, const char registers[])
 {
 	static menu_info m;
-	init_menu_info(&m, REGISTER_MENU, strdup("Registers are empty"));
-	m.title = strdup(" Registers ");
+	init_menu_info(&m, strdup("Registers"), strdup("Registers are empty"));
 
 	m.items = list_registers_content(registers);
 	while(m.items[m.len] != NULL)
@@ -40,4 +39,4 @@ show_register_menu(FileView *view, const char registers[])
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

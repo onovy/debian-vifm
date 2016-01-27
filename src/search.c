@@ -19,19 +19,22 @@
 
 #include "search.h"
 
-#include <regex.h>
+#include <regex.h> /* regmatch_t regcomp() regexec() regfree() */
 
 #include <assert.h> /* assert() */
 #include <stdio.h> /* snprintf() */
 #include <string.h>
 
 #include "cfg/config.h"
-#include "utils/fs_limits.h"
+#include "compat/fs_limits.h"
+#include "ui/fileview.h"
+#include "ui/statusbar.h"
+#include "ui/ui.h"
 #include "utils/path.h"
+#include "utils/regexp.h"
 #include "utils/str.h"
 #include "utils/utils.h"
 #include "filelist.h"
-#include "ui.h"
 
 static int find_and_goto_pattern(FileView *view, int wrap_start, int backward);
 static int find_and_goto_match(FileView *view, int start, int backward);
@@ -57,7 +60,7 @@ find_and_goto_pattern(FileView *view, int wrap_start, int backward)
 			return 0;
 		}
 	}
-	move_to_list_pos(view, view->list_pos);
+	fview_cursor_redraw(view);
 	return 1;
 }
 
@@ -108,6 +111,7 @@ find_pattern(FileView *view, const char pattern[], int backward, int move,
 	int nmatches = 0;
 	regex_t re;
 	int err;
+	FileView *other;
 
 	if(move && cfg.hl_search)
 	{
@@ -115,7 +119,6 @@ find_pattern(FileView *view, const char pattern[], int backward, int move,
 	}
 
 	reset_search_results(view);
-	copy_str(view->regexp, sizeof(view->regexp), pattern);
 
 	if(pattern[0] == '\0')
 	{
@@ -131,7 +134,7 @@ find_pattern(FileView *view, const char pattern[], int backward, int move,
 		int i;
 		for(i = 0; i < view->list_rows; ++i)
 		{
-			char filename[NAME_MAX];
+			regmatch_t matches[1];
 			dir_entry_t *const entry = &view->dir_entry[i];
 
 			if(is_parent_dir(entry->name))
@@ -139,14 +142,14 @@ find_pattern(FileView *view, const char pattern[], int backward, int move,
 				continue;
 			}
 
-			copy_str(filename, sizeof(filename), entry->name);
-			chosp(filename);
-			if(regexec(&re, filename, 0, NULL, 0) != 0)
+			if(regexec(&re, entry->name, 1, matches, 0) != 0)
 			{
 				continue;
 			}
 
-			entry->search_match = 1;
+			entry->search_match = nmatches + 1;
+			entry->match_left = matches[0].rm_so;
+			entry->match_right = matches[0].rm_eo;
 			if(cfg.hl_search)
 			{
 				entry->selected = 1;
@@ -166,6 +169,15 @@ find_pattern(FileView *view, const char pattern[], int backward, int move,
 		return 1;
 	}
 
+	other = (view == &lwin) ? &rwin : &lwin;
+	if(other->matches != 0 && strcmp(other->last_search, pattern) != 0)
+	{
+		other->last_search[0] = '\0';
+		ui_view_reset_search_highlight(other);
+	}
+	view->matches = nmatches;
+	copy_str(view->last_search, sizeof(view->last_search), pattern);
+
 	/* Need to redraw the list so that the matching files are highlighted */
 	draw_dir_list(view);
 
@@ -178,7 +190,7 @@ find_pattern(FileView *view, const char pattern[], int backward, int move,
 		if(cfg.hl_search && !was_found)
 		{
 			/* Update the view.  It look might have changed, because of selection. */
-			move_to_list_pos(view, view->list_pos);
+			fview_cursor_redraw(view);
 		}
 
 		if(!cfg.hl_search)
@@ -193,7 +205,7 @@ find_pattern(FileView *view, const char pattern[], int backward, int move,
 	}
 	else
 	{
-		move_to_list_pos(view, view->list_pos);
+		fview_cursor_redraw(view);
 		if(interactive)
 		{
 			print_search_fail_msg(view, backward);
@@ -226,15 +238,24 @@ print_search_msg(const FileView *view, int backward)
 	}
 	else
 	{
-		status_bar_messagef("%d matching file%s for: %s", view->matches,
-				(view->matches == 1) ? "" : "s", view->regexp);
+		status_bar_messagef("%d of %d matching file%s for: %s",
+				view->dir_entry[view->list_pos].search_match,
+				view->matches,
+				(view->matches == 1) ? "" : "s", cfg_get_last_search_pattern());
 	}
+}
+
+void
+print_search_next_msg(const FileView *view, int backward)
+{
+	status_bar_messagef("(%d of %d) %c%s", view->dir_entry[view->list_pos].search_match,
+			view->matches, backward ? '?' : '/', cfg_get_last_search_pattern());
 }
 
 void
 print_search_fail_msg(const FileView *view, int backward)
 {
-	const char *const regexp = view->regexp;
+	const char *const regexp = cfg_get_last_search_pattern();
 
 	int cflags;
 	regex_t re;
@@ -285,4 +306,4 @@ reset_search_results(FileView *view)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

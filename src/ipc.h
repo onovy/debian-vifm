@@ -19,24 +19,31 @@
 #ifndef VIFM__IPC_H__
 #define VIFM__IPC_H__
 
-typedef void (*recieve_callback)(char *args[]);
+/* Type of function that is invoked on IPC receive.  args is NULL terminated
+ * array of arguments, args[0] is absolute path at which they should be
+ * processed. */
+typedef void (*ipc_callback)(char *args[]);
 
-/* Initializes IPC unit basic state. */
-void ipc_pre_init(void);
+/* Checks whether IPC is in use.  Returns non-zero if so, otherwise zero is
+ * returned. */
+int ipc_enabled(void);
 
-/* Initializes IPC unit state. The callback_func will be called by ipc_check. */
-void ipc_init(recieve_callback callback_func);
+/* Retrieves list with names of all servers available for IPC.  Returns the list
+ * which is of the *len length. */
+char ** ipc_list(int *len);
 
-/* Checks for incoming messages. Calls callback passed to ipc_init. */
+/* Initializes IPC unit state.  name can be NULL, which will use the default
+ * one (VIFM).  The callback_func will be called by ipc_check(). */
+void ipc_init(const char name[], ipc_callback callback_func);
+
+/* Checks for incoming messages.  Calls callback passed to ipc_init(). */
 void ipc_check(void);
 
-/* Sends data to server.  The data array should end with NULL. */
-void ipc_send(char *data[]);
-
-/* Returns non-zero value if current instance is a server. */
-int ipc_server(void);
+/* Sends data to server.  The data array should end with NULL.  Returns zero on
+ * successful send and non-zero otherwise. */
+int ipc_send(const char whom[], char *data[]);
 
 #endif /* VIFM__IPC_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -24,16 +24,18 @@
 #include <stddef.h> /* NULL size_t */
 #include <string.h> /* strncat() strlen() */
 
+#include "../../compat/fs_limits.h"
 #include "../../engine/keys.h"
 #include "../../engine/mode.h"
+#include "../../ui/cancellation.h"
+#include "../../ui/fileview.h"
+#include "../../ui/ui.h"
 #include "../../utils/fs.h"
-#include "../../utils/fs_limits.h"
 #include "../../utils/log.h"
 #include "../../utils/macros.h"
 #include "../../utils/path.h"
 #include "../../filelist.h"
 #include "../../status.h"
-#include "../../ui.h"
 #include "../../undo.h"
 #include "../modes.h"
 
@@ -223,16 +225,21 @@ get_attrs(void)
 static const char *
 get_title(void)
 {
-	static char title[64];
+	static char title[NAME_MAX];
 
 	const int first_file_index = get_first_file_index();
+
 	if(is_one_file_selected(first_file_index))
 	{
-		return view->dir_entry[first_file_index].name;
+		snprintf(title, sizeof(title), " %s ",
+				view->dir_entry[first_file_index].name);
+	}
+	else
+	{
+		snprintf(title, sizeof(title), " %d files ",
+				get_selection_size(first_file_index));
 	}
 
-	snprintf(title, sizeof(title), "%d files",
-			get_selection_size(first_file_index));
 	return title;
 }
 
@@ -317,7 +324,7 @@ redraw_attr_dialog(void)
 
 	getmaxyx(stdscr, y, x);
 	mvwin(change_win, (y - getmaxy(change_win))/2, (x - getmaxx(change_win))/2);
-	box(change_win, ACS_VLINE, ACS_HLINE);
+	box(change_win, 0, 0);
 
 	x = getmaxx(change_win);
 	title = get_title();
@@ -347,7 +354,7 @@ leave_attr_mode(void)
 
 	clean_selected_files(view);
 	load_dir_list(view, 1);
-	move_to_list_pos(view, view->list_pos);
+	fview_cursor_redraw(view);
 
 	update_all_windows();
 }
@@ -363,17 +370,11 @@ cmd_ctrl_c(key_info_t key_info, keys_info_t *keys_info)
 static void
 cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 {
-	char path[PATH_MAX];
-
-	if(!changed)
-		return;
-
-	snprintf(path, sizeof(path), "%s/%s", view->curr_dir,
-			view->dir_entry[view->list_pos].name);
-
-	set_attrs(view, attrs, origin_attrs);
-
-	leave_attr_mode();
+	if(changed)
+	{
+		set_attrs(view, attrs, origin_attrs);
+		leave_attr_mode();
+	}
 }
 
 /* sets file properties according to users input. forms attribute change mask */
@@ -418,7 +419,7 @@ files_attrib(FileView *view, DWORD add, DWORD sub, int recurse_dirs)
 	{
 		char buf[COMMAND_GROUP_INFO_LEN];
 		snprintf(buf, sizeof(buf), "chmod in %s: %s",
-				replace_home_part(view->curr_dir),
+				replace_home_part(flist_get_dir(view)),
 				view->dir_entry[view->list_pos].name);
 		cmd_group_begin(buf);
 		attrib_file_in_list(view, view->list_pos, add, sub, recurse_dirs);
@@ -429,7 +430,7 @@ files_attrib(FileView *view, DWORD add, DWORD sub, int recurse_dirs)
 		size_t len;
 		int j = i;
 		len = snprintf(buf, sizeof(buf), "chmod in %s: ",
-				replace_home_part(view->curr_dir));
+				replace_home_part(flist_get_dir(view)));
 
 		while(i < view->list_rows && len < sizeof(buf))
 		{
@@ -463,12 +464,9 @@ files_attrib(FileView *view, DWORD add, DWORD sub, int recurse_dirs)
 static void attrib_file_in_list(FileView *view, int pos, DWORD add, DWORD sub,
 		int recurse_dirs)
 {
-	char *filename;
 	char path_buf[PATH_MAX];
 
-	filename = view->dir_entry[pos].name;
-	snprintf(path_buf, sizeof(path_buf), "%s/%s", view->curr_dir, filename);
-	chosp(path_buf);
+	get_full_path_at(view, pos, sizeof(path_buf), path_buf);
 	file_attrib(path_buf, add, sub, recurse_dirs);
 }
 
@@ -476,7 +474,7 @@ static void attrib_file_in_list(FileView *view, int pos, DWORD add, DWORD sub,
 static void
 file_attrib(char *path, DWORD add, DWORD sub, int recurse_dirs)
 {
-	/* TODO: set attributes recursively */
+	/* TODO: set attributes recursively. */
 	DWORD attrs = GetFileAttributes(path);
 	if(attrs == INVALID_FILE_ATTRIBUTES)
 	{
@@ -649,4 +647,4 @@ draw_curr(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

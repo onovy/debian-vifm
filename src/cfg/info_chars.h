@@ -37,8 +37,11 @@
 /* User defined command-line mode command. */
 #define LINE_TYPE_COMMAND '!'
 
+/* Mark in file system. */
+#define LINE_TYPE_MARK '\''
+
 /* Bookmark in file system. */
-#define LINE_TYPE_BOOKMARK '\''
+#define LINE_TYPE_BOOKMARK 'b'
 
 /* Sign of an active pane. */
 #define LINE_TYPE_ACTIVE_VIEW 'a'
@@ -121,4 +124,4 @@
 #endif /* VIFM__CFG__INFO_CHARS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

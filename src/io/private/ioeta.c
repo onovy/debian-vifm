@@ -56,18 +56,19 @@ ioeta_add_dir(ioeta_estim_t *estim, const char path[])
 }
 
 void
-ioeta_update(ioeta_estim_t *estim, const char path[], int finished,
-		uint64_t bytes)
+ioeta_update(ioeta_estim_t *estim, const char path[], const char target[],
+		int finished, uint64_t bytes)
 {
-	if(estim == NULL)
+	if(estim == NULL || estim->silent)
 	{
 		return;
 	}
 
 	estim->current_byte += bytes;
+	estim->current_file_byte += bytes;
 	if(estim->current_byte > estim->total_bytes)
 	{
-		/* Estimation are out of date, update them. */
+		/* Estimations are out of date, update them. */
 		estim->total_bytes = estim->current_byte;
 	}
 
@@ -76,9 +77,16 @@ ioeta_update(ioeta_estim_t *estim, const char path[], int finished,
 		++estim->current_item;
 		if(estim->current_item > estim->total_items)
 		{
-			/* Estimation are out of date, update them. */
+			/* Estimations are out of date, update them. */
 			estim->total_items = estim->current_item;
 		}
+		estim->current_file_byte = 0U;
+		estim->total_file_bytes = 0U;
+	}
+	else if(estim->inspected_items != estim->current_item + 1)
+	{
+		estim->inspected_items = estim->current_item + 1;
+		estim->total_file_bytes = get_file_size(path);
 	}
 
 	if(path != NULL)
@@ -86,8 +94,37 @@ ioeta_update(ioeta_estim_t *estim, const char path[], int finished,
 		replace_string(&estim->item, path);
 	}
 
+	if(target != NULL)
+	{
+		replace_string(&estim->target, target);
+	}
+
 	ionotif_notify(IO_PS_IN_PROGRESS, estim);
 }
 
+int
+ioeta_silent_on(ioeta_estim_t *estim)
+{
+	int silent;
+
+	if(estim == NULL)
+	{
+		return 0;
+	}
+
+	silent = estim->silent;
+	estim->silent = 1;
+	return silent;
+}
+
+void
+ioeta_silent_set(ioeta_estim_t *estim, int silent)
+{
+	if(estim != NULL)
+	{
+		estim->silent = silent;
+	}
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

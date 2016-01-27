@@ -1,3 +1,983 @@
+January 17, 2016
+================
+
+vifm v0.8.1
+-----------
+
+New minor version delivers primarily various small improvements of different
+kinds.  There is also improvement of navigation via named bookmarks (or tags),
+which can ease keeping track of what is where, and an ability to apply
+settings to specific directories or sub-trees (via combination of autocommands
+and local options).
+
+Thanks to everyone who was reporting issues during beta period.
+
+Main changes:
+ - added local options, which work until directory change;
+ - added named bookmarks (paths are associated with tags);
+ - added autocommands (with DirEnter event);
+ - added ability to sort by regexp-extracted part of file name;
+ - added builtin directory preview (similar to `tree`);
+ - added a way to communicate menu contents to Vim quickfix;
+ - added "more" mode that is used to handle status bar content that doesn't fit
+   on the screen;
+ - IPC got new (safe) implementation with listing/targeting of active instances,
+   it's enabled by default again;
+ - updating local view settings from vifmrc now affects both panes (:windo is
+   not necessary);
+ - more predictive cursor updates on directory reload;
+ - improvements related to expression and command parsing.
+
+More detailed list of changes.
+
+Command-line mode:
+ - added :setl[ocal] and :setg[lobal] commands to manage values of local options
+   that are specific to current directory and are reset on directory change,
+   similar to local options of Vim;
+ - added :pu[t] command that inserts files into current directory (thanks to
+   mvucBmM0);
+ - added :winc[md] command-line command (thanks to fogine);
+ - added exclamation mark to :shell to suppress spawning new teminal multiplexer
+   pane (patch by Cosmin Popescu, a.k.a. cosminadrianpopescu).
+
+:set command and options:
+ - added :set foo+=bar syntax for string options (append value);
+ - added 'deleteprg' option, which specifies program to run on files that are
+   permanently removed;
+ - added 'dirsize' option to control how size of directories is displayed in
+   file views.  This enables one to see number of files in a directory rather
+   than its size (thanks to Martin Fischer);
+ - added optional %u and %U macros to 'findprg', 'grepprg', and 'locateprg' that
+   allow immediate redirection of command output into custom view without
+   opening a menu (thanks to filterfalse);
+ - added 'iooptions' option to configure file system operations.  Contains only
+   "fastfilecloning" for btrfs so far (thanks to aleksejrs);
+ - added special treatment for "*" as value of 'slowfs', which might be useful
+   in case of very slow handling of requests to mounts enumeration (patch by
+   Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - added handling of "%u" in trash specification on *nix, which is replaced with
+   real user ID (thanks to Regis);
+ - allow 'shell' to specify a shell argument on *nix (thanks to loongw);
+ - added 'sortgroups' option and "groups" sorting key, which allow sorting by
+   parts of file names (thanks to aleksejrs);
+ - added 'title' option to control whether title of terminal should be set.
+   Enabled by default if old title can be restored (thanks to Svyatoslav Mishyn,
+   a.k.a. juef);
+ - make "p" in 'tuioptions' affect padding in quick view and view mode;
+ - changed 'fusehome' default from temporary directory to data directory (that
+   is $XDG_DATA_HOME/.local/share/fuse/ or $VIFM/fuse/ depending on which parent
+   directory exists, the second one exists by definition, but first might not)
+   (thanks to aleksejrs and to Hendrik Jaeger, a.k.a. henk);
+ - changed default value of 'trashdir' on *nix again, this time to
+   "%r/.vifm-Trash-%u,$VIFM/Trash,%r/.vifm-Trash".  This way it's safer for
+   privacy, although using %r is not very safe in general (thanks to Regis).
+
+Configuration:
+ - make :set, :filter and :normal zo (and alike) in vifmrc affect all views,
+   thus obsoleting use of :winrun or :windo for this purpose (they still work,
+   the new way is a simpler and more obvious one).  This is related to commands
+   executed during vifmrc processing (not those in the right-hand side of
+   mappings, commands, etc.);
+ - automatically create ~/.vifm/scripts containing small README file if the
+   directory doesn't exist on startup (thanks to fogine).
+
+Core:
+ - added autocommands (DirEnter event and :au[tocmd] command) (thanks to
+   filterfalse).
+
+File operations:
+ - added retry/ignore/abort prompt for file/directory removal when 'syscalls'
+   is on (thanks to Robert Sarkozi);
+ - make use of file cloning feature of btrfs when possible and enabled in
+   'iooptions' (thanks to aleksejrs);
+ - preserve file timestamps on copying files with 'syscalls' on (thanks to
+   mvucBmM0);
+ - employ inotify on GNU/Linux for more precise watching directories for
+   changes;
+ - copy timestamps and permissions on merging directories (thanks to willemw12).
+
+Navigation:
+ - added named bookmarks (paths are associated with tags).  This adds :bmark,
+   :bmarks, :bmgo and :delbmarks command-line commands.  Also there is new
+   "bmarks" value for 'vifminfo' (thanks to Schmalzhaf Stefan).
+
+Normal and visual modes:
+ - accept [count] for "h" and "gh";
+ - added zr normal mode key to reset local filter (thanks to filterfalse);
+ - ctrl-W | and Ctrl-W _ now can set window size to given count (thanks to
+   filterfalse).
+
+Key bindings:
+ - remapping of builtin keys that are followed by selectors (e.g.
+   `:nnoremap d y`) (thanks to mvucBmM0).
+
+Color schemes:
+ - changed default colorscheme to invert colors of the current line.
+
+Documentation:
+ - documented %= for 'statusline' and 'rulerformat';
+ - make --select option more prominent in documentation (thanks to Svyatoslav
+   Mishyn, a.k.a. juef);
+ - documented difference between paths in menu with and without trailing slash
+   (thanks to filterfalse).
+
+Macros:
+ - added %pc macro that splits preview command in two pices: preview command and
+   clear command (thanks to Tomek K., a.k.a. TomiCode).
+
+Menus and dialogs:
+ - added B key to menus, which acts like b, but creates unsorted (very custom)
+   view (thanks to filterfalse);
+ - added "v" key to menu mode that loads current contents into quickfix list of
+   editor (Vim compatible one is assumed) (thanks to filterfalse);
+ - added handling of dd in :trashes, :trashes? and :lstrashes, which either
+   deletes an item in trash or empties trash (thanks to Svyatoslav Mishyn,
+   a.k.a. juef);
+ - somewhat more informative error titles on issues during file operations;
+ - provide conflict resolution options in a dialog rather than on the
+   command-line, which is hard to read with so many options;
+ - expand "~" in menus on navigation.
+
+Packaging:
+ - removed vifmrc-converter.  It's been around for four years and not needed any
+   more (thanks to filterfalse);
+ - removed contents of autoconf.sh, autoreconf covers what was there (there is a
+   notice in that script now about it just in case) (thanks to Hendrik Jaeger,
+   a.k.a. henk);
+ - added --with-sanitize=basic|thread|leak option to configure script;
+ - added missing script that's necessary for %s macro in GNU screen.  Was lost
+   for a long time;
+ - work around compilation on systems where MAX_ARG_STRLEN is defined, but
+   unusable (thanks to Marcin Juszkiewicz, a.k.a. hrw, Michel Normand and
+   Michael Vetter, a.k.a. jubalh);
+ - put right-hand side of user-defined commands into separate scope of
+   if-else-endif expressions.  This prevents affecting of regular input by
+   malformed user-defined command.
+
+Scripting:
+ - added :elseif command (thanks to filterfalse);
+ - added &option syntax for :let command;
+ - added && and || operators to expression parser (thanks to filterfalse);
+ - added getpanetype() builtin function that retrieves type of current pane
+   (thanks to filterfalse);
+ - added layoutis() builtin function that answers queries about current
+   interface configuration (thanks to fogine);
+ - added paneisat() builtin function that answers queries about current pane
+   position (thanks to fogine);
+ - added inline comments to allow less verbose commenting in configuration;
+ - rewrote expression parser to prevent side-effects from occurring until syntax
+   is checked.
+
+TUI (Text User Interface):
+ - added match numbers to search messages on status bar (patch by Cosmin
+   Popescu, a.k.a. cosminadrianpopescu);
+ - added dynamic view column alignment (specified by "*", just like "-" for left
+   alignment) (patch by Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - added "more" mode that is used to handle status bar content that doesn't fit
+   on the screen (thanks to Bruce Hunsaker, a.k.a. hunsakerbn, and Svyatoslav
+   Mishyn, a.k.a. juef);
+ - added builtin directory preview (thanks to Damian Ariel Perticone and
+   Alexandre Viau);
+ - added "fileext" sorting key, which sorts files by extensions and directories
+   by name (patch by Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - added "nitems" sorting, which sorts by number of items in a directory (thanks
+   to filterfalse);
+ - added "nlinks" sorting key to display number of hard links to a file on *nix
+   systems (thanks to filterfalse);
+ - normalize surrounding spaces in menu and dialog titles;
+ - lower minimum supported terminal width and height from 30x10 to 20x5;
+ - update cursor position on file disappearing in more predictable way.  Use the
+   closes file to the previously active one that still exists (thanks to
+   ranousse);
+ - display lower bound on item count in status bar progress messages (e.g. on
+   :grep).
+
+Important fixes:
+ - assume UTF-8 sequences can be broken (thanks to Svyatoslav Mishyn, a.k.a.
+   juef);
+ - made setting title inside terminal multiplexers (when terminal type is
+   "screen*") work;
+ - check file system sensitivity on OS X (thanks to loongw);
+ - fixed startup on Windows 10 (thanks to th1rdey3 and Robert Sarkozi);
+ - fixed swapped absolute/relative link creation on :alink/:rlink commands
+   (patch by MadMaverick9);
+ - multiple fixes for custom views (thanks to filterfalse);
+ - more careful treating of files with colons in their names for menus and
+   custom views (thanks to aleksejrs);
+ - fixed ranges for :yank, 0.8 regression (thanks to Marius Schmidl);
+ - fixed crash on copy-like operations that move several files into subdirectory
+   of another view (thanks to Marius Schmidl);
+ - fixed creation of intermediate directories on merging directories (thanks to
+   willemw12).
+
+Vim-plugin:
+ - added set of :*Vim commands to vifm run from Vim plugin, which overrule
+   initial :*Vifm command behaviour (thanks to Ross Hadden, a.k.a. rosshadden);
+ - changed plugin to do not depend on location of vifm.  g:vifm_home is ignored
+   from now on (thanks to aleksejrs).
+
+Only on Windows:
+ - display directory size on Windows more correctly;
+ - improvements in running commands with special characters and/or spaces
+   (thanks to Stas Malavin).
+
+Other changes:
+ - added handling of "-" command-line argument specified in place of directory
+   path as instruction to read list of files from stdin;
+ - added --server-list and --server-name command-line options that enumerates
+   names of currently running vifm servers and sets name of target/this instance
+   respectively;
+ - added optional argument for --logging parameter that specifies path to
+   startup log (thanks to Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - invalidate directory size (calculated via ga/gA) if noticed that directory
+   was changed.  This affects all parent directories as well, way easier to see
+   what needs recalculation after file moving/removal;
+ - warn about --remote command being disabled at build-time (thanks to
+   Svyatoslav Mishyn, a.k.a. juef);
+ - do not finish argument parsing after finding --help or --version, continue
+   and validate the rest of command-line (thanks to Svyatoslav Mishyn, a.k.a.
+   juef);
+ - display incomplete file name on rename instead of failing with error on
+   Unicode conversion issues.
+
+See change log for the full list of changes and by whom they were suggested.
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+January 02, 2016
+================
+
+vifm v0.8.1 beta testing has started
+------------------------------------
+
+New minor version delivers primarily various small improvements of different
+kinds.  There is also improvement of navigation via named bookmarks (or tags),
+which can ease keeping track of what is where, and an ability to apply
+settings to specific directories or sub-trees (via combination of autocommands
+and local options).
+
+The beta stage will last about two weeks.  In case any serious bugs are found
+during this period, another beta version might be released.
+
+Main changes:
+ - added local options, which work until directory change;
+ - added named bookmarks (paths are associated with tags);
+ - added autocommands (with DirEnter event);
+ - added ability to sort by regexp-extracted part of file name;
+ - added builtin directory preview (similar to `tree`);
+ - added a way to communicate menu contents to Vim quickfix;
+ - IPC got new (safe) implementation with listing/targeting of active instances,
+   it's enabled by default again;
+ - updating local view settings from vifmrc now affects both panes (:windo is
+   not necessary);
+ - more predictive cursor updates on directory reload;
+ - improvements related to expression and command parsing.
+
+More detailed list of changes.
+
+Command-line mode:
+ - added :setl[ocal] and :setg[lobal] commands to manage values of local options
+   that are specific to current directory and are reset on directory change,
+   similar to local options of Vim;
+ - added :pu[t] command that inserts files into current directory (thanks to
+   mvucBmM0);
+ - added :winc[md] command-line command (thanks to fogine);
+ - added exclamation mark to :shell to suppress spawning new teminal multiplexer
+   pane (patch by Cosmin Popescu, a.k.a. cosminadrianpopescu).
+
+:set command and options:
+ - added :set foo+=bar syntax for string options (append value);
+ - added 'deleteprg' option, which specifies program to run on files that are
+   permanently removed;
+ - added 'dirsize' option to control how size of directories is displayed in
+   file views.  This enables one to see number of files in a directory rather
+   than its size (thanks to Martin Fischer);
+ - added optional %u and %U macros to 'findprg', 'grepprg', and 'locateprg' that
+   allow immediate redirection of command output into custom view without
+   opening a menu (thanks to filterfalse);
+ - added 'iooptions' option to configure file system operations.  Contains only
+   "fastfilecloning" for btrfs so far (thanks to aleksejrs);
+ - added special treatment for "*" as value of 'slowfs', which might be useful
+   in case of very slow handling of requests to mounts enumeration (patch by
+   Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - added handling of "%u" in trash specification on *nix, which is replaced with
+   real user ID (thanks to Regis);
+ - allow 'shell' to specify a shell argument on *nix (thanks to loongw);
+ - added 'sortgroups' option and "groups" sorting key, which allow sorting by
+   parts of file names (thanks to aleksejrs);
+ - make "p" in 'tuioptions' affect padding in quick view and view mode;
+ - changed 'fusehome' default from temporary directory to data directory (that
+   is $XDG_DATA_HOME/.local/share/fuse/ or $VIFM/fuse/ depending on which parent
+   directory exists, the second one exists by definition, but first might not)
+   (thanks to aleksejrs and to Hendrik Jaeger, a.k.a. henk);
+ - changed default value of 'trashdir' on *nix again, this time to
+   "%r/.vifm-Trash-%u,$VIFM/Trash,%r/.vifm-Trash".  This way it's safer for
+   privacy, although using %r is not very safe in general (thanks to Regis).
+
+Configuration:
+ - make :set, :filter and :normal zo (and alike) in vifmrc affect all views,
+   thus obsoleting use of :winrun or :windo for this purpose (they still work,
+   the new way is a simpler and more obvious one).  This is related to commands
+   executed during vifmrc processing (not those in the right-hand side of
+   mappings, commands, etc.);
+ - automatically create ~/.vifm/scripts containing small README file if the
+   directory doesn't exist on startup (thanks to fogine).
+
+Core:
+ - added autocommands (DirEnter event and :au[tocmd] command) (thanks to
+   filterfalse).
+
+File operations:
+ - added retry/ignore/abort prompt for file/directory removal when 'syscalls'
+   is on (thanks to Robert Sarkozi);
+ - make use of file cloning feature of btrfs when possible and enabled in
+   'iooptions' (thanks to aleksejrs);
+ - preserve file timestamps on copying files with 'syscalls' on (thanks to
+   mvucBmM0);
+ - employ inotify on GNU/Linux for more precise watching directories for
+   changes.
+
+Navigation:
+ - added named bookmarks (paths are associated with tags).  This adds :bmark,
+   :bmarks, :bmgo and :delbmarks command-line commands.  Also there is new
+   "bmarks" value for 'vifminfo' (thanks to Schmalzhaf Stefan).
+
+Normal and visual modes:
+ - accept [count] for "h" and "gh";
+ - added zr normal mode key to reset local filter (thanks to filterfalse);
+ - ctrl-W | and Ctrl-W _ now can set window size to given count (thanks to
+   filterfalse).
+
+Key bindings:
+ - remapping of builtin keys that are followed by selectors (e.g.
+   `:nnoremap d y`) (thanks to mvucBmM0).
+
+Color schemes:
+ - changed default colorscheme to invert colors of the current line.
+
+Documentation:
+ - documented %= for 'statusline' and 'rulerformat';
+ - make --select option more prominent in documentation (thanks to Svyatoslav
+   Mishyn, a.k.a. juef);
+ - documented difference between paths in menu with and without trailing slash
+   (thanks to filterfalse).
+
+Macros:
+ - added %pc macro that splits preview command in two pices: preview command and
+   clear command (thanks to Tomek K., a.k.a. TomiCode).
+
+Menus and dialogs:
+ - added B key to menus, which acts like b, but creates unsorted (very custom)
+   view (thanks to filterfalse);
+ - added "v" key to menu mode that loads current contents into quickfix list of
+   editor (Vim compatible one is assumed) (thanks to filterfalse);
+ - added handling of dd in :trashes, :trashes? and :lstrashes, which either
+   deletes an item in trash or empties trash (thanks to Svyatoslav Mishyn,
+   a.k.a. juef);
+ - somewhat more informative error titles on issues during file operations;
+ - provide conflict resolution options in a dialog rather than on the
+   command-line, which is hard to read with so many options;
+ - expand "~" in menus on navigation.
+
+Packaging:
+ - removed vifmrc-converter.  It's been around for four years and not needed any
+   more (thanks to filterfalse);
+ - removed contents of autoconf.sh, autoreconf covers what was there (there is a
+   notice in that script now about it just in case) (thanks to Hendrik Jaeger,
+   a.k.a. henk);
+ - added --with-sanitize=basic|thread|leak option to configure script;
+ - added missing script that's necessary for %s macro in GNU screen.  Was lost
+   for a long time;
+ - work around compilation on systems where MAX_ARG_STRLEN is defined, but
+   unusable (thanks to Marcin Juszkiewicz, a.k.a. hrw, Michel Normand and
+   Michael Vetter, a.k.a. jubalh);
+ - put right-hand side of user-defined commands into separate scope of
+   if-else-endif expressions.  This prevents affecting of regular input by
+   malformed user-defined command.
+
+Scripting:
+ - added :elseif command (thanks to filterfalse);
+ - added &option syntax for :let command;
+ - added && and || operators to expression parser (thanks to filterfalse);
+ - added getpanetype() builtin function that retrieves type of current pane
+   (thanks to filterfalse);
+ - added layoutis() builtin function that answers queries about current
+   interface configuration (thanks to fogine);
+ - added paneisat() builtin function that answers queries about current pane
+   position (thanks to fogine);
+ - added inline comments to allow less verbose commenting in configuration;
+ - rewrote expression parser to prevent side-effects from occurring until syntax
+   is checked.
+
+TUI (Text User Interface):
+ - added match numbers to search messages on status bar (patch by Cosmin
+   Popescu, a.k.a. cosminadrianpopescu);
+ - added dynamic view column alignment (specified by "*", just like "-" for left
+   alignment) (patch by Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - added "more" mode that is used to handle status bar content that doesn't fit
+   on the screen (thanks to Bruce Hunsaker, a.k.a. hunsakerbn, and Svyatoslav
+   Mishyn, a.k.a. juef);
+ - added builtin directory preview (thanks to Damian Ariel Perticone and
+   Alexandre Viau);
+ - added "fileext" sorting key, which sorts files by extensions and directories
+   by name (patch by Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - added "nitems" sorting, which sorts by number of items in a directory (thanks
+   to filterfalse);
+ - added "nlinks" sorting key to display number of hard links to a file on *nix
+   systems (thanks to filterfalse);
+ - normalize surrounding spaces in menu and dialog titles;
+ - lower minimum supported terminal width and height from 30x10 to 20x5;
+ - update cursor position on file disappearing in more predictable way.  Use the
+   closes file to the previously active one that still exists (thanks to
+   ranousse);
+ - display lower bound on item count in status bar progress messages (e.g. on
+   :grep).
+
+Important fixes:
+ - assume UTF-8 sequences can be broken (thanks to Svyatoslav Mishyn, a.k.a.
+   juef);
+ - made setting title inside terminal multiplexers (when terminal type is
+   "screen*") work;
+ - check file system sensitivity on OS X (thanks to loongw);
+ - fixed startup on Windows 10 (thanks to th1rdey3 and Robert Sarkozi);
+ - fixed swapped absolute/relative link creation on :alink/:rlink commands
+   (patch by MadMaverick9);
+ - multiple fixes for custom views (thanks to filterfalse);
+ - more careful treating of files with colons in their names for menus and
+   custom views (thanks to aleksejrs);
+ - fixed ranges for :yank, 0.8 regression (thanks to Marius Schmidl);
+ - fixed crash on copy-like operations that move several files into subdirectory
+   of another view (thanks to Marius Schmidl);
+ - fixed creation of intermediate directories on merging directories (thanks to
+   willemw12).
+
+Vim-plugin:
+ - added set of :*Vim commands to vifm run from Vim plugin, which overrule
+   initial :*Vifm command behaviour (thanks to Ross Hadden, a.k.a. rosshadden);
+ - changed plugin to do not depend on location of vifm.  g:vifm_home is ignored
+   from now on (thanks to aleksejrs).
+
+Only on Windows:
+ - display directory size on Windows more correctly;
+ - improvements in running commands with special characters and/or spaces
+   (thanks to Stas Malavin).
+
+Other changes:
+ - added handling of "-" command-line argument specified in place of directory
+   path as instruction to read list of files from stdin;
+ - added --server-list and --server-name command-line options that enumerates
+   names of currently running vifm servers and sets name of target/this instance
+   respectively;
+ - added optional argument for --logging parameter that specifies path to
+   startup log (thanks to Cosmin Popescu, a.k.a. cosminadrianpopescu);
+ - invalidate directory size (calculated via ga/gA) if noticed that directory
+   was changed.  This affects all parent directories as well, way easier to see
+   what needs recalculation after file moving/removal;
+ - warn about --remote command being disabled at build-time (thanks to
+   Svyatoslav Mishyn, a.k.a. juef);
+ - do not finish argument parsing after finding --help or --version, continue
+   and validate the rest of command-line (thanks to Svyatoslav Mishyn, a.k.a.
+   juef);
+ - display incomplete file name on rename instead of failing with error on
+   Unicode conversion issues.
+
+See change log for the full list of changes and by whom they were suggested.
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+July 09, 2015
+=============
+
+vifm v0.8
+---------
+
+New version brings several useful improvements of different kinds.  The most
+substantial addition is custom views that allow one to combine files from
+several directories in one view, which in turn enables processing of
+search/grep/etc. results similar to handling contents of a regular directory.
+
+Thanks to everyone who was reporting issues during beta period.
+
+Also reminding about #vifm@Freenode IRC channel, color schemes preview at
+http://vifm.info/colorschemes.shtml and introducing http://q2a.vifm.info Q&A
+site for general usage questions.
+
+Main changes:
+ - added filename specific highlight (with a script to convert ls options);
+ - added custom views, which contrary to regular views can contain files that do
+   not belong to the same directory;
+ - added job bar to display active backgrounded file operations;
+ - added command-line mode abbreviations;
+ - added global configuration and color schemes directory;
+ - added live search match highlighting;
+ - added optional per-file progress for file operations;
+ - added full path patterns ({{globs}} and //regexp//);
+ - added command-line options to control file/directory selection and selection
+   processing to make it easier to use vifm as a file picker;
+ - color schemes got ".vifm" extension, but the old-style names will still work
+   for now;
+ - XDG specification support;
+ - ability to use terminal applications to preview graphics (e.g.
+   w3mimgdisplay).
+
+File operations:
+ - added per-file overwrite confirmation on directory merging (thanks to
+   willemw12);
+ - added detailed list of errors when 'syscalls' is used (thanks to willemw12).
+
+Key bindings:
+ - added F key to less-like (file view) mode, which acts similar to `tail -F` or
+   F key in less (thanks to Daniel Dettlaff, a.k.a. dmilith);
+ - added b key to menu mode that creates custom view filled with menu items
+   filtering out those that are not paths;
+ - added zd normal and visual modes key to exclude items from custom views;
+ - optional per-file progress in dialog mode activated by hitting "i" while
+   operation is being performed.
+
+:set command and options:
+ - added 'chaselinks' option to automatically expand all symbolic links in path
+   of a view (might not work on Windows) (thanks to filterfalse);
+ - added 'mintimeout' option.  It enables controlling responsiveness on external
+   events by Vifm (thanks to hofheinz);
+ - added 'wordchars' option to specify which characters in command-line mode
+   should be considered as part of a word (thanks to filterfalse);
+ - added ^= operation for charset options;
+ - added %[ and %] macros for 'statusline'/'ruler' (thanks to ranousse);
+ - added "p" to 'shortmess' option to control tilde shortening of path in view
+   titles (thanks to Martin Fischer);
+ - changed default value of 'trashdir' from "$VIFM/Trash" to
+   "%r/.vifm-Trash,$VIFM/Trash" (thanks to Joseph LP, a.k.a. ootput);
+ - normalized sorting keys/view column names: "type" -> "dir", display real mode
+   in octal for "mode", make "type" actually display file type (as "mode" did
+   before) (thanks to Michal Belica, a.k.a. beli-sk);
+ - united last pattern of :substitute command with search history (thanks to
+   filterfalse).
+
+Command-line mode:
+ - added :highlight {pattern} for filename specific highlight (thanks to Ink,
+   a.k.a. inknoir, filterfalse and Michael Maddern, a.k.a. madders);
+ - added :cabbrev, :cnoreabbrev and :cunabbrev commands to manage command-line
+   mode abbreviations (thanks to filterfalse);
+ - added Ctrl-X / (slash) key to that inserts last search pattern into current
+   cursor position (thanks to filterfalse);
+ - added Ctrl-] key to trigger abbreviation expansion;
+ - added single-argument form of :file[x]type and :fileviewer commands that
+   lists (in menu mode) currently registered patterns that match specified file
+   name;
+ - added :cq[uit] command to exit with non-zero exit code and also abort
+   directory choosing (thanks to Jeet Sukumaran, a.k.a. jeetsukumaran);
+ - added :trashes? to display sizes of each non-empty trash directories (thanks
+   to Svyatoslav Mishyn, a.k.a. juef);
+ - added regexp patterns to :file[x]type and :fileviewer commands (thanks to
+   filterfalse);
+ - added :redr[aw] command to force immediate redraw (thanks to filterfalse);
+ - allow non-printable characters to be arguments of :commands (thanks to
+   filterfalse);
+ - extended :sync command to support selective synchronization (user can choose
+   among location, cursor position, local options and filters) (thanks to
+   filterfalse).
+
+Completion:
+ - complete `clear` subcommand of :highlight.
+
+Angle bracket notation:
+ - added <lt> angle bracket notation (less-than character, '<') (thanks to
+   filterfalse);
+ - map <c-h> and <bs> to different key codes (thanks to fogine).  This is caused
+   by inconsistency among terminals, map to both keys and it should work
+   everywhere.
+
+Macros:
+ - added %px, %py, %pw and %ph macros that describe location and dimensions of
+   preview area to use in external commands (thanks to Stephano, a.k.a. cao);
+ - added %u and %U macros to redirect command output directly into custom view.
+   The second one allows for more customization of file list, which is absence
+   of sorting for now (thanks to filterfalse);
+ - no more unjustified inconsistency in processing macros in :! and :file[x]type
+   commands (thanks to Miodrag Tokić, a.k.a. loonies).
+
+Scripting:
+ - added system() builtin function that executes command via shell and returns
+   its output;
+ - added full path patterns ({{globs}} and //regexp//) (thanks to astrell);
+ - report error on wrong expression in :if statement and misplaced :else/:endif
+   on file sourcing.
+
+Color scheme:
+ - added JobLine highlight group for the job bar.
+
+Configuration:
+ - added fallback to use "XDG Base Directory Specification" when failed to find
+   configuration in other places (thanks to Miodrag Tokić, a.k.a. loonies);
+ - added global configuration {prefix}/etc/vifm/vifmrc and color schemes
+   {prefix}/etc/vifm/colors/* (thanks to astrell and Michael Vetter, a.k.a.
+   jubalh).
+
+Performance:
+ - significantly reduced amount of work performed by Vifm in idle state (thanks
+   to hofheinz);
+ - quit fast on --help/--version (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - throw away dead directories in directory histories on merging vifminfo files.
+   Otherwise clearing such directories on :history is almost useless.
+
+Menus and dialogs:
+ - added handling of Ctrl-L to sort dialog (thanks to filterfalse);
+ - added device id (major and minor numbers) to file info dialog;
+ - made calculation of directory size visible in :jobs menu;
+ - parse output of mandoc version of apropos in :apropos (thanks to Svyatoslav
+   Mishyn, a.k.a. juef);
+ - display RFC 2822 date without time zon in file info (thanks to Svyatoslav
+   Mishyn, a.k.a. juef).
+
+TUI (Text User Interface):
+ - added search match highlighting for file names (thanks to Svyatoslav Mishyn,
+   a.k.a. juef, and willemw12);
+ - added job bar that displays backgrounded file operations if any (thanks to
+   geo909);
+ - redraw UI on resize during file operation when 'syscalls' is set;
+ - redraw UI on resize when dialog is active;
+ - dynamic dialog dimensions (minimum %30 percent of the screen rather than
+   screen-wide all the time) (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - auto-resize position field on the status bar to fit the text (thanks to
+   ranousse);
+ - append unused space in view columns to the last one with percent sizing type
+   if any (thanks to fogine).
+
+Documentation:
+ - manual page fixes/improvements (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - wrapped option names with single quotes in the man page to make it easier to
+   search for options by their names.
+
+Packaging:
+ - added one more light color scheme to assets (in two variations astrell-root
+   and astrell-user) (thanks to astrell);
+ - added lookup for mandoc on *nix to perform manual page to plain text
+   transformation (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - added OS X version of sample vifmrc file.  Now this one will be used on first
+   run on OS X (thanks to Larry Hynes, a.k.a. larryhynes);
+ - added dircolors -> vifm conversion script (thanks to Ink, a.k.a. inknoir,
+   Hendrik Jaeger, a.k.a. henk, and Michael Maddern, a.k.a. madders);
+ - added .vifm extension to color schemes (initial rename is performed
+   automatically) (thanks Michael Vetter, a.k.a. jubalh);
+ - added script to update timestamps, so that build system won't be regenerated
+   without real reason.  One might want to run it when building from git
+   checkout, which doesn't preserve correct timestamps;
+ - install AUTHORS, COPYING, ChangeLog, INSTALL, NEWS, README and TODO to
+   {prefix}/share/doc/vifm.  Install color schemes to
+   {prefix}/share/vifm/colors.  Otherwise these are not available after
+   installation;
+ - made configure script lookup curs_set in libtinfo;
+ - moved checks for build-time tools existence from Makefile to configure
+   script;
+ - made tests less dependent on environment (thanks to Hendrik Jaeger, a.k.a.
+   henk).
+
+Only on Windows:
+ - automatically install sample vifmrc and help file on first start;
+ - switch to utf-8 internal representation of paths.  This fixes issues when
+   file name encoding doesn't match system encoding (thanks to Stas Panteleev).
+
+Important fixes:
+ - fixed undesired file removal on overwriting them with themselves (data loss
+   after confirmation of overwriting files when destination matches source)
+   (thanks to Сергей Соловьёв (Sergej Soloviov));
+ - fixed crash on navigation to end of line in command-line mode (thanks to
+   Christian Fillion, a.k.a. cfillion);
+ - fixed `:help` (no arguments) when 'vimhelp' is on and automatically installed
+   Vim documentation is used (thanks to ranousse);
+ - better handling of case related operations;
+ - fixed ":vs .." which used to use wrong base directory;
+ - fixed assertion on including "type" in 'viewcolumns' value (thanks to Michal
+   Belica, a.k.a. beli-sk);
+ - better FUSE handling on OS X (thanks to Michael Maddern, a.k.a. madders);
+ - fixed (deep) directory merging (thanks to willemw12);
+ - fixed build and work on OpenBSD (at least to some degree that curses
+   implementation there allows).  There might be some troubles with non-ascii
+   characters (thanks to hofheinz and Brian Callahan, a.k.a. ibara);
+ - fixed copying of fifo, socket and device files with 'syscalls' enabled.
+   Thanks to Svyatoslav Mishyn (a.k.a. juef).
+
+Vim-plugin:
+ - added K mapping to Vim plugin (quick navigation to documentation, e.g. from
+   vifmrc).  Patch by filterfalse.
+
+Other changes:
+ - added --delimiter command-line option.  Configures delimiter string on
+   writing out list of paths (like on `-f` switch) (thanks to Jeet Sukumaran,
+   a.k.a. jeetsukumaran);
+ - added --choose-files and --choose-dir command-line switches to specify output
+   location for names of selected files or last visited directory
+   respectively (thanks to Jeet Sukumaran, a.k.a. jeetsukumaran);
+ - added --on-choose command-line switch to execute a command on selection
+   rather than opening it (thanks to Ross Hadden, a.k.a. rosshadden);
+ - added %FOREGROUND FUSE mounting option, which supersedes %CLEAR and fixes
+   issue with passing input to FUSE mounter (thanks to Johannes, a.k.a. johannesmeng);
+ - removed per-view last search pattern.  Don't worry, you probably won't even
+   notice it: this doesn't affect regular use case, rather more exotic one,
+   which is hard to notice;
+ - better handling or unexpectedly unavailable directories on startup and while
+   running (thanks to willemw12);
+ - define $VIFM_FUSE_FILE environment variable for external commands to
+   communicate path to file used to initiate FUSE mounting of directory we're
+   in (thanks to astrell);
+ - allowed having multiple file viewers with same rules for choosing them at
+   run-time as for file associations (thanks to filterfalse);
+ - redirect both standard output and error streams from viewers (already was the
+   case for Windows);
+ - handle commands that are too long to be passed directly to the shell by
+   breaking them into list of arguments if possible (thanks to filterfalse).
+
+See change log for full list of changes and by whom they were suggested.
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+June 19, 2015
+=============
+
+vifm v0.8 beta testing has started
+----------------------------------
+
+New version brings several useful improvements of different kinds.  The most
+substantial addition is custom views that allow one to combine files from
+several directories in one view, which in turn enables processing of
+search/grep/etc. results similar to handling contents of a regular directory.
+
+That change alone affected internal structure quite seriously which combined
+with operations on system calls from the previous release distant new version
+far enough from 0.7 to name it 0.8.
+
+Version change also gives one a moral right to introduce incompatible changes.
+So if anyone remembers me postponing changing defaults or something like that
+and is still waiting on it, please send a reminder (unfortunately I was
+careless enough to didn't make detailed list of such things).  As of now the
+following items are under evaluation:
+ - removing "options", "filetypes", "commands" from 'vifminfo' option (not a
+   big deal, but it's not really useful as well, and maybe potentially
+   harmful);
+ - removing 'trash' option as it effectively affects quite a lot things and is
+   better to be enabled;
+ - have 'hlsearch' off by default as normally search doesn't select anything
+   and user can accidentally run some operation on too many files with default
+   setup.
+
+Please see the README file in packages for links where feedback can be
+provided.
+
+The beta stage will last about two weeks.  In case any serious bugs are found
+during this period, another beta version might be released.
+
+Main changes:
+ - added filename specific highlight;
+ - added custom views, which contrary to regular views can contain files that do
+   not belong to the same directory;
+ - added job bar to display active backgrounded file operations;
+ - added command-line mode abbreviations;
+ - added global configuration and color schemes directory;
+ - added live search match highlighting;
+ - added optional per-file progress for file operations;
+ - added full path patterns ({{globs}} and //regexp//);
+ - added command-line options to control file/directory selection and selection
+   processing to make it easier to use vifm as a file picker;
+ - color schemes got ".vifm" extension, but the old-style names will still work
+   for now;
+ - XDG specification support.
+
+File operations:
+ - added per-file overwrite confirmation on directory merging (thanks to
+   willemw12);
+ - added detailed list of errors when 'syscalls' is used (thanks to willemw12).
+
+Key bindings:
+ - added F key to less-like (file view) mode, which acts similar to `tail -F` or
+   F key in less (thanks to Daniel Dettlaff, a.k.a. dmilith);
+ - added b key to menu mode that creates custom view filled with menu items
+   filtering out those that are not paths;
+ - added zd normal and visual modes key to exclude items from custom views;
+ - optional per-file progress in dialog mode activated by hitting "i" while
+   operation is being performed.
+
+:set command and options:
+ - added 'chaselinks' option to automatically expand all symbolic links in path
+   of a view (might not work on Windows) (thanks to filterfalse);
+ - added 'mintimeout' option.  It enables controlling responsiveness on external
+   events by Vifm (thanks to hofheinz);
+ - added 'wordchars' option to specify which characters in command-line mode
+   should be considered as part of a word (thanks to filterfalse);
+ - added ^= operation for charset options;
+ - added %[ and %] macros for 'statusline'/'ruler' (thanks to ranousse);
+ - added "p" to 'shortmess' option to control tilde shortening of path in view
+   titles (thanks to Martin Fischer);
+ - changed default value of 'trashdir' from "$VIFM/Trash" to
+   "%r/.vifm-Trash,$VIFM/Trash" (thanks to Joseph LP, a.k.a. ootput);
+ - normalized sorting keys/view column names: "type" -> "dir", display real mode
+   in octal for "mode", make "type" actually display file type (as "mode" did
+   before) (thanks to Michal Belica, a.k.a. beli-sk);
+ - united last pattern of :substitute command with search history (thanks to
+   filterfalse).
+
+Command-line mode:
+ - added :highlight {pattern} for filename specific highlight (thanks to Ink,
+   a.k.a. inknoir, filterfalse and Michael Maddern, a.k.a. madders);
+ - added :cabbrev, :cnoreabbrev and :cunabbrev commands to manage command-line
+   mode abbreviations (thanks to filterfalse);
+ - added Ctrl-X / (slash) key to that inserts last search pattern into current
+   cursor position (thanks to filterfalse);
+ - added Ctrl-] key to trigger abbreviation expansion;
+ - added single-argument form of :file[x]type and :fileviewer commands that
+   lists (in menu mode) currently registered patterns that match specified file
+   name;
+ - added :cq[uit] command to exit with non-zero exit code and also abort
+   directory choosing (thanks to Jeet Sukumaran, a.k.a. jeetsukumaran);
+ - added :trashes? to display sizes of each non-empty trash directories (thanks
+   to Svyatoslav Mishyn, a.k.a. juef);
+ - added regexp patterns to :file[x]type and :fileviewer commands (thanks to
+   filterfalse);
+ - added :redr[aw] command to force immediate redraw (thanks to filterfalse);
+ - allow non-printable characters to be arguments of :commands (thanks to
+   filterfalse);
+ - extended :sync command to support selective synchronization (user can choose
+   among location, cursor position, local options and filters) (thanks to
+   filterfalse).
+
+Completion:
+ - complete `clear` subcommand of :highlight.
+
+Angle bracket notation:
+ - added <lt> angle bracket notation (less-than character, '<') (thanks to
+   filterfalse);
+ - map <c-h> and <bs> to different key codes (thanks to fogine).  This is caused
+   by inconsistency among terminals, map to both keys and it should work
+   everywhere.
+
+Macros:
+ - added %px, %py, %pw and %ph macros that describe location and dimensions of
+   preview area to use in external commands (thanks to Stephano, a.k.a. cao);
+ - added %u and %U macros to redirect command output directly into custom view.
+   The second one allows for more customization of file list, which is absence
+   of sorting for now (thanks to filterfalse);
+ - no more unjustified inconsistency in processing macros in :! and :file[x]type
+   commands (thanks to Miodrag Tokić, a.k.a. loonies).
+
+Scripting:
+ - added system() builtin function that executes command via shell and returns
+   its output;
+ - added full path patterns ({{globs}} and //regexp//) (thanks to astrell);
+ - report error on wrong expression in :if statement and misplaced :else/:endif
+   on file sourcing.
+
+Color scheme:
+ - added JobLine highlight group for the job bar.
+
+Configuration:
+ - added fallback to use "XDG Base Directory Specification" when failed to find
+   configuration in other places (thanks to Miodrag Tokić, a.k.a. loonies);
+ - added global configuration {prefix}/etc/vifm/vifmrc and color schemes
+   {prefix}/etc/vifm/colors/* (thanks to astrell and Michael Vetter, a.k.a.
+   jubalh).
+
+Performance:
+ - significantly reduced amount of work performed by Vifm in idle state (thanks
+   to hofheinz);
+ - quit fast on --help/--version (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - throw away dead directories in directory histories on merging vifminfo files.
+   Otherwise clearing such directories on :history is almost useless.
+
+Menus and dialogs:
+ - made calculation of directory size visible in :jobs menu;
+ - parse output of mandoc version of apropos in :apropos (thanks to Svyatoslav
+   Mishyn, a.k.a. juef).
+
+TUI (Text User Interface):
+ - added search match highlighting for file names (thanks to Svyatoslav Mishyn,
+   a.k.a. juef, and willemw12);
+ - added job bar that displays backgrounded file operations if any (thanks to
+   geo909);
+ - redraw UI on resize during file operation when 'syscalls' is set;
+ - redraw UI on resize when dialog is active;
+ - dynamic dialog dimensions (minimum %30 percent of the screen rather than
+   screen-wide all the time) (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - auto-resize position field on the status bar to fit the text (thanks to
+   ranousse).
+
+Documentation:
+ - manual page fixes/improvements (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - wrapped option names with single quotes in the man page to make it easier to
+   search for options by their names.
+
+Packaging:
+ - added one more light color scheme to assets (in two variations astrell-root
+   and astrell-user) (thanks to astrell);
+ - added lookup for mandoc on *nix to perform manual page to plain text
+   transformation (thanks to Svyatoslav Mishyn, a.k.a. juef);
+ - added OS X version of sample vifmrc file.  Now this one will be used on first
+   run on OS X (thanks to Larry Hynes, a.k.a. larryhynes);
+ - added dircolors -> vifm conversion script (thanks to Ink, a.k.a. inknoir,
+   Hendrik Jaeger, a.k.a. henk, and Michael Maddern, a.k.a. madders);
+ - added .vifm extension to color schemes (initial rename is performed
+   automatically) (thanks Michael Vetter, a.k.a. jubalh);
+ - install AUTHORS, COPYING, ChangeLog, INSTALL, NEWS, README and TODO to
+   {prefix}/share/doc/vifm.  Install color schemes to
+   {prefix}/share/vifm/colors.  Otherwise these are not available after
+   installation;
+ - made configure script lookup curs_set in libtinfo;
+ - moved checks for build-time tools existence from Makefile to configure script;
+ - made tests less dependent on environment (thanks to Hendrik Jaeger, a.k.a.
+   henk).
+
+Only on Windows:
+ - automatically install sample vifmrc and help file on first start;
+ - switch to utf-8 internal representation of paths.  This fixes issues when
+   file name encoding doesn't match system encoding (thanks to Stas Panteleev).
+
+Major fixes:
+ - fixed undesired file removal on overwriting them with themselves (data loss
+   after confirmation of overwriting files when destination matches source)
+   (thanks to Сергей Соловьёв (Sergej Soloviov));
+ - fixed crash on navigation to end of line in command-line mode (thanks to
+   Christian Fillion, a.k.a. cfillion);
+ - fixed `:help` (no arguments) when 'vimhelp' is on and automatically installed
+   Vim documentation is used (thanks to ranousse);
+ - better handling of case related operations;
+ - fixed ":vs .." which used to use wrong base directory;
+ - fixed assertion on including "type" in 'viewcolumns' value (thanks to Michal
+   Belica, a.k.a. beli-sk);
+ - better FUSE handling on OS X (thanks to Michael Maddern, a.k.a. madders).
+
+Vim-plugin:
+ - added K mapping to Vim plugin (quick navigation to documentation, e.g. from
+   vifmrc).  Patch by filterfalse.
+
+Other changes:
+ - added --delimiter command-line option.  Configures delimiter string on
+   writing out list of paths (like on `-f` switch) (thanks to Jeet Sukumaran,
+   a.k.a. jeetsukumaran);
+ - added --choose-files and --choose-dir command-line switches to specify output
+   location for names of selected files or last visited directory
+   respectively (thanks to Jeet Sukumaran, a.k.a. jeetsukumaran);
+ - added --on-choose command-line switch to execute a command on selection
+   rather than opening it (thanks to Ross Hadden, a.k.a. rosshadden);
+ - added %FOREGROUND FUSE mounting option, which supersedes %CLEAR and fixes
+   issue with passing input to FUSE mounter (thanks to Johannes, a.k.a.
+   johannesmeng);
+ - removed per-view last search pattern.  Don't worry, you probably won't even
+   notice it: this doesn't affect regular use case, rather more exotic one,
+   which is hard to notice;
+ - better handling or unexpectedly unavailable directories on startup and while
+   running (thanks to willemw12);
+ - define $VIFM_FUSE_FILE environment variable for external commands to
+   communicate path to file used to initiate FUSE mounting of directory we're
+   in (thanks to astrell);
+ - allowed having multiple file viewers with same rules for choosing them at
+   run-time as for file associations (thanks to filterfalse);
+ - redirect both standard output and error streams from viewers (already was the
+   case for Windows);
+ - handle commands that are too long to be passed directly to the shell by
+   breaking them into list of arguments if possible (thanks to filterfalse).
+
+See change log for full list of changes and by whom they were suggested.
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 October 25, 2014
 ================
 
@@ -11,9 +991,6 @@ different environments to become the primary one). Another frequently asked
 feature is multiblock selection ("extended visual mode" if you wish). Vifm also
 became friendlier to authors of colorschemes and those who'd like to customize
 UI a bit more.
-
-The beta stage will last about two weeks.  In case any serious bugs are found
-during this period, another beta version might be released.
 
 Main changes:
  - added multiblock "selection" (in quotes because it's also block deselection
@@ -1559,7 +2536,7 @@ vifm v0.7.0 is out!
 
 And as it was promised vifm is back on Windows!
 
-This release breaks compatibility a little, which was done intensionally to
+This release breaks compatibility a little, which was done intentionally to
 make vifm more vi-like.  I hope that wont make too much discomfort for users,
 at least I tried to reduce discomfort as much as I can.  In particular, an
 utility program named vifmrc-converter is shipped with vifm now.  It's main

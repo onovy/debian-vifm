@@ -23,8 +23,8 @@
 #include <stdlib.h> /* realloc() */
 #include <string.h> /* strdup() strlen() */
 
+#include "../ui/ui.h"
 #include "../utils/string_array.h"
-#include "../ui.h"
 #include "../undo.h"
 #include "menus.h"
 
@@ -32,13 +32,11 @@ int
 show_undolist_menu(FileView *view, int with_details)
 {
 	char **p;
-	size_t len;
 
 	static menu_info m;
-	init_menu_info(&m, UNDOLIST_MENU, strdup("Undolist is empty"));
+	init_menu_info(&m, strdup("Undolist"), strdup("Undolist is empty"));
 	m.current = get_undolist_pos(with_details) + 1;
 	m.pos = m.current - 1;
-	m.title = strdup(" Undolist ");
 
 	m.items = undolist(with_details);
 	p = m.items;
@@ -47,6 +45,8 @@ show_undolist_menu(FileView *view, int with_details)
 
 	if(m.len > 0)
 	{
+		size_t len;
+
 		m.len = add_to_string_array(&m.items, m.len, 1, "list end");
 
 		/* Add current position mark to menu item. */
@@ -60,4 +60,4 @@ show_undolist_menu(FileView *view, int with_details)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

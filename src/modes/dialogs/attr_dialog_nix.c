@@ -31,17 +31,19 @@
 #include <stdio.h> /* snprintf() */
 #include <string.h> /* strncat() strlen() */
 
+#include "../../compat/fs_limits.h"
 #include "../../engine/keys.h"
 #include "../../engine/mode.h"
-#include "../../menus/menus.h"
+#include "../../modes/dialogs/msg_dialog.h"
+#include "../../ui/cancellation.h"
+#include "../../ui/fileview.h"
+#include "../../ui/ui.h"
 #include "../../utils/fs.h"
-#include "../../utils/fs_limits.h"
 #include "../../utils/macros.h"
 #include "../../utils/path.h"
 #include "../../filelist.h"
 #include "../../ops.h"
 #include "../../status.h"
-#include "../../ui.h"
 #include "../../undo.h"
 #include "../modes.h"
 
@@ -148,7 +150,7 @@ enter_attr_mode(FileView *active_view)
 				view->dir_entry[i].name);
 		clean_selected_files(view);
 		load_dir_list(view, 1);
-		move_to_list_pos(view, view->list_pos);
+		fview_cursor_redraw(view);
 		return;
 	}
 	while(i < view->list_rows)
@@ -281,7 +283,7 @@ redraw_attr_dialog(void)
 
 	getmaxyx(stdscr, y, x);
 	mvwin(change_win, (y - (20 + (file_is_dir != 0)*2))/2, (x - 30)/2);
-	box(change_win, ACS_VLINE, ACS_HLINE);
+	box(change_win, 0, 0);
 
 	x = getmaxx(change_win);
 	title = get_title();
@@ -309,16 +311,21 @@ redraw_attr_dialog(void)
 static const char *
 get_title(void)
 {
-	static char title[64];
+	static char title[NAME_MAX];
 
 	const int first_file_index = get_first_file_index();
+
 	if(is_one_file_selected(first_file_index))
 	{
-		return view->dir_entry[first_file_index].name;
+		snprintf(title, sizeof(title), " %s ",
+				view->dir_entry[first_file_index].name);
+	}
+	else
+	{
+		snprintf(title, sizeof(title), " %d files ",
+				get_selection_size(first_file_index));
 	}
 
-	snprintf(title, sizeof(title), "%d files",
-			get_selection_size(first_file_index));
 	return title;
 }
 
@@ -379,7 +386,7 @@ leave_attr_mode(void)
 
 	clean_selected_files(view);
 	load_dir_list(view, 1);
-	move_to_list_pos(view, view->list_pos);
+	fview_cursor_redraw(view);
 
 	update_all_windows();
 }
@@ -396,11 +403,11 @@ cmd_ctrl_m(key_info_t key_info, keys_info_t *keys_info)
 	char path[PATH_MAX];
 
 	if(!changed)
+	{
 		return;
+	}
 
-	snprintf(path, sizeof(path), "%s/%s", view->curr_dir,
-			view->dir_entry[view->list_pos].name);
-
+	get_current_full_path(view, sizeof(path), path);
 	set_perm_string(view, perms, origin_perms);
 
 	leave_attr_mode();
@@ -481,7 +488,7 @@ files_chmod(FileView *view, const char *mode, int recurse_dirs)
 		char buf[COMMAND_GROUP_INFO_LEN];
 		char inv[16];
 		snprintf(buf, sizeof(buf), "chmod in %s: %s",
-				replace_home_part(view->curr_dir),
+				replace_home_part(flist_get_dir(view)),
 				view->dir_entry[view->list_pos].name);
 		cmd_group_begin(buf);
 		snprintf(inv, sizeof(inv), "0%o",
@@ -494,7 +501,7 @@ files_chmod(FileView *view, const char *mode, int recurse_dirs)
 		size_t len;
 		int j = i;
 		len = snprintf(buf, sizeof(buf), "chmod in %s: ",
-				replace_home_part(view->curr_dir));
+				replace_home_part(flist_get_dir(view)));
 
 		while(i < view->list_rows && len < sizeof(buf))
 		{
@@ -530,12 +537,9 @@ static void
 chmod_file_in_list(FileView *view, int pos, const char *mode,
 		const char *inv_mode, int recurse_dirs)
 {
-	char *filename;
 	char path_buf[PATH_MAX];
 
-	filename = view->dir_entry[pos].name;
-	snprintf(path_buf, sizeof(path_buf), "%s/%s", view->curr_dir, filename);
-	chosp(path_buf);
+	get_full_path_at(view, pos, sizeof(path_buf), path_buf);
 	file_chmod(path_buf, mode, inv_mode, recurse_dirs);
 }
 
@@ -697,4 +701,4 @@ dec_curr(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

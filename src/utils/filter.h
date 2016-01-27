@@ -58,6 +58,10 @@ void filter_clear(filter_t *filter);
  * returned. */
 int filter_set(filter_t *filter, const char value[]);
 
+/* Assigns *source to *filter.  Returns zero on success, otherwise non-zero is
+ * returned. */
+int filter_assign(filter_t *filter, const filter_t *source);
+
 /* Sets filter and its case sensitivity to given values.  Case sensitivity is
  * updated even on error.  Returns zero on success, otherwise non-zero is
  * returned. */
@@ -69,11 +73,11 @@ int filter_change(filter_t *filter, const char value[], int case_sensitive);
 int filter_append(filter_t *filter, const char value[]);
 
 /* Checks whether pattern matches the filter.  Returns positive number on match,
- * zero on no match and negative number on empty or invlid regular expression
+ * zero on no match and negative number on empty or invalid regular expression
  * (wrong state of the filter). */
 int filter_matches(filter_t *filter, const char pattern[]);
 
 #endif /* VIFM__UTILS__FILTER_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

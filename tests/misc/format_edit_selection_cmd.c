@@ -1,12 +1,14 @@
+#include <stic.h>
+
 #include <stdlib.h>
 #include <string.h>
 
-#include "seatest.h"
-
 #include "../../src/cfg/config.h"
+#include "../../src/int/vim.h"
+#include "../../src/ui/ui.h"
+#include "../../src/utils/dynarray.h"
+#include "../../src/utils/str.h"
 #include "../../src/filelist.h"
-#include "../../src/running.h"
-#include "../../src/ui.h"
 
 static void teardown_view(FileView *view);
 
@@ -17,11 +19,16 @@ setup_lwin(void)
 
 	lwin.list_rows = 4;
 	lwin.list_pos = 2;
-	lwin.dir_entry = calloc(lwin.list_rows, sizeof(*lwin.dir_entry));
+	lwin.dir_entry = dynarray_cextend(NULL,
+			lwin.list_rows*sizeof(*lwin.dir_entry));
 	lwin.dir_entry[0].name = strdup("lfile0");
+	lwin.dir_entry[0].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[1].name = strdup("lfile1");
+	lwin.dir_entry[1].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[2].name = strdup("lfile2");
+	lwin.dir_entry[2].origin = &lwin.curr_dir[0];
 	lwin.dir_entry[3].name = strdup("lfile3");
+	lwin.dir_entry[3].origin = &lwin.curr_dir[0];
 
 	lwin.dir_entry[0].selected = 1;
 	lwin.dir_entry[2].selected = 1;
@@ -35,13 +42,20 @@ setup_rwin(void)
 
 	rwin.list_rows = 6;
 	rwin.list_pos = 5;
-	rwin.dir_entry = calloc(rwin.list_rows, sizeof(*rwin.dir_entry));
+	rwin.dir_entry = dynarray_cextend(NULL,
+			rwin.list_rows*sizeof(*rwin.dir_entry));
 	rwin.dir_entry[0].name = strdup("rfile0");
+	rwin.dir_entry[0].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[1].name = strdup("rfile1");
+	rwin.dir_entry[1].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[2].name = strdup("rfile2");
+	rwin.dir_entry[2].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[3].name = strdup("rfile3");
+	rwin.dir_entry[3].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[4].name = strdup("rfile4");
+	rwin.dir_entry[4].origin = &rwin.curr_dir[0];
 	rwin.dir_entry[5].name = strdup("rfile5");
+	rwin.dir_entry[5].origin = &rwin.curr_dir[0];
 
 	rwin.dir_entry[1].selected = 1;
 	rwin.dir_entry[3].selected = 1;
@@ -49,8 +63,7 @@ setup_rwin(void)
 	rwin.selected_files = 3;
 }
 
-static void
-setup(void)
+SETUP()
 {
 	setup_lwin();
 	setup_rwin();
@@ -58,34 +71,33 @@ setup(void)
 	curr_view = &lwin;
 	other_view = &rwin;
 
-	cfg.vi_command = strdup("vim -p");
-	cfg.vi_x_command = strdup("");
+	update_string(&cfg.vi_command, "vim -p");
+	update_string(&cfg.vi_x_command, "");
 }
 
-static void
-teardown(void)
+TEARDOWN()
 {
 	teardown_view(&lwin);
 	teardown_view(&rwin);
 
-	free(cfg.vi_command);
+	update_string(&cfg.vi_command, NULL);
+	update_string(&cfg.vi_x_command, NULL);
 }
 
 static void
 teardown_view(FileView *view)
 {
 	int i;
-	for(i = 0; i < view->list_rows; i++)
+	for(i = 0; i < view->list_rows; ++i)
 	{
-		free(view->dir_entry[i].name);
+		free_dir_entry(view, &view->dir_entry[i]);
 	}
-	free(view->dir_entry);
+	dynarray_free(view->dir_entry);
 	view->list_rows = 0;
 	view->selected_files = 0;
 }
 
-static void
-test_selection(void)
+TEST(selection)
 {
 	char *cmd;
 	int bg;
@@ -95,18 +107,5 @@ test_selection(void)
 	free(cmd);
 }
 
-void
-format_edit_selection_cmd_tests(void)
-{
-	test_fixture_start();
-
-	fixture_setup(setup);
-	fixture_teardown(teardown);
-
-	run_test(test_selection);
-
-	test_fixture_end();
-}
-
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

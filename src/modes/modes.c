@@ -25,17 +25,21 @@
 
 #include "../engine/keys.h"
 #include "../engine/mode.h"
+#include "../ui/statusbar.h"
+#include "../ui/statusline.h"
+#include "../ui/ui.h"
 #include "../utils/log.h"
 #include "../utils/macros.h"
-#include "../main_loop.h"
+#include "../event_loop.h"
 #include "../status.h"
-#include "../ui.h"
 #include "dialogs/attr_dialog.h"
 #include "dialogs/change_dialog.h"
+#include "dialogs/msg_dialog.h"
 #include "dialogs/sort_dialog.h"
 #include "cmdline.h"
 #include "file_info.h"
 #include "menu.h"
+#include "more.h"
 #include "normal.h"
 #include "view.h"
 #include "visual.h"
@@ -50,6 +54,8 @@ static int mode_flags[] = {
 	MF_USES_COUNT,                /* CHANGE_MODE */
 	MF_USES_COUNT,                /* VIEW_MODE */
 	0,                            /* FILE_INFO_MODE */
+	0,                            /* MSG_MODE */
+	0,                            /* MORE_MODE */
 };
 ARRAY_GUARD(mode_flags, MODES_COUNT);
 
@@ -63,6 +69,8 @@ static char uses_input_bar[] = {
 	1, /* CHANGE_MODE */
 	1, /* VIEW_MODE */
 	1, /* FILE_INFO_MODE */
+	0, /* MSG_MODE */
+	0, /* MORE_MODE */
 };
 ARRAY_GUARD(uses_input_bar, MODES_COUNT);
 
@@ -77,6 +85,8 @@ static mode_init_func mode_init_funcs[] = {
 	&init_change_dialog_mode, /* CHANGE_MODE */
 	&init_view_mode,          /* VIEW_MODE */
 	&init_file_info_mode,     /* FILE_INFO_MODE */
+	&init_msg_dialog_mode,    /* MSG_MODE */
+	&modmore_init,            /* MORE_MODE */
 };
 ARRAY_GUARD(mode_init_funcs, MODES_COUNT);
 
@@ -101,28 +111,24 @@ init_modes(void)
 void
 modes_pre(void)
 {
-	if(vle_mode_is(CMDLINE_MODE))
+	if(ANY(vle_mode_is, SORT_MODE, CHANGE_MODE, ATTR_MODE, MORE_MODE))
+	{
+		/* Do nothing for these modes. */
+	}
+	else if(vle_mode_is(CMDLINE_MODE))
 	{
 		touchwin(status_bar);
 		wrefresh(status_bar);
-		return;
-	}
-	else if(ANY(vle_mode_is, SORT_MODE, CHANGE_MODE, ATTR_MODE))
-	{
-		return;
 	}
 	else if(vle_mode_is(VIEW_MODE))
 	{
 		view_pre();
-		return;
 	}
 	else if(is_in_menu_like_mode())
 	{
 		menu_pre();
-		return;
 	}
-
-	if(!curr_stats.save_msg)
+	else if(!curr_stats.save_msg)
 	{
 		clean_status_bar();
 		wrefresh(status_bar);
@@ -130,10 +136,19 @@ modes_pre(void)
 }
 
 void
+modes_periodic(void)
+{
+	/* Trigger possible view updates. */
+	view_check_for_updates();
+}
+
+void
 modes_post(void)
 {
-	if(ANY(vle_mode_is, CMDLINE_MODE, SORT_MODE, CHANGE_MODE, ATTR_MODE))
+	if(ANY(vle_mode_is,
+				CMDLINE_MODE, SORT_MODE, CHANGE_MODE, ATTR_MODE, MORE_MODE))
 	{
+		/* Do nothing for these modes. */
 		return;
 	}
 	else if(vle_mode_is(VIEW_MODE))
@@ -159,7 +174,7 @@ modes_post(void)
 		if(!is_status_bar_multiline())
 		{
 			update_stat_window(curr_view);
-			update_pos_window(curr_view);
+			ui_ruler_update(curr_view);
 		}
 	}
 
@@ -169,7 +184,11 @@ modes_post(void)
 void
 modes_statusbar_update(void)
 {
-	if(curr_stats.save_msg)
+	if(vle_mode_is(MORE_MODE))
+	{
+		/* Status bar is used for special purposes. */
+	}
+	else if(curr_stats.save_msg)
 	{
 		if(vle_mode_is(VISUAL_MODE))
 		{
@@ -205,7 +224,7 @@ modes_redraw(void)
 		return;
 	}
 
-	if(curr_stats.too_small_term)
+	if(curr_stats.term_state != TS_NORMAL)
 	{
 		update_screen(UT_REDRAW);
 		goto finish;
@@ -216,14 +235,23 @@ modes_redraw(void)
 		redraw_cmdline();
 		goto finish;
 	}
-	else if(vle_mode_is(MENU_MODE))
+	else if(vle_primary_mode_is(MENU_MODE))
 	{
 		menu_redraw();
+		if(vle_mode_is(MSG_MODE))
+		{
+			redraw_msg_dialog(0);
+		}
 		goto finish;
 	}
 	else if(vle_mode_is(FILE_INFO_MODE))
 	{
 		redraw_file_info_dialog();
+		goto finish;
+	}
+	else if(vle_mode_is(MORE_MODE))
+	{
+		modmore_redraw();
 		goto finish;
 	}
 
@@ -249,6 +277,10 @@ modes_redraw(void)
 	else if(vle_mode_is(VIEW_MODE))
 	{
 		view_redraw();
+	}
+	else if(vle_mode_is(MSG_MODE))
+	{
+		redraw_msg_dialog(0);
 	}
 
 finish:
@@ -320,7 +352,7 @@ clear_input_bar(void)
 int
 is_in_menu_like_mode(void)
 {
-	return ANY(vle_mode_is, MENU_MODE, FILE_INFO_MODE);
+	return ANY(vle_primary_mode_is, MENU_MODE, FILE_INFO_MODE, MORE_MODE);
 }
 
 void
@@ -352,4 +384,4 @@ update_vmode_input(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -1,9 +1,11 @@
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT(configure.ac)
-AM_INIT_AUTOMAKE(vifm, 0.7.8)
+AC_INIT(vifm, 0.8.1, xaizek@openmailbox.org, vifm, http://vifm.info)
+AC_CONFIG_SRCDIR(configure.ac)
+AM_INIT_AUTOMAKE([no-dist-gzip dist-bzip2])
 AM_CONFIG_HEADER(config.h)
 
+AC_DEFINE([PACKAGE_SYSCONF_DIR], [], [Configuration directory of the package.])
 AC_DEFINE([PACKAGE_DATA_DIR], [], [Data directory of the package.])
 AC_DEFINE([PACKAGE_SOURCE_DIR], [], [Source directory of the package.])
 
@@ -18,6 +20,8 @@ AM_PROG_CC_STDC
 AC_HEADER_STDC
 AM_PROG_CC_C_O
 AC_CONFIG_MACRO_DIR([m4])
+
+AC_LANG(C)
 
 dnl Determine host machine type.
 AC_CANONICAL_HOST
@@ -34,12 +38,12 @@ case "$host_os" in
 		;;
 esac
 
-if test -n "$OSX_HOST" ; then
-	AC_DEFINE([_XOPEN_SOURCE_EXTENDED], [1],
-	          [Define to 1 to enable wide functions of ncurses on OS X.])
-fi
+AC_DEFINE([_XOPEN_SOURCE_EXTENDED], [1],
+          [Define to 1 to enable wide functions of ncurses in some environments.])
 
 dnl Check for system headers.
+AC_CHECK_HEADERS([alloca.h], [AC_DEFINE([HAVE_ALLOCA_H], [1], [alloca.h header is available.])])
+AC_CHECK_HEADERS([malloc.h], [AC_DEFINE([HAVE_MALLOC_H], [1], [malloc.h header is available.])])
 AC_CHECK_HEADER([assert.h], [], [AC_MSG_ERROR([assert.h header not found.])])
 AC_CHECK_HEADER([ctype.h], [], [AC_MSG_ERROR([ctype.h header not found.])])
 AC_CHECK_HEADER([dirent.h], [], [AC_MSG_ERROR([dirent.h header not found.])])
@@ -59,7 +63,6 @@ AC_CHECK_HEADER([stdint.h], [], [AC_MSG_ERROR([stdint.h header not found.])])
 AC_CHECK_HEADER([stdio.h], [], [AC_MSG_ERROR([stdio.h header not found.])])
 AC_CHECK_HEADER([stdlib.h], [], [AC_MSG_ERROR([stdlib.h header not found.])])
 AC_CHECK_HEADER([string.h], [], [AC_MSG_ERROR([string.h header not found.])])
-AC_CHECK_HEADER([sys/dir.h], [], [AC_MSG_ERROR([sys/dir.h header not found.])])
 AC_CHECK_HEADER([sys/ioctl.h], [], [AC_MSG_ERROR([sys/ioctl.h header not found.])])
 AC_CHECK_HEADER([sys/stat.h], [], [AC_MSG_ERROR([sys/stat.h header not found.])])
 AC_CHECK_HEADER([sys/time.h], [], [AC_MSG_ERROR([sys/time.h header not found.])])
@@ -70,6 +73,25 @@ AC_CHECK_HEADER([time.h], [], [AC_MSG_ERROR([time.h header not found.])])
 AC_CHECK_HEADER([unistd.h], [], [AC_MSG_ERROR([unistd.h header not found.])])
 AC_CHECK_HEADER([wchar.h], [], [AC_MSG_ERROR([wchar.h header not found.])])
 AC_CHECK_HEADER([wctype.h], [], [AC_MSG_ERROR([wctype.h header not found.])])
+dnl Headers required for breaking too long command-lines.
+AC_CHECK_HEADERS([sys/param.h sys/user.h linux/binfmts.h], [], [],
+                 [[#if HAVE_SYS_PARAM_H
+                   # include <sys/param.h>
+                   #endif
+                 ]])
+if test "$ac_cv_header_sys_user_h" = yes -a "$ac_cv_header_linux_binfmts_h" = yes; then
+    AC_COMPILE_IFELSE([AC_LANG_SOURCE(
+                      [[#include <linux/binfmts.h>
+                        #include <sys/user.h>
+                        #include <unistd.h>
+                        #ifndef PAGE_SIZE
+                        #define PAGE_SIZE sysconf(_SC_PAGESIZE)
+                        #endif
+                        int main() { (void)MAX_ARG_STRLEN; return 0; }
+                      ]])],
+                      [AC_DEFINE([HAVE_MAX_ARG_STRLEN], [1],
+                      [MAX_ARG_STRLEN is available.])])
+fi
 
 dnl Check for various system types.
 AC_CHECK_TYPE([uid_t])
@@ -88,7 +110,6 @@ AC_CHECK_TYPE([wchar_t])
 
 dnl Check for various system functions.
 AC_CHECK_FUNC([access], [], [AC_MSG_ERROR([access() function not found.])])
-AC_CHECK_FUNC([atexit], [], [AC_MSG_ERROR([atexit() function not found.])])
 AC_CHECK_FUNC([atof], [], [AC_MSG_ERROR([atof() function not found.])])
 AC_CHECK_FUNC([atoi], [], [AC_MSG_ERROR([atoi() function not found.])])
 AC_CHECK_FUNC([calloc], [], [AC_MSG_ERROR([calloc() function not found.])])
@@ -113,6 +134,7 @@ AC_CHECK_FUNC([fprintf], [], [AC_MSG_ERROR([fprintf() function not found.])])
 AC_CHECK_FUNC([fputc], [], [AC_MSG_ERROR([fputc() function not found.])])
 AC_CHECK_FUNC([fputs], [], [AC_MSG_ERROR([fputs() function not found.])])
 AC_CHECK_FUNC([free], [], [AC_MSG_ERROR([free() function not found.])])
+AC_CHECK_FUNCS([futimens])
 AC_CHECK_FUNC([fwrite], [], [AC_MSG_ERROR([fwrite() function not found.])])
 AC_CHECK_FUNC([getcwd], [], [AC_MSG_ERROR([getcwd() function not found.])])
 AC_CHECK_FUNC([getenv], [], [AC_MSG_ERROR([getenv() function not found.])])
@@ -147,6 +169,7 @@ AC_CHECK_FUNC([memmove], [], [AC_MSG_ERROR([memmove() function not found.])])
 AC_CHECK_FUNC([memset], [], [AC_MSG_ERROR([memset() function not found.])])
 AC_CHECK_FUNC([mkdir], [], [AC_MSG_ERROR([mkdir() function not found.])])
 AC_CHECK_FUNC([opendir], [], [AC_MSG_ERROR([opendir() function not found.])])
+AC_CHECK_FUNC([pathconf], [], [AC_MSG_ERROR([pathconf() function not found.])])
 AC_CHECK_FUNC([pause], [], [AC_MSG_ERROR([pause() function not found.])])
 AC_CHECK_FUNC([pclose], [], [AC_MSG_ERROR([pclose() function not found.])])
 AC_CHECK_FUNC([perror], [], [AC_MSG_ERROR([perror() function not found.])])
@@ -208,6 +231,7 @@ AC_CHECK_FUNC([towupper], [], [AC_MSG_ERROR([towupper() function not found.])])
 AC_CHECK_FUNC([ungetc], [], [AC_MSG_ERROR([ungetc() function not found.])])
 AC_CHECK_FUNC([unlink], [], [AC_MSG_ERROR([unlink() function not found.])])
 AC_CHECK_FUNC([unsetenv], [], [AC_MSG_ERROR([unsetenv() function not found.])])
+AC_CHECK_FUNC([utimes], [], [AC_MSG_ERROR([utimes() function not found.])])
 AC_CHECK_FUNC([vfprintf], [], [AC_MSG_ERROR([vfprintf() function not found.])])
 AC_CHECK_FUNC([vsnprintf], [], [AC_MSG_ERROR([vsnprintf() function not found.])])
 AC_CHECK_FUNC([vswprintf], [], [AC_MSG_ERROR([vswprintf() function not found.])])
@@ -223,6 +247,8 @@ AC_CHECK_FUNC([wcstol], [], [AC_MSG_ERROR([wcstol() function not found.])])
 AC_CHECK_FUNC([wcstombs], [], [AC_MSG_ERROR([wcstombs() function not found.])])
 AC_CHECK_FUNC([wcswidth], [], [AC_MSG_ERROR([wcswidth() function not found.])])
 AC_CHECK_FUNC([wcwidth], [], [AC_MSG_ERROR([wcwidth() function not found.])])
+
+AC_CHECK_DECLS([_PC_CASE_SENSITIVE], [], [], [[#include <unistd.h>]])
 
 dnl Check for regex.h header, its functions, types and macros.
 AC_CHECK_HEADER([regex.h], [], [AC_MSG_ERROR([regex.h header not found.])])
@@ -240,9 +266,53 @@ AC_SYS_LARGEFILE
 AC_FUNC_FSEEKO
 AC_TYPE_OFF_T
 
+dnl ----------------------------------------------------------------------------
+dnl check for available tools/applications
+dnl ----------------------------------------------------------------------------
+
 AC_CHECK_PROG(HAVE_FILE_PROG, file, 1)
 if test "x${HAVE_FILE_PROG}" = 'x1' ; then
     AC_DEFINE_UNQUOTED(HAVE_FILE_PROG, 1, [Define if file program present])
+fi
+
+dnl Use either groff or mandoc for generating plain text help from manual page.
+AC_CHECK_PROGS(MANGEN_PROG, [groff mandoc], [])
+
+dnl col might be used for filtering out terminal escape sequences
+AC_CHECK_PROG(COL_PROG, col, col)
+
+dnl awk is used to generate source with list of documentation tags
+AC_CHECK_PROG(AWK_PROG, awk, awk)
+
+dnl perl is used to generate tags from documentation
+AC_CHECK_PROG(PERL_PROG, perl, perl)
+
+dnl sed is used to make plain text documentation
+AC_CHECK_PROG(SED_PROG, sed, sed)
+
+dnl vim is a fallback for generating documentation tags when perl isn't there
+AC_CHECK_PROG(VIM_PROG, vim, vim)
+
+dnl check if we're building inside git repository
+AC_CHECK_PROG(GIT_PROG, git, git)
+if test "x${GIT_PROG}" != 'x' -a -d .git/; then
+    IN_GIT_REPO=1
+fi
+AC_SUBST([IN_GIT_REPO])
+
+dnl ----------------------------------------------------------------------------
+dnl setup various package/compilation settings
+dnl ----------------------------------------------------------------------------
+
+dnl Set PACKAGE_SYSCONF_DIR in config.h.
+if test "x${sysconfdir}" = 'x${prefix}/etc'; then
+  if test "x${prefix}" = "xNONE"; then
+    AC_DEFINE_UNQUOTED(PACKAGE_SYSCONF_DIR, "${ac_default_prefix}/etc/${PACKAGE}")
+  else
+    AC_DEFINE_UNQUOTED(PACKAGE_SYSCONF_DIR, "${prefix}/etc/${PACKAGE}")
+  fi
+else
+  AC_DEFINE_UNQUOTED(PACKAGE_SYSCONF_DIR, "${sysconfdir}/${PACKAGE}")
 fi
 
 dnl Set PACKAGE_DATA_DIR in config.h.
@@ -282,11 +352,13 @@ changequote([,])dnl
 
 dnl Define _DARWIN_C_SOURCE macro while compiling on OS X.
 if test -n "$OSX_HOST" ; then
-  CFLAGS="$CFLAGS -D_DARWIN_C_SOURCE"
+  AC_DEFINE([_DARWIN_C_SOURCE], [1],
+            [Enable extensions in header files on OS X.])
 fi
 
 dnl Use 64-bit off_t type
-CFLAGS="$CFLAGS -D_FILE_OFFSET_BITS=64"
+AC_DEFINE([_FILE_OFFSET_BITS], [64],
+          [Enable large file processing on 32-bit systems.])
 
 dnl Use pthread library
 AC_CHECK_LIB(pthread, pthread_create,
@@ -335,7 +407,9 @@ AC_CHECK_LIB(${curses_lib_name}, initscr,
 	if test x$vifm_cv_curses = x/usr -a -d /usr/include/${curses_lib_name}; then
 		CPPFLAGS="$CPPFLAGS -I/usr/include/${curses_lib_name}"
 	fi
-	ncurses_found=yes])
+	ncurses_found=yes]
+	AC_SEARCH_LIBS([curs_set], [tinfo],,
+		AC_MSG_ERROR(could not find a library providing curs_set)))
 dnl If libncursesw is not found on OS X, check for libncurses.  On OS X it has
 dnl support of wide characters.
 if test -n "$OSX_HOST" -a "x$ncurses_found" != "xyes"; then
@@ -405,21 +479,48 @@ AC_CHECK_FUNC([wtimeout], [], [AC_MSG_ERROR([wtimeout() function not found.])])
 AC_CHECK_FUNC([wtouchln], [], [AC_MSG_ERROR([wtouchln() function not found.])])
 
 dnl ----------------------------------------------------------------------------
+dnl check for inotify
+dnl ----------------------------------------------------------------------------
+
+AC_CHECK_HEADER([sys/inotify.h], [use_inotify=yes], [use_inotify=no])
+
+if test "$use_inotify" = "yes"; then
+	AC_CHECK_DECL([IN_NONBLOCK], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_CLOEXEC], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_ATTRIB], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_MODIFY], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_CREATE], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_DELETE], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_MOVED_FROM], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_MOVED_TO], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_EXCL_UNLINK], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_CLOSE_WRITE], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_DECL([IN_Q_OVERFLOW], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+	AC_CHECK_FUNC([inotify_init1], [], [use_inotify=no])
+	AC_CHECK_FUNC([inotify_add_watch], [], [use_inotify=no])
+	AC_CHECK_TYPE([struct inotify_event], [], [use_inotify=no], [[#include <sys/inotify.h>]])
+
+	if test "$use_inotify" = "yes"; then
+		AC_DEFINE([HAVE_INOTIFY], [1], [inotify is available])
+	fi
+fi
+
+dnl ----------------------------------------------------------------------------
 dnl check for gnu coreutils version
 dnl ----------------------------------------------------------------------------
 
-min_version="7.1"
 version="$(mv --version 2> /dev/null | sed -ne 's/^.*(GNU coreutils) //p')"
 
 major="${version%.*}"
 minor="${version#*.}"
-min_major="${min_version%.*}"
-min_minor="${min_version#*.}"
 
 if test "x$major" != "x" -a "x$minor" != "x" ; then
 	AC_DEFINE([GNU_TOOLCHAIN], [1], [GNU toolchain is installed])
-	if test $major -ge $min_major -a $minor -ge $min_minor ; then
+	if test $major -ge 7 -a $minor -ge 1; then
 		AC_DEFINE([SUPPORT_NO_CLOBBER], [1], [-n option is available for cp and mv])
+	fi
+	if test $major -ge 7 -a $minor -ge 6; then
+		AC_DEFINE([SUPPORT_REFLINK_AUTO], [1], [--reflink=auto option is available for cp])
 	fi
 fi
 
@@ -512,10 +613,10 @@ AC_ARG_ENABLE(desktop_files,
 AC_ARG_ENABLE(remote_cmds,
 	AS_HELP_STRING(
 		[--enable-remote-cmds],
-		[enable remote command sending (insecure).
-		 @<:@default=disabled@:>@     ]),
+		[enable remote command sending.
+		 @<:@default=enabled@:>@     ]),
 	[remote_cmds=$enableval],
-	[remote_cmds=no])
+	[remote_cmds=yes])
 
 AC_ARG_ENABLE(developer,
 	AS_HELP_STRING(
@@ -524,6 +625,21 @@ AC_ARG_ENABLE(developer,
 		 @<:@default=disabled@:>@     ]),
 	[developer=$enableval],
 	[developer=no])
+
+AC_ARG_ENABLE(coverage,
+	AS_HELP_STRING(
+		[--enable-coverage],
+		[enables coverage information generation
+		 @<:@default=disabled@:>@     ]),
+	[coverage=$enableval],
+	[coverage=no])
+
+AC_ARG_WITH(sanitize,
+	AS_HELP_STRING(
+			[--with-sanitize=basic|thread|leak],
+			[enables sanitizers, "basic" means address and undefined sanitizers
+			 @<:@default=@:>@     ]),
+	[sanitize=$withval])
 
 if test "$extended_keys" = "yes"; then
 	AC_DEFINE([ENABLE_EXTENDED_KEYS], [1], [enables extended keys (arrows etc.)])
@@ -534,19 +650,6 @@ if test "$desktop_files" = "yes"; then
 fi
 
 if test "$remote_cmds" = "yes"; then
-	dnl Check for socket related headers and functions.
-	AC_CHECK_HEADER([arpa/inet.h], [], [AC_MSG_ERROR([arpa/inet.h header not found.])])
-	AC_CHECK_HEADER([netinet/in.h], [], [AC_MSG_ERROR([netinet/in.h header not found.])])
-	AC_CHECK_HEADER([sys/socket.h], [], [AC_MSG_ERROR([sys/socket.h header not found.])])
-	AC_CHECK_HEADER([sys/un.h], [], [AC_MSG_ERROR([sys/un.h header not found.])])
-	AC_CHECK_FUNC([bind], [], [AC_MSG_ERROR([bind() function not found.])])
-	AC_CHECK_FUNC([htons], [], [AC_MSG_ERROR([htons() function not found.])])
-	AC_CHECK_FUNC([inet_addr], [], [AC_MSG_ERROR([inet_addr() function not found.])])
-	AC_CHECK_FUNC([recv], [], [AC_MSG_ERROR([recv() function not found.])])
-	AC_CHECK_FUNC([sendto], [], [AC_MSG_ERROR([sendto() function not found.])])
-	AC_CHECK_FUNC([setsockopt], [], [AC_MSG_ERROR([setsockopt() function not found.])])
-	AC_CHECK_FUNC([socket], [], [AC_MSG_ERROR([socket() function not found.])])
-
 	AC_DEFINE([ENABLE_REMOTE_CMDS], [1], [executing commands remotely])
 fi
 
@@ -573,8 +676,33 @@ if test "$use_libX11" = "yes"; then
 fi
 
 if test "$developer" = "yes"; then
-	CFLAGS="$CFLAGS -g -O0 -Werror"
+	CFLAGS="$CFLAGS -g -O0 -Werror -Werror=sign-compare -Wno-unused-parameter"
 fi
+
+if test "$coverage" = "yes"; then
+	CFLAGS="$CFLAGS --coverage"
+	LDFLAGS="$LDFLAGS --coverage"
+fi
+
+dnl Handle sanitizers options
+if test -n "$sanitize" -a "$sanitize" != "basic" -a "$sanitize" != "thread" -a \
+    "$sanitize" != "leak"; then
+    AC_MSG_ERROR([Unknown type of sanitizing: $sanitize])
+fi
+if test "$sanitize" = "basic"; then
+    SANITIZERS_CFLAGS="-fsanitize=address -fsanitize=undefined"
+fi
+if test "$sanitize" = "thread"; then
+    SANITIZERS_CFLAGS="-fsanitize=thread -fPIC"
+    LDFLAGS="$LDFLAGS -pie"
+fi
+if test "$sanitize" = "leak"; then
+    LDFLAGS="$LDFLAGS -fsanitize=leak"
+fi
+dnl The flags should be available separately for fetching on building tests.
+AC_SUBST([SANITIZERS_CFLAGS])
+CFLAGS="$CFLAGS $SANITIZERS_CFLAGS"
+LDFLAGS="$LDFLAGS $SANITIZERS_CFLAGS"
 
 dnl Include config.h in all translation units implicitly
 CFLAGS="$CFLAGS -include ../config.h"

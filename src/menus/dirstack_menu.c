@@ -21,8 +21,8 @@
 
 #include <string.h> /* strdup() */
 
+#include "../ui/ui.h"
 #include "../dir_stack.h"
-#include "../ui.h"
 #include "menus.h"
 
 static int execute_dirstack_cb(FileView *view, menu_info *m);
@@ -32,8 +32,7 @@ show_dirstack_menu(FileView *view)
 {
 	static menu_info m;
 	/* Directory stack always contains at least one item (current directories). */
-	init_menu_info(&m, DIRSTACK_MENU, NULL);
-	m.title = strdup(" Directory Stack ");
+	init_menu_info(&m, strdup("Directory Stack"), NULL);
 	m.execute_handler = &execute_dirstack_cb;
 
 	m.items = dir_stack_list();
@@ -67,4 +66,4 @@ execute_dirstack_cb(FileView *view, menu_info *m)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

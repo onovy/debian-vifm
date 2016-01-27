@@ -23,17 +23,17 @@
 #include <windows.h>
 #endif
 
-#include <pthread.h>
+#include <pthread.h> /* PTHREAD_* pthread_*() */
 
-#include <fcntl.h>
-#include <unistd.h>
+#include <fcntl.h> /* open() */
+#include <unistd.h> /* select() */
 
-#include <assert.h>
-#include <errno.h>
-#include <stddef.h> /* NULL */
-#include <stdlib.h> /* free() malloc() */
+#include <assert.h> /* assert() */
+#include <errno.h> /* errno */
+#include <stddef.h> /* wchar_t NULL */
+#include <stdlib.h> /* EXIT_FAILURE _Exit() free() malloc() */
 #include <string.h>
-#include <sys/stat.h>
+#include <sys/stat.h> /* O_RDONLY */
 #include <sys/types.h> /* pid_t ssize_t */
 #ifndef _WIN32
 #include <sys/select.h> /* FD_* select */
@@ -42,14 +42,51 @@
 #endif
 
 #include "cfg/config.h"
-#include "menus/menus.h"
+#include "modes/dialogs/msg_dialog.h"
+#include "ui/cancellation.h"
+#include "ui/statusline.h"
+#include "utils/env.h"
+#include "utils/fs.h"
+#include "utils/log.h"
+#include "utils/path.h"
 #include "utils/str.h"
 #include "utils/utils.h"
-#include "commands_completion.h"
-#include "ui.h"
+#include "cmd_completion.h"
+#include "status.h"
+
+/**
+ * This unit implements three kinds of backgrounded operations:
+ *  - external applications run from vifm (commands);
+ *  - threads that perform auxiliary work (tasks), like counting size of
+ *    directories;
+ *  - threads that perform important work (operations), like file copying,
+ *    deletion, etc.
+ *
+ * All jobs can be viewed via :jobs menu.
+ *
+ * Tasks and operations can provide progress information for displaying it in
+ * UI.
+ *
+ * Operations are displayed on designated job bar.
+ */
+
+/* Turns pointer (P) to field (F) of a structure (S) to address of that
+ * structure. */
+#define STRUCT_FROM_FIELD(S, F, P) ((S *)((char *)P - offsetof(S, F)))
+
+/* Special value of process id for internal tasks running in background
+ * threads. */
+#define WRONG_PID ((pid_t)-1)
 
 /* Size of error message reading buffer. */
 #define ERR_MSG_LEN 1025
+
+/* Value of job communication mean for internal jobs. */
+#ifndef _WIN32
+#define NO_JOB_ID (-1)
+#else
+#define NO_JOB_ID INVALID_HANDLE_VALUE
+#endif
 
 /* Structure with passed to background_task_bootstrap() so it can perform
  * correct initialization/cleanup. */
@@ -63,10 +100,16 @@ background_task_args;
 
 static void job_check(job_t *const job);
 static void job_free(job_t *const job);
+#ifndef _WIN32
+static job_t * add_background_job(pid_t pid, const char cmd[], int fd,
+		BgJobType type);
+#else
+static job_t * add_background_job(pid_t pid, const char cmd[], HANDLE hprocess,
+		BgJobType type);
+#endif
 static void * background_task_bootstrap(void *arg);
 static void set_current_job(job_t *job);
 static void make_current_job_key(void);
-static void finish_current_job(void);
 
 job_t *jobs;
 
@@ -81,7 +124,7 @@ init_background(void)
 }
 
 void
-add_finished_job(pid_t pid, int status)
+add_finished_job(pid_t pid, int exit_code)
 {
 	job_t *job;
 
@@ -92,6 +135,8 @@ add_finished_job(pid_t pid, int status)
 		if(job->pid == pid)
 		{
 			job->running = 0;
+			job->exit_code = exit_code;
+			break;
 		}
 		job = job->next;
 	}
@@ -100,10 +145,13 @@ add_finished_job(pid_t pid, int status)
 void
 check_background_jobs(void)
 {
-	job_t *p = jobs;
-	job_t *prev = NULL;
+	job_t *head = jobs;
+	job_t *prev;
+	job_t *p;
 
-	if(p == NULL)
+	/* Quit if there is no jobs or list is unavailable (e.g. used by another
+	 * invocation of this function). */
+	if(head == NULL)
 	{
 		return;
 	}
@@ -113,6 +161,11 @@ check_background_jobs(void)
 		return;
 	}
 
+	head = jobs;
+	jobs = NULL;
+
+	p = head;
+	prev = NULL;
 	while(p != NULL)
 	{
 		job_check(p);
@@ -124,9 +177,15 @@ check_background_jobs(void)
 			if(prev != NULL)
 				prev->next = p->next;
 			else
-				jobs = p->next;
+				head = p->next;
 
 			p = p->next;
+
+			if(j->type == BJT_OPERATION)
+			{
+				ui_stat_job_bar_remove(&j->bg_op);
+			}
+
 			job_free(j);
 		}
 		else
@@ -135,6 +194,9 @@ check_background_jobs(void)
 			p = p->next;
 		}
 	}
+
+	assert(jobs == NULL && "Job list shouldn't be used by anyone.");
+	jobs = head;
 
 	bg_jobs_unfreeze();
 }
@@ -205,6 +267,11 @@ job_free(job_t *const job)
 		return;
 	}
 
+	if(job->type != BJT_COMMAND)
+	{
+		pthread_mutex_destroy(&job->bg_op_guard);
+	}
+
 #ifndef _WIN32
 	if(job->fd != NO_JOB_ID)
 	{
@@ -216,6 +283,7 @@ job_free(job_t *const job)
 		CloseHandle(job->hprocess);
 	}
 #endif
+	free(job->bg_op.descr);
 	free(job->cmd);
 	free(job);
 }
@@ -238,9 +306,13 @@ background_and_wait_for_status(char cmd[], int cancellable, int *cancelled)
 		return 1;
 	}
 
+	(void)set_sigchld(1);
+
 	pid = fork();
 	if(pid == (pid_t)-1)
 	{
+		(void)set_sigchld(0);
+		LOG_SERROR_MSG(errno, "Forking has failed.");
 		return -1;
 	}
 
@@ -248,14 +320,11 @@ background_and_wait_for_status(char cmd[], int cancellable, int *cancelled)
 	{
 		extern char **environ;
 
-		char *args[4];
+		(void)set_sigchld(0);
 
-		args[0] = cfg.shell;
-		args[1] = "-c";
-		args[2] = cmd;
-		args[3] = NULL;
-		(void)execve(cfg.shell, args, environ);
-		exit(127);
+		(void)execve(get_execv_path(cfg.shell), make_execv_array(cfg.shell, cmd),
+				environ);
+		_Exit(127);
 	}
 
 	if(cancellable)
@@ -267,6 +336,8 @@ background_and_wait_for_status(char cmd[], int cancellable, int *cancelled)
 	{
 		if(errno != EINTR)
 		{
+			LOG_SERROR_MSG(errno, "Failed waiting for process: %llu",
+					(unsigned long long)pid);
 			status = -1;
 			break;
 		}
@@ -281,6 +352,8 @@ background_and_wait_for_status(char cmd[], int cancellable, int *cancelled)
 		}
 		ui_cancellation_disable();
 	}
+
+	(void)set_sigchld(0);
 
 	return status;
 
@@ -374,8 +447,11 @@ background_and_wait_for_errors(char cmd[], int cancellable)
 		}
 		else
 		{
-			const int status = get_proc_exit_status(pid);
-			result = WEXITSTATUS(status);
+			/* Don't use "const int" variables with WEXITSTATUS() as they cause
+			 * compilation errors in case __USE_BSD is defined.  Anonymous type with
+			 * "const int" is composed via compound literal expression. */
+			int status = get_proc_exit_status(pid);
+			result = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 		}
 	}
 
@@ -389,7 +465,7 @@ background_and_wait_for_errors(char cmd[], int cancellable)
 
 #ifndef _WIN32
 pid_t
-background_and_capture(char *cmd, FILE **out, FILE **err)
+background_and_capture(char *cmd, int user_sh, FILE **out, FILE **err)
 {
 	pid_t pid;
 	int out_pipe[2];
@@ -420,22 +496,22 @@ background_and_capture(char *cmd, FILE **out, FILE **err)
 
 	if(pid == 0)
 	{
-		char *args[4];
+		char *sh;
 
 		close(out_pipe[0]);
 		close(error_pipe[0]);
 		if(dup2(out_pipe[1], STDOUT_FILENO) == -1)
-			exit(-1);
+		{
+			_Exit(EXIT_FAILURE);
+		}
 		if(dup2(error_pipe[1], STDERR_FILENO) == -1)
-			exit(-1);
+		{
+			_Exit(EXIT_FAILURE);
+		}
 
-		args[0] = "/bin/sh";
-		args[1] = "-c";
-		args[2] = cmd;
-		args[3] = NULL;
-
-		execvp(args[0], args);
-		exit(-1);
+		sh = user_sh ? get_execv_path(cfg.shell) : "/bin/sh";
+		execvp(sh, make_execv_array(sh, cmd));
+		_Exit(127);
 	}
 
 	close(out_pipe[1]);
@@ -449,23 +525,62 @@ background_and_capture(char *cmd, FILE **out, FILE **err)
 /* Runs command in a background and redirects its stdout and stderr streams to
  * file streams which are set.  Returns (pid_t)0 or (pid_t)-1 on error. */
 static pid_t
-background_and_capture_internal(char *cmd, FILE **out, FILE **err,
+background_and_capture_internal(char cmd[], int user_sh, FILE **out, FILE **err,
 		int out_pipe[2], int err_pipe[2])
 {
-	char *args[4];
+	wchar_t *args[5];
+	char cwd[PATH_MAX];
+	int code;
+	wchar_t *final_wide_cmd;
+	wchar_t *wide_sh = NULL;
 
 	if(_dup2(out_pipe[1], _fileno(stdout)) != 0)
 		return (pid_t)-1;
 	if(_dup2(err_pipe[1], _fileno(stderr)) != 0)
 		return (pid_t)-1;
 
-	args[0] = "cmd";
-	args[1] = "/C";
-	args[2] = cmd;
-	args[3] = NULL;
+	cwd[0] = '\0';
+	if(get_cwd(cwd, sizeof(cwd)) != NULL)
+	{
+		if(is_unc_path(cwd))
+		{
+			(void)chdir(get_tmpdir());
+		}
+	}
 
-	if(_spawnvp(P_NOWAIT, args[0], (const char **)args) == 0)
+	final_wide_cmd = to_wide(cmd);
+
+	wide_sh = to_wide(user_sh ? cfg.shell : "cmd");
+	if(!user_sh || curr_stats.shell_type == ST_CMD)
+	{
+		args[0] = wide_sh;
+		args[1] = L"/U";
+		args[2] = L"/C";
+		args[3] = final_wide_cmd;
+		args[4] = NULL;
+	}
+	else
+	{
+		args[0] = wide_sh;
+		args[1] = L"-c";
+		args[2] = final_wide_cmd;
+		args[3] = NULL;
+	}
+
+	code = _wspawnvp(P_NOWAIT, args[0], (const wchar_t **)args);
+
+	free(wide_sh);
+	free(final_wide_cmd);
+
+	if(is_unc_path(cwd))
+	{
+		(void)chdir(cwd);
+	}
+
+	if(code == 0)
+	{
 		return (pid_t)-1;
+	}
 
 	if((*out = _fdopen(out_pipe[0], "r")) == NULL)
 		return (pid_t)-1;
@@ -479,7 +594,7 @@ background_and_capture_internal(char *cmd, FILE **out, FILE **err,
 }
 
 pid_t
-background_and_capture(char *cmd, FILE **out, FILE **err)
+background_and_capture(char cmd[], int user_sh, FILE **out, FILE **err)
 {
 	int out_fd, out_pipe[2];
 	int err_fd, err_pipe[2];
@@ -502,7 +617,8 @@ background_and_capture(char *cmd, FILE **out, FILE **err)
 	out_fd = dup(_fileno(stdout));
 	err_fd = dup(_fileno(stderr));
 
-	pid = background_and_capture_internal(cmd, out, err, out_pipe, err_pipe);
+	pid = background_and_capture_internal(cmd, user_sh, out, err, out_pipe,
+			err_pipe);
 
 	_close(out_pipe[1]);
 	_close(err_pipe[1]);
@@ -526,7 +642,6 @@ start_background_job(const char *cmd, int skip_errors)
 	job_t *job = NULL;
 #ifndef _WIN32
 	pid_t pid;
-	char *args[4];
 	int error_pipe[2];
 	char *command;
 
@@ -557,35 +672,41 @@ start_background_job(const char *cmd, int skip_errors)
 		/* Redirect stderr to write end of pipe. */
 		if(dup2(error_pipe[1], STDERR_FILENO) == -1)
 		{
-			perror("dup");
-			exit(-1);
+			perror("dup2");
+			_Exit(EXIT_FAILURE);
 		}
-		close(error_pipe[0]); /* Close read end of pipe. */
-		close(0); /* Close stdin */
-		close(1); /* Close stdout */
+		close(STDIN_FILENO);
+		close(STDOUT_FILENO);
+		/* Close read end of pipe. */
+		close(error_pipe[0]);
 
-		/* Send stdout, stdin to /dev/null */
-		if((nullfd = open("/dev/null", O_RDONLY)) != -1)
+		/* Attach stdout, stdin to /dev/null. */
+		nullfd = open("/dev/null", O_RDWR);
+		if(nullfd != -1)
 		{
-			dup2(nullfd, 0);
-			dup2(nullfd, 1);
+			if(dup2(nullfd, STDIN_FILENO) == -1)
+			{
+				perror("dup2 for stdin");
+				_Exit(EXIT_FAILURE);
+			}
+			if(dup2(nullfd, STDOUT_FILENO) == -1)
+			{
+				perror("dup2 for stdout");
+				_Exit(EXIT_FAILURE);
+			}
 		}
-
-		args[0] = cfg.shell;
-		args[1] = "-c";
-		args[2] = command;
-		args[3] = NULL;
 
 		setpgid(0, 0);
 
-		execve(cfg.shell, args, environ);
-		exit(-1);
+		execve(get_execv_path(cfg.shell), make_execv_array(cfg.shell, command), environ);
+		_Exit(127);
 	}
 	else
 	{
-		close(error_pipe[1]); /* Close write end of pipe. */
+		/* Close write end of pipe. */
+		close(error_pipe[1]);
 
-		job = add_background_job(pid, command, error_pipe[0]);
+		job = add_background_job(pid, command, error_pipe[0], BJT_COMMAND);
 		if(job == NULL)
 		{
 			free(command);
@@ -595,9 +716,11 @@ start_background_job(const char *cmd, int skip_errors)
 	free(command);
 #else
 	BOOL ret;
-	STARTUPINFO startup = {};
+	STARTUPINFOW startup = {};
 	PROCESS_INFORMATION pinfo;
 	char *command;
+	char *sh_cmd;
+	wchar_t *wide_cmd;
 
 	command = cfg.fast_run ? fast_run_complete(cmd) : strdup(cmd);
 	if(command == NULL)
@@ -605,20 +728,27 @@ start_background_job(const char *cmd, int skip_errors)
 		return -1;
 	}
 
-	ret = CreateProcess(NULL, command, NULL, NULL, 0, 0, NULL, NULL, &startup,
+	sh_cmd = win_make_sh_cmd(command);
+	free(command);
+
+	wide_cmd = to_wide(sh_cmd);
+	ret = CreateProcessW(NULL, wide_cmd, NULL, NULL, 0, 0, NULL, NULL, &startup,
 			&pinfo);
+	free(wide_cmd);
+
 	if(ret != 0)
 	{
 		CloseHandle(pinfo.hThread);
 
-		job = add_background_job(pinfo.dwProcessId, command, pinfo.hProcess);
+		job = add_background_job(pinfo.dwProcessId, sh_cmd, pinfo.hProcess,
+				BJT_COMMAND);
 		if(job == NULL)
 		{
-			free(command);
+			free(sh_cmd);
 			return -1;
 		}
 	}
-	free(command);
+	free(sh_cmd);
 	if(ret == 0)
 	{
 		return 1;
@@ -632,21 +762,84 @@ start_background_job(const char *cmd, int skip_errors)
 	return 0;
 }
 
+int
+bg_execute(const char descr[], const char op_descr[], int total, int important,
+		bg_task_func task_func, void *args)
+{
+	pthread_t id;
+	pthread_attr_t attr;
+	int ret;
+
+	background_task_args *const task_args = malloc(sizeof(*task_args));
+	if(task_args == NULL)
+	{
+		return 1;
+	}
+
+	task_args->func = task_func;
+	task_args->args = args;
+	task_args->job = add_background_job(WRONG_PID, descr, NO_JOB_ID,
+			important ? BJT_OPERATION : BJT_TASK);
+
+	if(task_args->job == NULL)
+	{
+		free(task_args);
+		return 1;
+	}
+
+	if(pthread_attr_init(&attr) != 0)
+	{
+		free(task_args);
+		return 1;
+	}
+
+	if(pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED) != 0)
+	{
+		free(task_args);
+		(void)pthread_attr_destroy(&attr);
+		return 1;
+	}
+
+	replace_string(&task_args->job->bg_op.descr, op_descr);
+	task_args->job->bg_op.total = total;
+
+	if(task_args->job->type == BJT_OPERATION)
+	{
+		ui_stat_job_bar_add(&task_args->job->bg_op);
+	}
+
+	ret = 0;
+	if(pthread_create(&id, &attr, &background_task_bootstrap, task_args) != 0)
+	{
+		/* Mark job as finished with error. */
+		task_args->job->running = 0;
+		task_args->job->exit_code = 1;
+
+		free(task_args);
+		ret = 1;
+	}
+
+	(void)pthread_attr_destroy(&attr);
+	return ret;
+}
+
+/* Creates structure that describes background job and registers it in the list
+ * of jobs. */
 #ifndef _WIN32
-job_t *
-add_background_job(pid_t pid, const char *cmd, int fd)
+static job_t *
+add_background_job(pid_t pid, const char cmd[], int fd, BgJobType type)
 #else
-job_t *
-add_background_job(pid_t pid, const char *cmd, HANDLE hprocess)
+static job_t *
+add_background_job(pid_t pid, const char cmd[], HANDLE hprocess, BgJobType type)
 #endif
 {
-	job_t *new;
-
-	if((new = malloc(sizeof(job_t))) == 0)
+	job_t *new = malloc(sizeof(*new));
+	if(new == NULL)
 	{
 		show_error_msg("Memory error", "Unable to allocate enough memory");
 		return NULL;
 	}
+	new->type = type;
 	new->pid = pid;
 	new->cmd = strdup(cmd);
 	new->next = jobs;
@@ -659,57 +852,20 @@ add_background_job(pid_t pid, const char *cmd, HANDLE hprocess)
 	new->running = 1;
 	new->error = NULL;
 
-	new->total = 0;
-	new->done = 0;
+	if(type != BJT_COMMAND)
+	{
+		pthread_mutex_init(&new->bg_op_guard, NULL);
+	}
+	new->bg_op.total = 0;
+	new->bg_op.done = 0;
+	new->bg_op.progress = -1;
+	new->bg_op.descr = NULL;
 
 	jobs = new;
 	return new;
 }
 
-void
-inner_bg_next(void)
-{
-	job_t *job = pthread_getspecific(current_job);
-	if(job != NULL)
-	{
-		++job->done;
-		assert(job->done <= job->total);
-	}
-}
-
-int
-bg_execute(const char desc[], int total, bg_task_func task_func, void *args)
-{
-	pthread_t id;
-
-	background_task_args *const task_args = malloc(sizeof(*task_args));
-	if(task_args == NULL)
-	{
-		return 1;
-	}
-
-	task_args->func = task_func;
-	task_args->args = args;
-	task_args->job = add_background_job(BG_INTERNAL_TASK_PID, desc, NO_JOB_ID);
-
-	if(task_args->job == NULL)
-	{
-		free(task_args);
-		return 2;
-	}
-
-	task_args->job->total = total;
-
-	if(pthread_create(&id, NULL, background_task_bootstrap, task_args) != 0)
-	{
-		free(task_args);
-		return 3;
-	}
-
-	return 0;
-}
-
-/* Pthreads entry point for a new background task.  Performs correct
+/* pthreads entry point for a new background task.  Performs correct
  * startup/exit with related updates of internal data structures.  Returns
  * result for this thread. */
 static void *
@@ -719,9 +875,11 @@ background_task_bootstrap(void *arg)
 
 	set_current_job(task_args->job);
 
-	task_args->func(task_args->args);
+	task_args->func(&task_args->job->bg_op, task_args->args);
 
-	finish_current_job();
+	/* Mark task as finished normally. */
+	task_args->job->running = 0;
+	task_args->job->exit_code = 0;
 
 	free(task_args);
 
@@ -743,24 +901,11 @@ make_current_job_key(void)
 	(void)pthread_key_create(&current_job, NULL);
 }
 
-/* Marks current job stored in a thread-local storage as finished
- * successfully. */
-static void
-finish_current_job(void)
-{
-	job_t *const job = pthread_getspecific(current_job);
-	if(job != NULL)
-	{
-		job->running = 0;
-		job->exit_code = 0;
-	}
-}
-
 int
 bg_has_active_jobs(void)
 {
 	const job_t *job;
-	int bg_count;
+	int bg_op_count;
 
 	if(bg_jobs_freeze() != 0)
 	{
@@ -769,18 +914,18 @@ bg_has_active_jobs(void)
 		return 1;
 	}
 
-	bg_count = 0;
+	bg_op_count = 0;
 	for(job = jobs; job != NULL; job = job->next)
 	{
-		if(job->running && job->pid == BG_INTERNAL_TASK_PID)
+		if(job->running && job->type == BJT_OPERATION)
 		{
-			++bg_count;
+			++bg_op_count;
 		}
 	}
 
 	bg_jobs_unfreeze();
 
-	return bg_count > 0;
+	return bg_op_count > 0;
 }
 
 int
@@ -800,5 +945,35 @@ bg_jobs_unfreeze(void)
 	(void)set_sigchld(0);
 }
 
+void
+bg_op_lock(bg_op_t *bg_op)
+{
+	job_t *const job = STRUCT_FROM_FIELD(job_t, bg_op, bg_op);
+	pthread_mutex_lock(&job->bg_op_guard);
+}
+
+void
+bg_op_unlock(bg_op_t *bg_op)
+{
+	job_t *const job = STRUCT_FROM_FIELD(job_t, bg_op, bg_op);
+	pthread_mutex_unlock(&job->bg_op_guard);
+}
+
+void
+bg_op_changed(bg_op_t *bg_op)
+{
+	ui_stat_job_bar_changed(bg_op);
+}
+
+void
+bg_op_set_descr(bg_op_t *bg_op, const char descr[])
+{
+	bg_op_lock(bg_op);
+	replace_string(&bg_op->descr, descr);
+	bg_op_unlock(bg_op);
+
+	bg_op_changed(bg_op);
+}
+
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

@@ -50,8 +50,8 @@
 void log_werror(const char *file, const char *func, int line, int no);
 #endif
 
-void init_logger(int verbosity_level);
-void reinit_logger(void);
+void init_logger(int verbosity_level, const char log_path[]);
+void reinit_logger(const char log_path[]);
 void log_prefix(const char *file, const char *func, int line);
 void log_vifm_state(void);
 void log_serror(const char *file, const char *func, int line, int no);
@@ -61,4 +61,4 @@ void log_cwd(void);
 #endif /* VIFM__UTILS__LOG_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

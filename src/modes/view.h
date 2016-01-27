@@ -19,12 +19,13 @@
 #ifndef VIFM__MODES__VIEW_H__
 #define VIFM__MODES__VIEW_H__
 
-#include "../ui.h"
+#include "../ui/ui.h"
 
 /* Initializes view mode. */
 void init_view_mode(void);
 
-void enter_view_mode(int explore);
+/* Enters view mode when possible.  View is the expected output area. */
+void enter_view_mode(FileView *view, int explore);
 
 void leave_view_mode(void);
 
@@ -43,7 +44,7 @@ void view_post(void);
 
 /* Displays view mode specific position information.  Assumes that view mode is
  * active. */
-void view_draw_pos(void);
+void view_ruler_update(void);
 
 void view_redraw(void);
 
@@ -56,7 +57,10 @@ void view_switch_views(void);
  * Returns non-zero on success, otherwise zero is returned. */
 int draw_abandoned_view_mode(void);
 
+/* Checks whether contents of either view should be updated. */
+void view_check_for_updates(void);
+
 #endif /* VIFM__MODES__VIEW_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

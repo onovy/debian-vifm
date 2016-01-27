@@ -25,28 +25,30 @@
 
 #include <curses.h>
 
+#include <errno.h> /* errno */
 #include <signal.h>
-#include <stdio.h> /* fprintf */
+#include <stdio.h> /* fprintf() */
+#include <string.h> /* strsignal() */
 
 #include "cfg/info.h"
+#include "int/fuse.h"
+#include "int/term_title.h"
+#include "ui/cancellation.h"
 #include "utils/log.h"
 #include "utils/macros.h"
-#include "fuse.h"
-#include "term_title.h"
 
-static void _gnuc_noreturn shutdown_nicely(void);
+static void _gnuc_noreturn shutdown_nicely(int sig, const char descr[]);
 
 #ifndef _WIN32
 
 #include <sys/types.h> /* pid_t */
-#include <sys/wait.h> /* waitpid */
+#include <sys/wait.h> /* WEXITSTATUS() WIFEXITED() waitpid() */
 
-#include <stdlib.h> /* exit() */
+#include <stdlib.h> /* EXIT_FAILURE _Exit() */
 
 #include "utils/macros.h"
 #include "background.h"
 #include "status.h"
-#include "ui.h"
 
 /* Handle term resizing in X */
 static void
@@ -80,12 +82,20 @@ received_sigchld(void)
 
 	/* This needs to be a loop in case of multiple blocked signals. */
 	while((pid = waitpid(-1, &status, WNOHANG)) > 0)
-		add_finished_job(pid, status);
+	{
+		if(WIFEXITED(status))
+		{
+			add_finished_job(pid, WEXITSTATUS(status));
+		}
+	}
 }
 
 static void
 handle_signal(int sig)
 {
+	/* Try to not change errno value in the main program. */
+	const int saved_errno = errno;
+
 	switch(sig)
 	{
 		case SIGINT:
@@ -104,11 +114,11 @@ handle_signal(int sig)
 		case SIGHUP:
 		case SIGQUIT:
 		case SIGTERM:
-			shutdown_nicely();
-			break;
-		default:
+			shutdown_nicely(sig, strsignal(sig));
 			break;
 	}
+
+	errno = saved_errno;
 }
 
 #else
@@ -124,9 +134,13 @@ ctrl_handler(DWORD dwCtrlType)
 			ui_cancellation_request();
 			break;
 		case CTRL_CLOSE_EVENT:
+			shutdown_nicely(dwCtrlType, "Ctrl-C");
+			break;
 		case CTRL_LOGOFF_EVENT:
+			shutdown_nicely(dwCtrlType, "Logoff");
+			break;
 		case CTRL_SHUTDOWN_EVENT:
-			shutdown_nicely();
+			shutdown_nicely(dwCtrlType, "Shutdown");
 			break;
 	}
 
@@ -135,16 +149,21 @@ ctrl_handler(DWORD dwCtrlType)
 #endif
 
 static void _gnuc_noreturn
-shutdown_nicely(void)
+shutdown_nicely(int sig, const char descr[])
 {
   LOG_FUNC_ENTER;
 
 	endwin();
-	set_term_title(NULL);
-	unmount_fuse();
+	term_title_update(NULL);
+	fuse_unmount_all();
 	write_info_file();
-	fprintf(stdout, "Vifm killed by signal.\n");
-	exit(0);
+	fprintf(stdout, "Vifm killed by signal: %d (%s).\n", sig, descr);
+
+	/* Alternatively we could do this sequence:
+	 *     signal(sig, SIG_DFL);
+	 *     raise(sig);
+	 * but only on *nix systems. */
+	_Exit(EXIT_FAILURE);
 }
 
 void
@@ -155,9 +174,14 @@ setup_signals(void)
 #ifndef _WIN32
 	struct sigaction handle_signal_action;
 
-	handle_signal_action.sa_handler = handle_signal;
+	handle_signal_action.sa_handler = &handle_signal;
 	sigemptyset(&handle_signal_action.sa_mask);
 	handle_signal_action.sa_flags = SA_RESTART;
+
+	/* Assumption: we work under shell with job control support.  If it's not the
+	 * case, this code enables handling of terminal related signals the shell
+	 * wanted us to have disabled (e.g. the app will catch Ctrl-C send to another
+	 * process). */
 
 	sigaction(SIGCHLD, &handle_signal_action, NULL);
 	sigaction(SIGHUP, &handle_signal_action, NULL);
@@ -180,4 +204,4 @@ setup_signals(void)
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

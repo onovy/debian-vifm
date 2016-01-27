@@ -18,15 +18,15 @@
 
 #include "undo.h"
 
-#include <sys/stat.h>
-
 #include <assert.h> /* assert() */
 #include <stddef.h> /* size_t */
 #include <stdio.h>
-#include <stdlib.h> /* free() */
+#include <stdlib.h> /* free() malloc() */
 #include <string.h> /* strcpy() strdup() */
 
-#include "utils/fs_limits.h"
+#include "compat/fs_limits.h"
+#include "compat/reallocarray.h"
+#include "utils/fs.h"
 #include "utils/macros.h"
 #include "utils/path.h"
 #include "utils/str.h"
@@ -643,8 +643,6 @@ is_redo_group_possible(void)
 static int
 is_op_possible(const op_t *op)
 {
-	struct stat st;
-
 	if(op_avail_func != NULL)
 	{
 		const int avail = op_avail_func(op->op);
@@ -654,13 +652,14 @@ is_op_possible(const op_t *op)
 		}
 	}
 
-	if(op->exists != NULL && lstat(op->exists, &st) != 0)
-		return 0;
-	if(op->dont_exist != NULL && lstat(op->dont_exist, &st) == 0)
+	if(op->exists != NULL && !path_exists(op->exists, NODEREF))
 	{
-		if(is_under_trash(op->dst))
-			return -1;
 		return 0;
+	}
+	if(op->dont_exist != NULL && path_exists(op->dont_exist, NODEREF) &&
+			!is_case_change(op->src, op->dst))
+	{
+		return is_under_trash(op->dst) ? -1 : 0;
 	}
 	return 1;
 }
@@ -727,9 +726,10 @@ undolist(int detail)
 	}
 
 	if(detail)
-		list = malloc(sizeof(char *)*(group_count + command_count*2 + 1));
+		list = reallocarray(NULL, group_count + command_count*2 + 1,
+				sizeof(char *));
 	else
-		list = malloc(sizeof(char *)*group_count);
+		list = reallocarray(NULL, group_count, sizeof(char *));
 
 	if(list == NULL)
 		return NULL;
@@ -813,10 +813,12 @@ get_op_desc(op_t op)
 			snprintf(buf, sizeof(buf), "mv -f %s to %s", op.src, op.dst);
 			break;
 		case OP_CHOWN:
-			snprintf(buf, sizeof(buf), "chown " PRINTF_SIZE_T " %s", (size_t)op.data, op.src);
+			snprintf(buf, sizeof(buf), "chown %" PRINTF_ULL " %s",
+					(unsigned long long)(size_t)op.data, op.src);
 			break;
 		case OP_CHGRP:
-			snprintf(buf, sizeof(buf), "chown :" PRINTF_SIZE_T " %s", (size_t)op.data, op.src);
+			snprintf(buf, sizeof(buf), "chown :%" PRINTF_ULL " %s",
+					(unsigned long long)(size_t)op.data, op.src);
 			break;
 #ifndef _WIN32
 		case OP_CHMOD:
@@ -898,7 +900,7 @@ get_undolist_pos(int detail)
 }
 
 void
-clean_cmds_with_trash(void)
+clean_cmds_with_trash(const char trash_dir[])
 {
 	cmd_t *cur = cmds.prev;
 
@@ -910,17 +912,23 @@ clean_cmds_with_trash(void)
 
 		if(cur->group->balance < 0)
 		{
-			if(cur->do_op.exists != NULL && is_under_trash(cur->do_op.exists))
+			if(cur->do_op.exists != NULL &&
+					trash_contains(trash_dir, cur->do_op.exists))
+			{
 				remove_cmd(cur);
+			}
 		}
 		else
 		{
-			if(cur->undo_op.exists != NULL && is_under_trash(cur->undo_op.exists))
+			if(cur->undo_op.exists != NULL &&
+					trash_contains(trash_dir, cur->undo_op.exists))
+			{
 				remove_cmd(cur);
+			}
 		}
 		cur = prev;
 	}
 }
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

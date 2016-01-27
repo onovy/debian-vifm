@@ -62,8 +62,9 @@ typedef enum
 	BUILTIN_KEYS,
 	BUILTIN_NIM_KEYS,   /* NIM - number in the middle */
 	BUILTIN_CMD,
-	USER_CMD,
-}KEYS_TYPE;
+	USER_CMD,           /* User mapping. */
+}
+KEYS_TYPE;
 
 typedef enum
 {
@@ -109,9 +110,8 @@ typedef struct
 }keys_add_info_t;
 
 /*
- * Return value:
- *  - 0 - success
- *  - something else - an error
+ * Type of callback that handles all keys uncaught by shortcuts.  Should return
+ * zero on success and non-zero on error.
  */
 typedef int (*default_handler)(wchar_t key);
 
@@ -220,4 +220,4 @@ TSTATIC_DEFS(
 #endif /* VIFM__ENGINE__KEYS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */

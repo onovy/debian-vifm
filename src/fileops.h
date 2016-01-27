@@ -26,15 +26,8 @@
 
 #include <stdint.h> /* uint64_t */
 
+#include "ui/ui.h"
 #include "utils/test_helpers.h"
-#include "ui.h"
-
-typedef enum
-{
-	DR_CURRENT,
-	DR_DESTINATION,
-}
-DirRole;
 
 /* Type of reaction on an error. */
 typedef enum
@@ -45,32 +38,43 @@ typedef enum
 }
 SignalType;
 
+/* Type of copy/move-like operation. */
+typedef enum
+{
+	CMLO_COPY,     /* Copy file. */
+	CMLO_MOVE,     /* Move file. */
+	CMLO_LINK_REL, /* Make relative symbolic link. */
+	CMLO_LINK_ABS, /* Make absolute symbolic link. */
+}
+CopyMoveLikeOp;
+
 /* Initializes file operations. */
 void init_fileops(void);
 
-int delete_files(FileView *view, int reg, int count, int *indexes,
-		int use_trash);
+/* Removes marked files (optionally into trash directory) of the view to
+ * specified register.  Returns new value for save_msg flag. */
+int delete_files(FileView *view, int reg, int use_trash);
 
-/* Returns new value for save_msg. */
+/* Removes marked files (optionally into trash directory) of the view to
+ * specified register.  Returns new value for save_msg flag. */
 int delete_files_bg(FileView *view, int use_trash);
 
-int yank_files(FileView *view, int reg, int count, int *indexes);
+/* Yanks marked files of the view into register specified by its name via reg
+ * parameter.  Returns new value for save_msg. */
+int yank_files(FileView *view, int reg);
 
-void yank_selected_files(FileView *view, int reg);
-
-int file_exec(char *command);
-
-void show_change_window(FileView *view, int type);
-
+/* Renames single file under the cursor. */
 void rename_current_file(FileView *view, int name_only);
 
-/* Renames selection to names given in the list of length nlines (or filled in
- * by the user, when the list is empty).  Recursively traverses directories in
- * selection when recursive flag is not zero.  Recursive traversal is
- * incompatible with list of names.  Returns new value for save_msg flag. */
+/* Renames marked filese using names given in the list of length nlines (or
+ * filled in by the user, when the list is empty).  Recursively traverses
+ * directories in selection when recursive flag is not zero.  Recursive
+ * traversal is incompatible with list of names.  Returns new value for
+ * save_msg flag. */
 int rename_files(FileView *view, char **list, int nlines, int recursive);
 
-/* Returns new value for save_msg flag. */
+/* Increments/decrements first number in names of marked files of the view k
+ * times.  Returns new value for save_msg flag. */
 int incdec_names(FileView *view, int k);
 
 #ifndef _WIN32
@@ -83,34 +87,49 @@ void change_group(void);
 
 int change_link(FileView *view);
 
-/* Returns new value for save_msg flag. */
-int put_files_from_register(FileView *view, int reg_name, int force_move);
+/* Puts files from specified register into current directory.  Returns new value
+ * for save_msg flag. */
+int put_files(FileView *view, int reg_name, int move);
 
+/* Starts background task that puts files from specified register into current
+ * directory.  Returns new value for save_msg flag. */
+int put_files_bg(FileView *view, int reg_name, int move);
+
+/* Clones marked files in the view.  Returns new value for save_msg flag. */
 int clone_files(FileView *view, char **list, int nlines, int force, int copies);
 
-/* This is a wrapper for is_dir_writable() function, which adds message
- * dialogs. */
-int check_if_dir_writable(DirRole dir_role, const char *path);
+/* Whether set of view files can be altered (renamed, deleted, but not added).
+ * Returns non-zero if so, otherwise zero is returned. */
+int can_change_view_files(const FileView *view);
 
 /* Returns new value for save_msg flag. */
 int put_links(FileView *view, int reg_name, int relative);
 
-/* Returns new value for save_msg flag. */
-int substitute_in_names(FileView *view, const char *pattern, const char *sub,
+/* Replaces matches of regular expression in names of files of the view.
+ * Returns new value for save_msg flag. */
+int substitute_in_names(FileView *view, const char pattern[], const char sub[],
 		int ic, int glob);
 
-/* Returns new value for save_msg flag. */
-int tr_in_names(FileView *view, const char *pattern, const char *sub);
+/* Replaces letters in names of marked files of the view according to the
+ * mapping: from[i] -> to[i] (must have the same length).  Returns new value for
+ * save_msg flag. */
+int tr_in_names(FileView *view, const char from[], const char to[]);
 
 /* Returns pointer to a statically allocated buffer. */
 const char * substitute_in_name(const char name[], const char pattern[],
 		const char sub[], int glob);
 
-int change_case(FileView *view, int toupper, int count, int indexes[]);
+/* Changes case of all letters in names of marked files of the view.  Returns
+ * new value for save_msg flag. */
+int change_case(FileView *view, int to_upper);
 
-int cpmv_files(FileView *view, char **list, int nlines, int move, int type,
+/* Performs copy/moves-like operation on marked files.  Returns new value for
+ * save_msg flag. */
+int cpmv_files(FileView *view, char **list, int nlines, CopyMoveLikeOp op,
 		int force);
 
+/* Copies or moves marked files to the other view in background.  Returns new
+ * value for save_msg flag. */
 int cpmv_files_bg(FileView *view, char **list, int nlines, int move, int force);
 
 /* Can modify strings in the names array. */
@@ -121,19 +140,29 @@ int make_files(FileView *view, char **names, int count);
 /* Returns new value for save_msg flag. */
 int restore_files(FileView *view);
 
-/* Initiates background calculation of directory sizes. */
-void calculate_size(const FileView *view, int force);
+/* Calculates size of a directory specified by path.  Forcing disables using
+ * previously cached values.  Returns the size. */
+uint64_t calculate_dir_size(const char path[], int force);
+
+/* Initiates background calculation of directory sizes.  Forcing disables using
+ * previously cached values. */
+void calculate_size_bg(const FileView *view, int force);
+
+#ifdef TEST
+#include "ops.h"
+#endif
 
 TSTATIC_DEFS(
 	int is_rename_list_ok(char *files[], int *is_dup, int len, char *list[]);
 	int check_file_rename(const char dir[], const char old[], const char new[],
 		SignalType signal_type);
+	int merge_dirs(const char src[], const char dst[], ops_t *ops);
 	const char * gen_clone_name(const char normal_name[]);
 	int is_name_list_ok(int count, int nlines, char *list[], char *files[]);
-	const char * add_to_name(const char filename[], int k);
+	const char * incdec_name(const char fname[], int k);
 )
 
 #endif /* VIFM__FILEOPS_H__ */
 
 /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
-/* vim: set cinoptions+=t0 : */
+/* vim: set cinoptions+=t0 filetype=c : */
