@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT(vifm, 0.8.1, xaizek@openmailbox.org, vifm, http://vifm.info)
+AC_INIT(vifm, 0.8.1a, xaizek@openmailbox.org, vifm, http://vifm.info)
 AC_CONFIG_SRCDIR(configure.ac)
 AM_INIT_AUTOMAKE([no-dist-gzip dist-bzip2])
 AM_CONFIG_HEADER(config.h)
@@ -19,7 +19,6 @@ AC_PROG_CC
 AM_PROG_CC_STDC
 AC_HEADER_STDC
 AM_PROG_CC_C_O
-AC_CONFIG_MACRO_DIR([m4])
 
 AC_LANG(C)
 
@@ -634,6 +633,14 @@ AC_ARG_ENABLE(coverage,
 	[coverage=$enableval],
 	[coverage=no])
 
+AC_ARG_ENABLE(build-timestamp,
+	AS_HELP_STRING(
+		[--disable-build-timestamp],
+		[disables embedding build-timestamp information into executable
+		 @<:@default=enabled@:>@     ]),
+	[build_timestamp=$enableval],
+	[build_timestamp=yes])
+
 AC_ARG_WITH(sanitize,
 	AS_HELP_STRING(
 			[--with-sanitize=basic|thread|leak],
@@ -654,10 +661,21 @@ if test "$remote_cmds" = "yes"; then
 fi
 
 if test "$use_dyn_libX11" = "yes"; then
-	AC_CHECK_LIB(dl, dlopen, [use_dyn_libX11=yes], [use_dyn_libX11=no])
+	ORIG_LIBS="$LIBS"
+	AC_CHECK_LIB(dl, dlopen,
+				 [
+				 use_dyn_libX11=yes
+				 LIBS="$LIBS -ldl"
+				 ], [use_dyn_libX11=no])
+
 	AC_CHECK_HEADER([dlfcn.h], [], [use_dyn_libX11=no])
 	AC_CHECK_FUNC([dlsym], [], [use_dyn_libX11=no])
 	AC_CHECK_FUNC([dlclose], [], [use_dyn_libX11=no])
+
+	if test "$use_dyn_libX11" != "yes"; then
+		LIBS="$ORIG_LIBS"
+		AC_MSG_WARN(["libdl seems to don't work as expected.  No dynamic X11."])
+	fi
 fi
 
 if test "$use_libX11" = "yes"; then
@@ -667,7 +685,6 @@ if test "$use_libX11" = "yes"; then
 		AC_CHECK_HEADER([X11/Xutil.h], [], [AC_MSG_ERROR([X11/Xutil.h header not found.])])
 		AC_DEFINE([HAVE_X11], [1], [use X11 to determine terminal emulator title])
 		if test "$use_dyn_libX11" = "yes"; then
-			LIBS="$LIBS -ldl"
 			AC_DEFINE([DYN_X11], [1], [load libX11 dynamically])
 		else
 			LIBS="$LIBS -lX11"
@@ -682,6 +699,11 @@ fi
 if test "$coverage" = "yes"; then
 	CFLAGS="$CFLAGS --coverage"
 	LDFLAGS="$LDFLAGS --coverage"
+fi
+
+if test "$build_timestamp" = "yes"; then
+	AC_DEFINE([WITH_BUILD_TIMESTAMP], [1],
+			  [Define to 1 to embed compilation date into executable.])
 fi
 
 dnl Handle sanitizers options

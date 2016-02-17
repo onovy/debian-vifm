@@ -245,7 +245,7 @@ static char rename_file_ext[NAME_MAX];
 static struct
 {
 	/* TODO: give some fields of this structure normal names (not "x" and "y"). */
-	registers_t *reg;  /* Register used for the operation. */
+	reg_t *reg;        /* Register used for the operation. */
 	FileView *view;    /* View in which operation takes place. */
 	CopyMoveLikeOp op; /* Type of current operation. */
 	int x;             /* Index of the next file of the register to process. */
@@ -572,13 +572,13 @@ yank_files(FileView *view, int reg)
 		char full_path[PATH_MAX];
 		get_full_path_of(entry, sizeof(full_path), full_path);
 
-		if(append_to_register(reg, full_path) == 0)
+		if(regs_append(reg, full_path) == 0)
 		{
 			++nyanked_files;
 		}
 	}
 
-	update_unnamed_reg(reg);
+	regs_update_unnamed(reg);
 
 	status_bar_messagef("%d file%s yanked", nyanked_files,
 			(nyanked_files == 1) ? "" : "s");
@@ -669,7 +669,7 @@ delete_files(FileView *view, int reg, int use_trash)
 					if(result == 0)
 					{
 						add_operation(OP_MOVE, NULL, NULL, full_path, dest);
-						append_to_register(reg, dest);
+						regs_append(reg, dest);
 					}
 					free(dest);
 				}
@@ -713,7 +713,7 @@ delete_files(FileView *view, int reg, int use_trash)
 		ops_advance(ops, result == 0);
 	}
 
-	update_unnamed_reg(reg);
+	regs_update_unnamed(reg);
 
 	cmd_group_end();
 
@@ -740,7 +740,7 @@ prepare_register(int reg)
 	}
 	else
 	{
-		clear_register(reg);
+		regs_clear(reg);
 	}
 	return reg;
 }
@@ -945,7 +945,7 @@ rename_current_file(FileView *view, int name_only)
 	}
 
 	clean_selected_files(view);
-	enter_prompt_mode(L"New name: ", filename, rename_file_cb,
+	enter_prompt_mode("New name: ", filename, rename_file_cb,
 			complete_filename_only, 1);
 }
 
@@ -1561,12 +1561,14 @@ chown_files(int u, int g, uid_t uid, gid_t gid)
 void
 change_owner(void)
 {
-	mark_selection_or_current(curr_view);
 #ifndef _WIN32
-	enter_prompt_mode(L"New owner: ", "", change_owner_cb, &complete_owner, 0);
+	complete_cmd_func complete_func = &complete_owner;
 #else
-	enter_prompt_mode(L"New owner: ", "", change_owner_cb, NULL, 0);
+	complete_cmd_func complete_func = NULL;
 #endif
+
+	mark_selection_or_current(curr_view);
+	enter_prompt_mode("New owner: ", "", &change_owner_cb, complete_func, 0);
 }
 
 #ifndef _WIN32
@@ -1625,12 +1627,14 @@ change_group_cb(const char new_group[])
 void
 change_group(void)
 {
-	mark_selection_or_current(curr_view);
 #ifndef _WIN32
-	enter_prompt_mode(L"New group: ", "", change_group_cb, &complete_group, 0);
+	complete_cmd_func complete_func = &complete_group;
 #else
-	enter_prompt_mode(L"New group: ", "", change_group_cb, NULL, 0);
+	complete_cmd_func complete_func = NULL;
 #endif
+
+	mark_selection_or_current(curr_view);
+	enter_prompt_mode("New group: ", "", &change_group_cb, complete_func, 0);
 }
 
 #ifndef _WIN32
@@ -1718,7 +1722,7 @@ change_link(FileView *view)
 		return 0;
 	}
 
-	enter_prompt_mode(L"Link target: ", linkto, &change_link_cb,
+	enter_prompt_mode("Link target: ", linkto, &change_link_cb,
 			&complete_filename, 0);
 	return 0;
 }
@@ -1734,11 +1738,10 @@ complete_filename(const char str[], void *arg)
 static void
 prompt_dest_name(const char *src_name)
 {
-	wchar_t buf[256];
+	char prompt[128 + PATH_MAX];
 
-	vifm_swprintf(buf, ARRAY_LEN(buf), L"New name for %" WPRINTF_MBSTR L": ",
-			src_name);
-	enter_prompt_mode(buf, src_name, put_confirm_cb, NULL, 0);
+	snprintf(prompt, ARRAY_LEN(prompt), "New name for %s: ", src_name);
+	enter_prompt_mode(prompt, src_name, put_confirm_cb, NULL, 0);
 }
 
 /* The force argument enables overwriting/replacing/merging.  Returns 0 on
@@ -1860,7 +1863,7 @@ put_next(const char dest_name[], int force)
 		op = merge ? OP_COPYF : OP_COPY;
 	}
 
-	progress_msg("Putting files", put_confirm.x, put_confirm.reg->num_files);
+	progress_msg("Putting files", put_confirm.x, put_confirm.reg->nfiles);
 
 	/* Merging directory on move requires special handling as it can't be done by
 	 * move operation itself. */
@@ -2144,7 +2147,7 @@ put_files_bg(FileView *view, int reg_name, int move)
 	size_t task_desc_len;
 	int i;
 	bg_args_t *args;
-	registers_t *reg;
+	reg_t *reg;
 
 	/* Check that operation generally makes sense given our input. */
 
@@ -2153,10 +2156,10 @@ put_files_bg(FileView *view, int reg_name, int move)
 		return 0;
 	}
 
-	reg = find_register(tolower(reg_name));
-	if(reg == NULL || reg->num_files < 1)
+	reg = regs_find(tolower(reg_name));
+	if(reg == NULL || reg->nfiles < 1)
 	{
-		status_bar_error("Register is empty");
+		status_bar_error(reg == NULL ? "No such register" : "Register is empty");
 		return 1;
 	}
 
@@ -2169,7 +2172,7 @@ put_files_bg(FileView *view, int reg_name, int move)
 
 	task_desc_len = snprintf(task_desc, sizeof(task_desc), "%cut in %s: ",
 			move ? 'P' : 'p', replace_home_part(flist_get_dir(view)));
-	for(i = 0; i < reg->num_files; ++i)
+	for(i = 0; i < reg->nfiles; ++i)
 	{
 		char *const src = reg->files[i];
 		const char *dst_name;
@@ -2568,7 +2571,7 @@ static int
 initiate_put_files(FileView *view, CopyMoveLikeOp op, const char descr[],
 		int reg_name)
 {
-	registers_t *reg;
+	reg_t *reg;
 	int i;
 
 	if(!can_add_files_to_view(view))
@@ -2576,8 +2579,8 @@ initiate_put_files(FileView *view, CopyMoveLikeOp op, const char descr[],
 		return 0;
 	}
 
-	reg = find_register(tolower(reg_name));
-	if(reg == NULL || reg->num_files < 1)
+	reg = regs_find(tolower(reg_name));
+	if(reg == NULL || reg->nfiles < 1)
 	{
 		status_bar_error("Register is empty");
 		return 1;
@@ -2592,7 +2595,7 @@ initiate_put_files(FileView *view, CopyMoveLikeOp op, const char descr[],
 	ui_cancellation_reset();
 	ui_cancellation_enable();
 
-	for(i = 0; i < reg->num_files && !ui_cancellation_requested(); ++i)
+	for(i = 0; i < reg->nfiles && !ui_cancellation_requested(); ++i)
 	{
 		ops_enqueue(put_confirm.ops, reg->files[i], view->curr_dir);
 	}
@@ -2670,7 +2673,7 @@ put_files_i(FileView *view, int start)
 
 	ui_cancellation_reset();
 
-	while(put_confirm.x < put_confirm.reg->num_files)
+	while(put_confirm.x < put_confirm.reg->nfiles)
 	{
 		const int put_result = put_next("", 0);
 		if(put_result > 0)
@@ -2687,7 +2690,7 @@ put_files_i(FileView *view, int start)
 		put_confirm.x++;
 	}
 
-	pack_register(put_confirm.reg->name);
+	regs_pack(put_confirm.reg->name);
 
 	status_bar_messagef("%d file%s inserted%s", put_confirm.y,
 			(put_confirm.y == 1) ? "" : "s", get_cancellation_suffix());

@@ -23,7 +23,7 @@
 #include <curses.h>
 
 #include <assert.h> /* assert() */
-#include <ctype.h> /* isdigit() */
+#include <ctype.h> /* iscntrl() isdigit() */
 #include <stddef.h> /* NULL size_t */
 #include <stdlib.h> /* free() malloc() realloc() strtol() */
 #include <string.h> /* memcpy() memset() strchr() strcpy() strdup() strlen()
@@ -147,7 +147,7 @@ esc_highlight_pattern(const char line[], const regex_t *re)
 
 /* Forms new line with highlights of matcher of the re regular expression using
  * escape sequences that invert colors.  Returns NULL when no match found or
- * memory allocation error occured. */
+ * memory allocation error occurred. */
 static char *
 add_pattern_highlights(const char line[], size_t len, const char no_esc[],
 		const int offsets[], const regex_t *re)
@@ -618,10 +618,10 @@ strchar2str(const char str[], int pos, size_t *screen_width)
 		}
 		*screen_width = 0;
 	}
-	else if((unsigned char)str[0] < (unsigned char)' ')
+	else if(iscntrl((unsigned char)str[0]))
 	{
 		buf[0] = '^';
-		buf[1] = ('A' - 1) + str[0];
+		buf[1] = str[0] ^ 64;
 		buf[2] = '\0';
 		*screen_width = 2;
 	}

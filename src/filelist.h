@@ -27,6 +27,7 @@
 
 #include "ui/ui.h"
 #include "utils/test_helpers.h"
+#include "registers.h"
 
 /* Type of contiguous area of file list. */
 typedef enum
@@ -86,6 +87,14 @@ void go_to_start_of_line(FileView *view);
 int get_start_of_line(const FileView *view);
 /* Returns position of the last file in current line. */
 int get_end_of_line(const FileView *view);
+/* Finds position of the next/previous group defined by primary sorting key.
+ * Returns determined position (might point to the last/first entry in corner
+ * cases). */
+int flist_find_group(FileView *view, int next);
+/* Finds position of the next/previous group defined by entries being files or
+ * directories.  Returns determined position (might point to the last/first
+ * entry in corner cases). */
+int flist_find_dir_group(FileView *view, int next);
 
 /* Appearance related functions. */
 
@@ -141,8 +150,9 @@ void clean_selected_files(FileView *view);
 void erase_selection(FileView *view);
 /* Inverts selection of files in the view. */
 void invert_selection(FileView *view);
-/* Reselects previously selected entries. */
-void flist_sel_restore(FileView *view);
+/* Reselects previously selected entries.  When reg is NULL, saved selection is
+ * restored, otherwise list of files to restore is taken from the register. */
+void flist_sel_restore(FileView *view, reg_t *reg);
 /* Counts number of selected files and writes saves the number in
  * view->selected_files. */
 void recount_selected_files(FileView *view);
@@ -168,14 +178,11 @@ void save_view_history(FileView *view, const char path[], const char file[],
 int is_in_view_history(FileView *view, const char *path);
 void clean_positions_in_history(FileView *view);
 
-/* Typed (with trailing slash for directories) file name functions. */
+/* Typed (with trailing slash for directories) file name function. */
 
-/* Gets typed filename (not path, just name) for current entry of the view.
- * Allocates memory, that should be freed by the caller. */
-char * get_typed_current_fpath(const FileView *view);
-/* Gets typed filename (not path, just name) for the entry.  Allocates memory,
- * that should be freed by the caller. */
-char * get_typed_entry_fname(const dir_entry_t *entry);
+/* Gets typed path for the entry.  On return allocates memory, that should be
+ * freed by the caller. */
+char * get_typed_entry_fpath(const dir_entry_t *entry);
 
 /* Custom file list functions. */
 

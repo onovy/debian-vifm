@@ -26,11 +26,13 @@
 #include "test_helpers.h"
 
 #if defined(_WIN32) && !defined(_WIN64)
-#define WPRINTF_MBSTR L"S"
+#ifdef BROKEN_SWPRINTF
 #define WPRINTF_WSTR L"s"
+#else
+#define WPRINTF_WSTR L"ls"
+#endif
 #define PRINTF_ULL PRIu64
 #else
-#define WPRINTF_MBSTR L"s"
 #define WPRINTF_WSTR L"ls"
 #define PRINTF_ULL "llu"
 #endif

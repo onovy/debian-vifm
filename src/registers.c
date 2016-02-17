@@ -21,7 +21,6 @@
 
 #include <stddef.h> /* NULL size_t */
 #include <stdio.h> /* snprintf() */
-#include <stdlib.h> /* free() */
 #include <string.h>
 
 #include "compat/reallocarray.h"
@@ -42,7 +41,7 @@
 #define NUM_REGISTERS (2 + NUM_LETTER_REGISTERS)
 
 /* Data of all registers. */
-static registers_t registers[NUM_REGISTERS];
+static reg_t registers[NUM_REGISTERS];
 
 /* Names of registers + names of 26 uppercase register names + termination null
  * character. */
@@ -59,24 +58,24 @@ const char valid_registers[] = {
 ARRAY_GUARD(valid_registers, NUM_REGISTERS + NUM_LETTER_REGISTERS + 1);
 
 void
-init_registers(void)
+regs_init(void)
 {
 	int i;
 	for(i = 0; i < NUM_REGISTERS; i++)
 	{
 		registers[i].name = valid_registers[i];
-		registers[i].num_files = 0;
+		registers[i].nfiles = 0;
 		registers[i].files = NULL;
 	}
 }
 
 int
-register_exists(int key)
+regs_exists(int reg_name)
 {
 	int i;
-	for(i = 0; i < NUM_REGISTERS; i++)
+	for(i = 0; i < NUM_REGISTERS; ++i)
 	{
-		if(valid_registers[i] == key)
+		if(valid_registers[i] == reg_name)
 		{
 			return 1;
 		}
@@ -84,40 +83,44 @@ register_exists(int key)
 	return 0;
 }
 
-registers_t *
-find_register(int key)
+reg_t *
+regs_find(int reg_name)
 {
 	int i;
-	for(i = 0; i < NUM_REGISTERS; i++)
+	for(i = 0; i < NUM_REGISTERS; ++i)
 	{
-		if(registers[i].name == key)
+		if(registers[i].name == reg_name)
+		{
 			return &registers[i];
+		}
 	}
 	return NULL;
 }
 
 static int
-check_for_duplicate_file_names(registers_t *reg, const char file[])
+check_for_duplicate_file_names(reg_t *reg, const char file[])
 {
-	int x;
-	for(x = 0; x < reg->num_files; x++)
+	int i;
+	for(i = 0; i < reg->nfiles; ++i)
 	{
-		if(stroscmp(file, reg->files[x]) == 0)
+		if(stroscmp(file, reg->files[i]) == 0)
+		{
 			return 1;
+		}
 	}
 	return 0;
 }
 
 int
-append_to_register(int key, const char file[])
+regs_append(int reg_name, const char file[])
 {
-	registers_t *reg;
+	reg_t *reg;
 
-	if(key == BLACKHOLE_REG_NAME)
+	if(reg_name == BLACKHOLE_REG_NAME)
 	{
 		return 0;
 	}
-	if((reg = find_register(key)) == NULL)
+	if((reg = regs_find(reg_name)) == NULL)
 	{
 		return 1;
 	}
@@ -130,74 +133,79 @@ append_to_register(int key, const char file[])
 		return 1;
 	}
 
-	reg->num_files = add_to_string_array(&reg->files, reg->num_files, 1, file);
+	reg->nfiles = add_to_string_array(&reg->files, reg->nfiles, 1, file);
 	return 0;
 }
 
 void
-clear_registers(void)
+regs_reset(void)
 {
 	const char *p = valid_registers;
 	while(*p != '\0')
 	{
-		clear_register(*p++);
+		regs_clear(*p++);
 	}
 }
 
 void
-clear_register(int key)
+regs_clear(int reg_name)
 {
-	registers_t *reg;
-
-	if((reg = find_register(key)) == NULL)
+	reg_t *const reg = regs_find(reg_name);
+	if(reg == NULL)
+	{
 		return;
+	}
 
-	free_string_array(reg->files, reg->num_files);
+	free_string_array(reg->files, reg->nfiles);
 	reg->files = NULL;
-	reg->num_files = 0;
+	reg->nfiles = 0;
 }
 
 void
-pack_register(int key)
+regs_pack(int reg_name)
 {
-	int x, y;
-	registers_t *reg;
-
-	if((reg = find_register(key)) == NULL)
+	int j, i;
+	reg_t *const reg = regs_find(reg_name);
+	if(reg == NULL)
+	{
 		return;
+	}
 
-	x = 0;
-	for(y = 0; y < reg->num_files; y++)
-		if(reg->files[y] != NULL)
-			reg->files[x++] = reg->files[y];
-	reg->num_files = x;
+	j = 0;
+	for(i = 0; i < reg->nfiles; ++i)
+	{
+		if(reg->files[i] != NULL)
+		{
+			reg->files[j++] = reg->files[i];
+		}
+	}
+	reg->nfiles = j;
 }
 
 char **
-list_registers_content(const char registers[])
+regs_list(const char registers[])
 {
 	char **list = NULL;
 	size_t len = 0;
 
 	while(*registers != '\0')
 	{
-		registers_t *reg;
-		char buf[56];
-		int y;
+		reg_t *reg = regs_find(*registers++);
+		char reg_str[16];
+		int i;
 
-		if((reg = find_register(*registers++)) == NULL)
-			continue;
-
-		if(reg->num_files <= 0)
-			continue;
-
-		snprintf(buf, sizeof(buf), "\"%c", reg->name);
-		len = add_to_string_array(&list, len, 1, buf);
-
-		y = reg->num_files;
-		while(y-- > 0)
+		if(reg == NULL || reg->nfiles <= 0)
 		{
-			len = add_to_string_array(&list, len, 1, reg->files[y]);
+			continue;
+		}
+
+		snprintf(reg_str, sizeof(reg_str), "\"%c", reg->name);
+		len = add_to_string_array(&list, len, 1, reg_str);
+
+		i = reg->nfiles;
+		while(i-- > 0)
+		{
+			len = add_to_string_array(&list, len, 1, reg->files[i]);
 		}
 	}
 
@@ -206,69 +214,71 @@ list_registers_content(const char registers[])
 }
 
 void
-rename_in_registers(const char old[], const char new[])
+regs_rename_contents(const char old[], const char new[])
 {
-	int x;
-	for(x = 0; x < NUM_REGISTERS; x++)
+	int i;
+	for(i = 0; i < NUM_REGISTERS; ++i)
 	{
-		int y, n;
-		n = registers[x].num_files;
-		for(y = 0; y < n; y++)
+		int j;
+		const int n = registers[i].nfiles;
+		for(j = 0; j < n; ++j)
 		{
-			if(stroscmp(registers[x].files[y], old) != 0)
+			if(stroscmp(registers[i].files[j], old) != 0)
 				continue;
 
-			(void)replace_string(&registers[x].files[y], new);
-			break; /* registers don't contain duplicates */
+			(void)replace_string(&registers[i].files[j], new);
+			/* Registers don't contain duplicates, so exit this loop. */
+			break;
 		}
 	}
 }
 
 void
-clean_regs_with_trash(const char trash_dir[])
+regs_remove_trashed_files(const char trash_dir[])
 {
-	int x;
-	for(x = 0; x < NUM_REGISTERS; x++)
+	int i;
+	for(i = 0; i < NUM_REGISTERS; ++i)
 	{
-		int y, n, needs_pack = 0;
-		n = registers[x].num_files;
-		for(y = 0; y < n; y++)
+		int j, needs_packing = 0;
+		const int n = registers[i].nfiles;
+		for(j = 0; j < n; ++j)
 		{
-			if(!trash_contains(trash_dir, registers[x].files[y]))
+			if(!trash_contains(trash_dir, registers[i].files[j]))
 				continue;
-			if(!path_exists(registers[x].files[y], DEREF))
+			if(!path_exists(registers[i].files[j], DEREF))
 				continue;
 
-			free(registers[x].files[y]);
-			registers[x].files[y] = NULL;
-			needs_pack = 1;
+			update_string(&registers[i].files[j], NULL);
+			needs_packing = 1;
 		}
-		if(needs_pack)
-			pack_register(registers[x].name);
+		if(needs_packing)
+		{
+			regs_pack(registers[i].name);
+		}
 	}
 }
 
 void
-update_unnamed_reg(int key)
+regs_update_unnamed(int reg_name)
 {
-	registers_t *unnamed, *reg;
+	reg_t *unnamed, *reg;
 	int i;
 
-	if(key == UNNAMED_REG_NAME)
+	if(reg_name == UNNAMED_REG_NAME)
 		return;
 
-	if((reg = find_register(key)) == NULL)
+	if((reg = regs_find(reg_name)) == NULL)
 		return;
 
-	if((unnamed = find_register(UNNAMED_REG_NAME)) == NULL)
+	if((unnamed = regs_find(UNNAMED_REG_NAME)) == NULL)
 		return;
 
-	clear_register(UNNAMED_REG_NAME);
+	regs_clear(UNNAMED_REG_NAME);
 
-	unnamed->num_files = reg->num_files;
-	unnamed->files = reallocarray(unnamed->files, unnamed->num_files,
+	unnamed->nfiles = reg->nfiles;
+	unnamed->files = reallocarray(unnamed->files, unnamed->nfiles,
 			sizeof(char *));
-	for(i = 0; i < unnamed->num_files; ++i)
+	for(i = 0; i < unnamed->nfiles; ++i)
 	{
 		unnamed->files[i] = strdup(reg->files[i]);
 	}

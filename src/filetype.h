@@ -94,7 +94,7 @@ assoc_records_t ft_get_all_programs(const char file[]);
 
 /* Associates list of comma separated patterns with each item in the list of
  * comma separated programs either for X or non-X associations and depending on
- * current execution environment. */
+ * current execution environment.  Takes over ownership of the matcher. */
 void ft_set_programs(struct matcher_t *matcher, const char programs[],
 		int for_x, int in_x);
 
@@ -113,6 +113,11 @@ assoc_records_t ft_get_all_viewers(const char file[]);
 void ft_set_viewers(struct matcher_t *matcher, const char viewers[]);
 
 /* Records managing. */
+
+/* Checks that given pair of pattern and command exists in specified list of
+ * associations.  Returns non-zero if so, otherwise zero is returned. */
+int ft_assoc_exists(const assoc_list_t *assocs, const char pattern[],
+		const char cmd[]);
 
 void ft_assoc_record_add(assoc_records_t *assocs, const char *command,
 		const char *description);
