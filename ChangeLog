@@ -1,3 +1,81 @@
+0.8.1 to 0.8.1a
+
+	Added c key to menus that inserts parts of menu line into command-line.
+	Thanks to filterfalse.
+
+	Added { and } keys to normal and visual modes.  They act similar to ( and
+	), but always consider whether entry is a file or directory.  Thanks to
+	octos.
+
+	Apply local filter on picking element of `:history filter` menu.
+
+	Added --disable-build-timestamp option to configure script to perform
+	reproducible build.  Thanks to Hendrik Jaeger (a.k.a. henk).
+
+	Display more meaningful message on failure to extract option name (unknown
+	option: string).
+
+	Handle register specified for gs normal mode command.  Select files listed
+	in that register.  Thanks to filterfalse.
+
+	More accurate parsing of bar not surrounded with whitespace.
+
+	Be consistent with regard to when local state is changed and do not reset
+	neither local options nor local filter on entering/leaving custom view.
+	Thanks to filterfalse.
+
+	Disallow adding duplicated filetype/fileviewer entries (just ignore them
+	as they wouldn't be used due to order priority anyway).
+
+	Expand tilde in first argument of :bmark! command.  Thanks to Marcos Cruz.
+
+	Truncate menu titles that don't feet the screen.  Thanks to aleksejrs.
+
+	Fixed redrawing message dialog when 'relativenumber' option is on.  Thanks
+	to aleksejrs.
+
+	Fixed resetting statusbar contents on displaying message dialog.
+
+	Fixed parsing background mark after quote (as in `:put " &`).
+
+	Fixed using plugin in neovim, which has broken `system()` and :! commands.
+	Thanks to Artur Shaik (a.k.a. artur-shaik).
+
+	Fixed polluting screen of server with messages about invalid arguments.
+
+	Fixed duplicated filetype entries in vifminfo.  Thanks to aleksejrs.
+
+	Fixed switching views via :wincmd.  Thanks to fogine.
+
+	Fixed executing commands on new view after switching it (related to
+	sequences of commands separated via bar symbol).
+
+	Fixed --with-dyn-x11 configuration option, which failed to enable dynamic
+	use of the library.  Thanks to Badalisc and Hendrik Jaeger (a.k.a. henk).
+
+	Fixed handling of doubled commas on reading/writing filetypes from/to
+	vifminfo.
+
+	Fixed displaying of extra file line in quick view when 'tuioptions'
+	doesn't contain "p" flag.  Thanks to aleksejrs.
+
+	Fixed description of 'sort' to reflect rename of "type" into "dir".
+	Thanks to Marcos Cruz.
+
+	Fixed tab completion for single-executable Windows build, which didn't
+	work in the last release and could cause crash.  Thanks to Reva Revadigar.
+
+	Fixed memory leak on resolving symlinked path on Windows.  Thanks to Hendrik
+	Jaeger (a.k.a. henk).
+
+	Fixed TUI glitches in the form of borders after shrinking terminal to
+	smallest possible height and restoring it back.
+
+	Fixed processing of path regexps for filetypes when operating on
+	selection.  Thanks to aleksejrs.
+
+	Fixed running multiple files in custom view.
+
 0.8.1-beta to 0.8.1
 
 	Added summary to builtin tree implementation.  Thanks to aleksejrs.
@@ -330,7 +408,7 @@
 	Fixed choosing user vs. default shell on Windows (was reversed), related
 	to %S, %i and alike macros.
 
-	Fixed loosing view sorting on failed attempt to load custom view.  Thanks
+	Fixed losing view sorting on failed attempt to load custom view.  Thanks
 	to filterfalse.
 
 	Fixed not restoring 'sort' value on leaving unsorted custom view.
@@ -3446,7 +3524,7 @@
 
 	Fixed bug with sorting symbolic links by name.
 
-	Fixed bug with loosing selection before running command from visual mode.
+	Fixed bug with losing selection before running command from visual mode.
 
 	Fixed bugs with registers and segmentation fault.
 

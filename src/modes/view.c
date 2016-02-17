@@ -80,7 +80,7 @@ typedef struct
 	int line;         /* Current real line number. */
 	int linev;        /* Current virtual line number. */
 
-	/* Dimentions, units of actions. */
+	/* Dimensions, units of actions. */
 	int win_size; /* Scroll window size. */
 	int half_win; /* Height of a "page" (can be changed). */
 	int width;    /* Last width used for breaking lines. */
@@ -185,8 +185,8 @@ static int forward_if_changed(view_info_t *vi);
 static int scroll_to_bottom(view_info_t *vi);
 static void reload_view(view_info_t *vi, int silent);
 
-view_info_t view_info[VI_COUNT];
-view_info_t* vi = &view_info[VI_QV];
+static view_info_t view_info[VI_COUNT];
+static view_info_t* vi = &view_info[VI_QV];
 
 static keys_add_info_t builtin_cmds[] = {
 	{L"\x02", {BUILTIN_KEYS, FOLLOWED_BY_NONE, {.handler = cmd_b}}},
@@ -926,14 +926,14 @@ static void
 cmd_slash(key_info_t key_info, keys_info_t *keys_info)
 {
 	vi->search_repeat = key_info.count;
-	enter_cmdline_mode(CLS_VWFSEARCH, L"", NULL);
+	enter_cmdline_mode(CLS_VWFSEARCH, "", NULL);
 }
 
 static void
 cmd_qmark(key_info_t key_info, keys_info_t *keys_info)
 {
 	vi->search_repeat = key_info.count;
-	enter_cmdline_mode(CLS_VWBSEARCH, L"", NULL);
+	enter_cmdline_mode(CLS_VWBSEARCH, "", NULL);
 }
 
 /* Toggles automatic forwarding of file. */

@@ -306,7 +306,7 @@ set_options(const char args[], OPT_SCOPE scope)
 
 		if(*args == '\0' && *buf == '\0')
 		{
-			/* Stop on reacing comment. */
+			/* Stop on reaching comment. */
 			break;
 		}
 
@@ -377,7 +377,14 @@ process_option(const char arg[], OPT_SCOPE real_scope, OPT_SCOPE scope,
 			return 0;
 		}
 
-		vle_tb_append_linef(vle_err, "%s: %s", "Unknown option", optname);
+		if(optname[0] == '\0')
+		{
+			vle_tb_append_linef(vle_err, "%s: %s", "No valid option name in", arg);
+		}
+		else
+		{
+			vle_tb_append_linef(vle_err, "%s: %s", "Unknown option", optname);
+		}
 		return 1;
 	}
 
@@ -1253,7 +1260,7 @@ complete_options(const char args[], const char **start, OPT_SCOPE scope)
 		args = extract_option(args, buf, 0);
 		if(args == NULL || (*args == '\0' && *buf == '\0'))
 		{
-			/* Just exit on error or reacing comment. */
+			/* Just exit on error or reaching comment. */
 			vle_compl_add_match(buf);
 			return;
 		}

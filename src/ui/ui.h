@@ -285,7 +285,7 @@ typedef struct
 	char sort[SK_COUNT], sort_g[SK_COUNT];
 	/* Sorting groups (comma-separated list of regular expressions). */
 	char *sort_groups, *sort_groups_g;
-	/* Primary group is compiled form. */
+	/* Primary group in compiled form. */
 	regex_t primary_group;
 
 	int history_num;
@@ -346,7 +346,7 @@ WINDOW *lborder;
 WINDOW *mborder;
 WINDOW *rborder;
 
-/* Updates the ruler with infomation from the view. */
+/* Updates the ruler with information from the view. */
 void ui_ruler_update(FileView *view);
 
 /* Sets text to be displayed on the ruler.  Real window update is postponed for

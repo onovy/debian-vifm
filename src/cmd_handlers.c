@@ -732,7 +732,11 @@ static void
 aucmd_action_handler(const char action[], void *arg)
 {
 	FileView *view = arg;
+	FileView *tmp_curr, *tmp_other;
+
+	ui_view_pick(view, &tmp_curr, &tmp_other);
 	(void)exec_commands(action, view, CIT_COMMAND);
+	ui_view_unpick(view, tmp_curr, tmp_other);
 }
 
 /* Handler of list callback for autocommands. */
@@ -1428,7 +1432,7 @@ static char *
 make_bmark_path(const char path[])
 {
 	char *ret;
-	char *const expanded = ma_expand_single(path);
+	char *const expanded = replace_tilde(ma_expand_single(path));
 
 	if(is_path_absolute(expanded))
 	{
@@ -2956,31 +2960,36 @@ redraw_cmd(const cmd_info_t *cmd_info)
 	return 0;
 }
 
+/* Displays menu listing contents of registers (all or just specified ones). */
 static int
 registers_cmd(const cmd_info_t *cmd_info)
 {
-	char buf[256];
+	char reg_names[256];
 	int i, j;
 
 	if(cmd_info->argc == 0)
+	{
 		return show_register_menu(curr_view, valid_registers) != 0;
+	}
 
+	/* Format list of unique register names. */
 	j = 0;
-	buf[0] = '\0';
-	for(i = 0; i < cmd_info->argc; i++)
+	reg_names[0] = '\0';
+	for(i = 0; i < cmd_info->argc; ++i)
 	{
 		const char *p = cmd_info->argv[i];
 		while(*p != '\0')
 		{
-			if(strchr(buf, *p) == NULL)
+			if(strchr(reg_names, *p) == NULL)
 			{
-				buf[j++] = *p;
-				buf[j] = '\0';
+				reg_names[j++] = *p;
+				reg_names[j] = '\0';
 			}
-			p++;
+			++p;
 		}
 	}
-	return show_register_menu(curr_view, buf) != 0;
+
+	return show_register_menu(curr_view, reg_names) != 0;
 }
 
 /* Renames selected files of the current view. */
@@ -3801,7 +3810,7 @@ get_reg(const char arg[], int *reg)
 	{
 		return CMDS_ERR_TRAILING_CHARS;
 	}
-	if(!register_exists(arg[0]))
+	if(!regs_exists(arg[0]))
 	{
 		return CMDS_ERR_TRAILING_CHARS;
 	}

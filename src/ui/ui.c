@@ -433,6 +433,13 @@ resize_all(void)
 	wresize(rborder, border_height, 1);
 	mvwin(rborder, 1, screen_x - 1);
 
+	/* These need a resize at least after terminal size was zero or they grow and
+	 * produce bad looking effect. */
+	wresize(ltop_line1, 1, 1);
+	wresize(ltop_line2, 1, 1);
+	wresize(rtop_line1, 1, 1);
+	wresize(rtop_line2, 1, 1);
+
 	if(curr_stats.number_of_windows == 1)
 	{
 		only_layout(&lwin, screen_x, screen_y);
@@ -537,6 +544,13 @@ update_screen(UpdateType update_kind)
 	curr_stats.need_update = UT_NONE;
 
 	update_views(update_kind == UT_FULL);
+	/* Redraw message dialog over updated panes.  It's not very nice to do it
+	 * here, but for sure better then blocking pane updates by checking for
+	 * message mode. */
+	if(vle_mode_is(MSG_MODE))
+	{
+		redraw_msg_dialog(0);
+	}
 
 	update_stat_window(curr_view);
 
@@ -1147,6 +1161,12 @@ ui_view_pick(FileView *view, FileView **old_curr, FileView **old_other)
 void
 ui_view_unpick(FileView *view, FileView *old_curr, FileView *old_other)
 {
+	if(curr_view != view)
+	{
+		/* Do nothing if view roles were switched from outside. */
+		return;
+	}
+
 	curr_view = old_curr;
 	other_view = old_other;
 	if(curr_view != view)

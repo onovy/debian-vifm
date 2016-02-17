@@ -1,4 +1,4 @@
-.TH VIFM 1 "January 17, 2016" "vifm 0.8.1"
+.TH VIFM 1 "February 10, 2016" "vifm 0.8.1a"
 .\" ---------------------------------------------------------------------------
 .SH NAME
 .\" ---------------------------------------------------------------------------
@@ -525,8 +525,11 @@ go to visual mode into selection amending state preserving current selection.
 .BI gv
 go to visual mode restoring last selection.
 .TP
-.BI gs
-restore last t selection, like gv for visual mode selection.
+.BI [reg]gs
+when no register is specified, restore last t selection (similar to what
+gv does for visual mode selection).  If register is present, then all
+files listed in that register and which are visible in current view are
+selected.
 .TP
 .BI gu<selector>
 make names of selected files lowercase.
@@ -638,6 +641,13 @@ vifm uses size, uid, ...
 .TP
 .BI )
 goto next group.  See ( key description above.
+.TP
+.BI {
+similar to ( key, but always considers whether entry is file or directory and
+thus speeds up navigation to closest previous entry of the opposite type.
+.TP
+.BI }
+same as {, but in forward direction.
 .\" ---------------------------------------------------------------------------
 .SH Using Count
 .\" ---------------------------------------------------------------------------
@@ -1255,7 +1265,7 @@ next link a corresponding name from the argument list.
 .TP
 .BI "                                         :apropos"
 .TP
-.BI ":apropos manpage"
+.BI ":apropos keyword..."
 create a menu of items returned by the apropos command.  Selecting an item in
 the menu opens corresponding man page.  By default the command relies on the
 external "apropos" utility, which can be customized by altering value of
@@ -2966,7 +2976,7 @@ undecorated-pattern
 
 The last form is implicitly refers to one of others.  :highlight does not accept
 undecorated form, while :filetype, :filextype and :fileviewer treat it as list
-of name globals.
+of name globs.
 
 Regular expression patterns are case insensitive by default.
 
@@ -3577,7 +3587,7 @@ Currently this means don't check if directory has changed, skip check if
 target of symbolic links exists, assume that link target located on slow fs
 to be a directory (allows entering directories and navigating to files via gf).
 If you set the option to "*", it means all the systems are considered slow
-(usefull for cygwin, where all the checks might render vifm very slow if there
+(useful for cygwin, where all the checks might render vifm very slow if there
 are network mounts).
 
 Example for autofs root /mnt/autofs:
@@ -3629,29 +3639,22 @@ information on time keys.
 
 \(aq+\(aq means ascending sort for this key, and '\-' means descending sort.
 
-In case "name" ("iname" on Windows) is skipped, it will be added at the end
-automatically.
-
-Value of the option is checked to include default sorting key (name on *nix,
-iname on Windows).  When it is absent, the key is appended to the value of the
-option.
-
-Type key is somewhat similar in this regard but it's added implicitly:
-when "type" is not specified, sorting behaves as if it was the first key in
+"dir" key is somewhat similar in this regard but it's added implicitly:
+when "dir" is not specified, sorting behaves as if it was the first key in
 the list.  That's why if one wants sorting algorithm to mix directories and
-files, "type" should be appended to sorting option, for example like this:
+files, "dir" should be appended to sorting option, for example like this:
 .EX
 
-  set sort+=type
+  set sort+=dir
 
 .EE
 or
 .EX
 
-  set sort=-size,type
+  set sort=-size,dir
 .EE
 
-Value of the option is checked to include type key and default sorting
+Value of the option is checked to include dir key and default sorting
 key (name on *nix, iname on Windows).  Here is what happens if one of them is
 missing:
 .RS
@@ -3817,11 +3820,11 @@ Use trash directory.  See "Trash directory" section below.
 type: string
 .br
 default: on *nix:
-         "%r/.vifm-Trash-%u,$VIFM/Trash,%r/.vifm-Trash" or if $VIFM/Trash
-         doesn't exist
-         "%r/.vifm-Trash-%u,$XDG_DATA_HOME/vifm/Trash,%r/.vifm-Trash"
+   "%r/.vifm-Trash-%u,$VIFM/Trash,%r/.vifm-Trash"
+   or if $VIFM/Trash doesn't exist
+   "%r/.vifm-Trash-%u,$XDG_DATA_HOME/vifm/Trash,%r/.vifm-Trash"
          on Windows:
-         "%r/.vifm-Trash,$XDG_DATA_HOME/vifm/Trash"
+   "%r/.vifm-Trash,$XDG_DATA_HOME/vifm/Trash"
 .br
 List of trash directory path specifications, separated with commas.
 Each list item either defines an absolute path to trash directory or a path
@@ -4563,6 +4566,9 @@ automatically to allow view several pages one by one.
 
 Type dd on an abbreviation to remove it.
 
+c leaves menu preserving file selection and inserts right-hand side of
+selected command into command-line.
+
 .B Color scheme menu
 
 Selecting name of a color scheme applies it the same way as if
@@ -4613,12 +4619,23 @@ top of the stack.
 Commands from vifmrc or typed in command-line are displayed above empty line.
 All commands below empty line are from .desktop files.
 
+c leaves menu preserving file selection and inserts command after :! in
+command-line mode.
+
 .B Grep, find, locate, bookmarks and user menu with navigation (%M macro)
 
 gf \- navigate previously active view to currently selected item.  Leaves menu
 mode except for grep menu.  Pressing Enter key has the same effect.
 
 e \- open selected path in the editor, stays in menu mode.
+
+c \- leave menu preserving file selection and insert file name after :! in
+command-line mode.
+
+.B User menu without navigation (%m macro)
+
+c leaves menu preserving file selection and inserts whole line after :! in
+command-line mode.
 
 .B Grep menu
 
@@ -4630,7 +4647,11 @@ See above for "gf" and "e" keys description.
 
 .B Command-line history menu
 
-Selecting an item will execute it as command-line command or search query.
+Selecting an item executes it as command-line command, search query or local
+filter.
+
+c leaves menu preserving file selection and inserts line into command-line of
+appropriate kind.
 
 .B Volumes menu
 
@@ -4840,7 +4861,7 @@ being truncated).
 .\" ---------------------------------------------------------------------------
 vifm has a builtin support of automated FUSE file system mounts.  It is \
 implemented using file associations mechanism.  To enable automated mounts, \
-one needs to use a specially formated program line in filetype or \
+one needs to use a specially formatted program line in filetype or \
 filextype commands.  Currently two formats are supported:
 
 1) FUSE_MOUNT
@@ -4974,7 +4995,7 @@ right align (default)
 dynamic align
 
 It's like left alignment, but when the text is bigger than the column, the
-alignment is made at the right (so the of part of the field is always visible).
+alignment is made at the right (so the part of the field is always visible).
 
 .EX
   set viewcolumns=*{name}

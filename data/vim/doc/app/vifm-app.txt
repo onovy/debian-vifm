@@ -1,4 +1,4 @@
-*vifm-app.txt*    For Vifm version 0.8.1  Last change: 2016 Jan 17
+*vifm-app.txt*    For Vifm version 0.8.1a  Last change: 2016 Feb 10
 
  Email for bugs and suggestions: <xaizek@openmailbox.org>
 
@@ -445,8 +445,11 @@ av                                             *vifm-av*
 gv                                             *vifm-gv*
     go to visual mode restoring last selection.
 
-gs                                             *vifm-gs*
-    restore last t selection, like gv for visual mode selection.
+[reg]gs                                        *vifm-gs*
+    when no register is specified, restore last t selection (similar to what
+    gv does for visual mode selection).  If register is present, then all
+    files listed in that register and which are visible in current view are
+    selected.
 
 
 gu<selector>                                   *vifm-gu*
@@ -556,6 +559,15 @@ ZZ - same as |vifm-:quit|.                       *vifm-ZZ*
 
 )                                              *vifm-)*
     goto next group.  See ( key description above.
+
+
+{                                              *vifm-{*
+    similar to ( key, but always considers whether entry is file or
+    directory and thus speeds up navigation to closest previous entry of
+    the opposite type.
+
+}                                              *vifm-}*
+    same as {, but in forward direction.
 
 Using Count~
                                                *vifm-count* *vifm-[count]*
@@ -1099,7 +1111,7 @@ The builtin commands are:
     each next link a corresponding name from the argument list.
 
                                                *vifm-:apropos*
-:apropos manpage
+:apropos keyword...
     create a menu of items returned by the apropos command.  Selecting an item
     in the menu opens corresponding man page.  By default the command relies
     on the external "apropos" utility, which can be customized by altering
@@ -2445,7 +2457,7 @@ There are five possible ways to write them:
 
 The last form is implicitly refers to one of others.  |vifm-:highlight| does not
 accept undecorated form, while |vifm-:filetype|, |vifm-:filextype| and
-|vifm-:fileviewer| treat it as list of name globals.
+|vifm-:fileviewer| treat it as list of name globs.
 
 Regular expression patterns are case insensitive by default.
 
@@ -2980,7 +2992,7 @@ Currently this means don't check if directory has changed, skip check if
 target of symbolic links exists, assume that link target located on slow fs
 to be a directory (allows entering directories and navigating to files via
 |vifm-gf|).  If you set the option to "*", it means all the systems are
-considered slow (usefull for cygwin, where all the checks might render vifm
+considered slow (useful for cygwin, where all the checks might render vifm
 very slow if there are network mounts).
 
 Example for autofs root /mnt/autofs: >
@@ -3028,17 +3040,23 @@ information on time keys.
 
 '+' means ascending sort for this key, and '-' means descending sort.
 
-Value of the option is checked to include default sorting key (name on
-*nix, iname on Windows).  When it is absent, the key is appended to the
-value of the option.
-
-Type key is somewhat similar in this regard but it's not added implicitly:
-when "type" is not specified, sorting behaves as if it was the first key in
+"dir" key is somewhat similar in this regard but it's not added implicitly:
+when "dir" is not specified, sorting behaves as if it was the first key in
 the list.  That's why if one wants sorting algorithm to mix directories and
-files, "type" should be appended to sorting option, for example like this: >
- set sort+=type
+files, "dir" should be appended to sorting option, for example like this: >
+ set sort+=dir
 or >
- set sort=-size,type
+ set sort=-size,dir
+
+This option also changes view columns according to primary sorting key set,
+unless |vifm-'viewcolumns'| option is not empty.
+
+Value of the option is checked to include "dir" key and default sorting key
+"(name" on *nix, "iname" on Windows).  Here is what happens if one of them is
+missing:
+ - "dir" key is added at the beginning;
+ - default key is added at the end.
+All other keys are left untouched (at most they are moved).
 
 This option also changes view columns according to primary sorting key set,
 unless |vifm-'viewcolumns'| option is not empty.
@@ -3808,6 +3826,9 @@ Selecting command executes it with empty arguments (|vifm-%a|).
 
 Type dd on a command to remove.
 
+c leaves menu preserving file selection and inserts right-hand side of
+selected command into command-line.
+
 Marks menu~
 
 Selecting a mark navigates to it.
@@ -3848,6 +3869,9 @@ Filetype menu~
 Commands from vifmrc or typed in command-line are displayed above empty line.
 All commands below empty line are from .desktop files.
 
+c leaves menu preserving file selection and inserts command after :! in
+command-line mode.
+
 Grep, find, locate, bookmarks and user menu with navigation (%M macro)~
 
 gf                                             *vifm-m_gf*
@@ -3856,6 +3880,15 @@ gf                                             *vifm-m_gf*
 
 e                                              *vifm-m_e*
     open selected path in the editor, stays in menu mode.
+
+c                                              *vifm-m_c*
+    leave menu preserving file selection and insert file name after :! in
+    command-line mode.
+
+User menu without navigation (%m macro)~
+
+c leaves menu preserving file selection and inserts whole line after :! in
+command-line mode.
 
 Grep menu~
 
@@ -3867,7 +3900,11 @@ See above for "gf" and "e" keys description.
 
 Command-line history menu~
 
-Selecting an item will execute it as command-line command or search query.
+Selecting an item executes it as command-line command, search query or local
+filter.
+
+c leaves menu preserving file selection and inserts line into command-line of
+appropriate kind.
 
 Volumes menu~
 
@@ -4069,7 +4106,7 @@ and for this reason the following rules apply during lookup:
 
 vifm has a builtin support of automated FUSE file system mounts.  It is
 implemented using file associations mechanism.  To enable automated mounts, one
-needs to use a specially formated program line in |vifm-:filetype| or
+needs to use a specially formatted program line in |vifm-:filetype| or
 |vifm-:filextype| commands.  Currently two formats are supported:
 
 1) FUSE_MOUNT                                  *vifm-FUSE_MOUNT*
@@ -4187,7 +4224,7 @@ Specifies type of text alignment within a column.  Two types are supported:
  - dynamic align
 
     It's like left alignment, but when the text is bigger than the column,
-    the alignment is made at the right (so the of part of the field is always
+    the alignment is made at the right (so the part of the field is always
     visible). >
 
      set viewcolumns=*{name}
