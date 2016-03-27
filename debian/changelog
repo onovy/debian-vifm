@@ -10,6 +10,7 @@ vifm (0.8.1a-1) UNRELEASED; urgency=medium
   * Removed superfluous doc files (COPYING, INSTALL and ChangeLog)
   * Removed d/menu, .desktop file is installed instead
   * Added simple Debian test
+  * Enabled hardening BINDNOW
 
  -- Ondřej Nový <novy@ondrej.org>  Sun, 27 Mar 2016 12:36:24 +0200
 
