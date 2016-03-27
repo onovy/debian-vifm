@@ -12,6 +12,7 @@ Comment: Some code has been taken from external sources, see AUTHORS file.
 Files: debian/*
 Copyright:  2012-2014 Hendrik Jaeger <deb@henk.geekmail.org>
             2002-2011 Edelhard Becker <becker@edelhard.de>
+            2016 Ondřej Nový <novy@ondrej.org>
 License: GPL-2+
 
 Files: pkgs/Gentoo/app-misc/vifm/vifm-9999.ebuild
