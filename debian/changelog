@@ -1,6 +1,6 @@
 vifm (0.8.1a-1) UNRELEASED; urgency=medium
 
-  * New upstream release (Closes: #812797)
+  * New upstream release (Closes: #812797, #810630)
   * Removed 0001-fix-building-without-terminal.patch
     (Applied upstream)
   * Removed 0002-Fix-buffer-overflow-in-tests-to-fix-building-on-arm.patch
