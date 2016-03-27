@@ -18,3 +18,10 @@ override_dh_auto_test:
 override_dh_shlibdeps:
 	dh_shlibdeps -- -xlibx11-6
 
+override_dh_install:
+	rm \
+		debian/vifm/usr/share/doc/vifm/COPYING \
+		debian/vifm/usr/share/doc/vifm/INSTALL \
+		debian/vifm/usr/share/doc/vifm/ChangeLog
+
+	dh_install --fail-missing
