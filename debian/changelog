@@ -5,8 +5,10 @@ vifm (0.8.1a-1) UNRELEASED; urgency=medium
     (Applied upstream)
   * Removed 0002-Fix-buffer-overflow-in-tests-to-fix-building-on-arm.patch
     (Applied upstream)
-  * Standards-Version is 3.9.7 now (no change)
-  * d/copyright fixed for new release and added myself
+  * Standards-Version is 3.9.8 now (no change)
+  * d/copyright:
+    - Fixed for new release
+    - Added myself for Debian part
   * Removed superfluous doc files (COPYING, INSTALL and ChangeLog)
   * Removed d/menu, .desktop file is installed instead
   * Added simple Debian test
