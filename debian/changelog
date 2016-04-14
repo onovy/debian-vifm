@@ -1,5 +1,6 @@
-vifm (0.8.1a-1) UNRELEASED; urgency=medium
+vifm (0.8.1a-0.1) unstable; urgency=medium
 
+  * Non-maintainer upload.
   * New upstream release (Closes: #812797, #810630)
   * Removed 0001-fix-building-without-terminal.patch
     (Applied upstream)
@@ -15,7 +16,7 @@ vifm (0.8.1a-1) UNRELEASED; urgency=medium
   * Enabled all but PIE hardening
   * Added disable-build-timestamp option to perform reproducible build
 
- -- Ondřej Nový <novy@ondrej.org>  Sun, 27 Mar 2016 12:36:24 +0200
+ -- Ondřej Nový <novy@ondrej.org>  Sat, 09 Apr 2016 19:27:44 +0200
 
 vifm (0.7.8-3) unstable; urgency=medium
 
