@@ -1,3 +1,10 @@
+vifm (0.8.1a-0.2) UNRELEASED; urgency=medium
+
+  * Non-maintainer upload.
+  * Removed override_dh_auto_test which prevented to see errors from tests
+
+ -- Ondřej Nový <novy@ondrej.org>  Sun, 01 May 2016 13:30:21 +0200
+
 vifm (0.8.1a-0.1) unstable; urgency=medium
 
   * Non-maintainer upload.
