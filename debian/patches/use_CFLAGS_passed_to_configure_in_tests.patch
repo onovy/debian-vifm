@@ -1,0 +1,80 @@
+Author: xaizek <xaizek@openmailbox.org>
+Date: Sun, 1 May 2016 16:45:35 +0300
+Subject: [PATCH] Use `CFLAGS` passed to configure in tests
+Origin: backport, https://github.com/vifm/vifm/commit/5486fa27080a03e8598835058fdbc3453ec9d2c7
+
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -180,6 +180,7 @@
+ SET_MAKE = @SET_MAKE@
+ SHELL = @SHELL@
+ STRIP = @STRIP@
++TESTS_CFLAGS = @TESTS_CFLAGS@
+ VERSION = @VERSION@
+ VIM_PROG = @VIM_PROG@
+ abs_builddir = @abs_builddir@
+--- a/configure
++++ b/configure
+@@ -636,6 +636,7 @@
+ COL_PROG
+ MANGEN_PROG
+ HAVE_FILE_PROG
++TESTS_CFLAGS
+ host_os
+ host_vendor
+ host_cpu
+@@ -6040,6 +6041,9 @@
+ 		;;
+ esac
+ 
++TESTS_CFLAGS="$CFLAGS"
++
++
+ 
+ $as_echo "#define _XOPEN_SOURCE_EXTENDED 1" >>confdefs.h
+ 
+--- a/configure.ac
++++ b/configure.ac
+@@ -37,6 +37,10 @@
+ 		;;
+ esac
+ 
++dnl pass some CFLAGS to tests
++TESTS_CFLAGS="$CFLAGS"
++AC_SUBST([TESTS_CFLAGS])
++
+ AC_DEFINE([_XOPEN_SOURCE_EXTENDED], [1],
+           [Define to 1 to enable wide functions of ncurses in some environments.])
+ 
+--- a/src/Makefile.in
++++ b/src/Makefile.in
+@@ -260,6 +260,7 @@
+ SET_MAKE = @SET_MAKE@
+ SHELL = @SHELL@
+ STRIP = @STRIP@
++TESTS_CFLAGS = @TESTS_CFLAGS@
+ VERSION = @VERSION@
+ VIM_PROG = @VIM_PROG@
+ abs_builddir = @abs_builddir@
+--- a/tests/Makefile
++++ b/tests/Makefile
+@@ -131,13 +131,15 @@
+ ifdef unix_env
+     MF := $(B)../src/Makefile
+     ifneq ($(wildcard $(MF)),)
+-        LDFLAGS += $(shell sed -n     '/LIBS =/{s/^[^=]*=//p;q}' $(MF))
+-        LDFLAGS += $(shell sed -n  '/LDFLAGS =/{s/^[^=]*=//p;q}' $(MF))
+-        CFLAGS  += $(shell sed -n '/CPPFLAGS =/{s/^[^=]*=//p;q}' $(MF))
++        LDFLAGS += $(shell sed -n    '/LIBS =/{s/^[^=]*=//p;q}' $(MF))
++        LDFLAGS += $(shell sed -n '/LDFLAGS =/{s/^[^=]*=//p;q}' $(MF))
++
++        CFLAGS  += $(shell sed -n          '/CPPFLAGS =/{s/^[^=]*=//p;q}' $(MF))
++        CFLAGS  += $(shell sed -n      '/TESTS_CFLAGS =/{s/^[^=]*=//p;q}' $(MF))
+         CFLAGS  += $(shell sed -n '/SANITIZERS_CFLAGS =/{s/^[^=]*=//p;q}' $(MF))
+     endif
+ 
+-    CFLAGS  += -I/usr/include/ncursesw
++    CFLAGS += -I/usr/include/ncursesw
+     export UBSAN_OPTIONS := halt_on_error=1
+ endif
+ ifdef win_env

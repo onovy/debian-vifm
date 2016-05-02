@@ -1,0 +1,52 @@
+Author: xaizek <xaizek@openmailbox.org>
+Date: Sun, 1 May 2016 17:06:26 +0300
+Subject: [PATCH] Use return value of chdir() in misc tests
+Origin: backport, https://github.com/vifm/vifm/commit/be7424542b04fff8617ca80579b676ecae8f3f8e
+
+--- a/tests/misc/expand_macros.c
++++ b/tests/misc/expand_macros.c
+@@ -221,7 +221,7 @@
+ {
+ 	const char *p;
+ 
+-	chdir(TEST_DATA_PATH "/existing-files");
++	assert_success(chdir(TEST_DATA_PATH "/existing-files"));
+ 
+ 	regs_init();
+ 
+@@ -257,7 +257,7 @@
+ 	char key;
+ 	char expected[] = "a b cx";
+ 
+-	chdir(TEST_DATA_PATH "/existing-files");
++	assert_success(chdir(TEST_DATA_PATH "/existing-files"));
+ 
+ 	regs_init();
+ 
+@@ -323,7 +323,7 @@
+ 	assert_string_equal(" a m M s ", expanded);
+ 	free(expanded);
+ 
+-	chdir(TEST_DATA_PATH "/existing-files");
++	assert_success(chdir(TEST_DATA_PATH "/existing-files"));
+ 	regs_init();
+ 
+ 	regs_append(DEFAULT_REG_NAME, "a");
+@@ -412,7 +412,7 @@
+ 
+ TEST(singly_no_crash_on_wrong_register_name)
+ {
+-	chdir(TEST_DATA_PATH "/spaces-in-names");
++	assert_success(chdir(TEST_DATA_PATH "/spaces-in-names"));
+ 	regs_init();
+ 
+ 	assert_success(regs_append('r', "spaces in the middle"));
+@@ -425,7 +425,7 @@
+ {
+ 	char *expanded;
+ 
+-	chdir(TEST_DATA_PATH "/spaces-in-names");
++	assert_success(chdir(TEST_DATA_PATH "/spaces-in-names"));
+ 	regs_init();
+ 
+ 	assert_success(regs_append('r', "spaces in the middle"));

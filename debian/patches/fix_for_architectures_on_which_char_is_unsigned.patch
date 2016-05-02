@@ -1,0 +1,38 @@
+Author: xaizek <xaizek@openmailbox.org>
+Date: Sun, 1 May 2016 16:52:11 +0300
+Subject: [PATCH] Fix for architectures on which `char` is unsigned
+Origin: backport, https://github.com/vifm/vifm/commit/68a56d6e105593c3ecc74156053054267fc8b26c
+
+--- a/configure
++++ b/configure
+@@ -6041,6 +6041,8 @@
+ 		;;
+ esac
+ 
++CFLAGS="$CFLAGS -fsigned-char"
++
+ TESTS_CFLAGS="$CFLAGS"
+ 
+ 
+--- a/configure.ac
++++ b/configure.ac
+@@ -37,6 +37,9 @@
+ 		;;
+ esac
+ 
++dnl code relies on `char` being `signed char`
++CFLAGS="$CFLAGS -fsigned-char"
++
+ dnl pass some CFLAGS to tests
+ TESTS_CFLAGS="$CFLAGS"
+ AC_SUBST([TESTS_CFLAGS])
+--- a/tests/Makefile
++++ b/tests/Makefile
+@@ -123,6 +123,7 @@
+ # setup compile and link flags (partially depends on OS)
+ CFLAGS := -MMD -pipe -Wall -Werror -Istic/ -DTEST -include $(B)../config.h
+ CFLAGS += -D_XOPEN_SOURCE -D_XOPEN_SOURCE_EXTENDED -Wno-char-subscripts
++CFLAGS += -fsigned-char
+ LDFLAGS := -lpthread
+ ifeq (,$(findstring clang,$(CC)))
+     # clang is inconvenient with regard to this flag, don't do coverage with it
