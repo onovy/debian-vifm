@@ -1,0 +1,22 @@
+From e7c28d0bff82c21b74805829cf4b93323afccbc6 Mon Sep 17 00:00:00 2001
+From: xaizek <xaizek@openmailbox.org>
+Date: Wed, 4 May 2016 12:50:41 +0300
+Subject: [PATCH] This should fix tests build on GNU Hurd
+
+Fixes #182 on GitHub.
+---
+ tests/ior/utils.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/tests/ior/utils.c b/tests/ior/utils.c
+index 084bb1b..2e7936f 100644
+--- a/tests/ior/utils.c
++++ b/tests/ior/utils.c
+@@ -6,6 +6,7 @@
+ 
+ #include <stdio.h> /* FILE fclose() fopen() snprintf() */
+ 
++#include "../../src/compat/fs_limits.h"
+ #include "../../src/compat/os.h"
+ #include "../../src/io/iop.h"
+ #include "../../src/io/ior.h"
