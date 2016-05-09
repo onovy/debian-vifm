@@ -4,3 +4,4 @@ use_return_value_of_chdir_in_misc_tests.patch
 hurd_fix.patch
 kfreebsd_fix.patch
 hurd_fix2.patch
+hurd_fix3.patch

@@ -1,0 +1,149 @@
+From 46c0c3bbce05ab02463fca6975bdb86a9426a1c4 Mon Sep 17 00:00:00 2001
+From: xaizek <xaizek@openmailbox.org>
+Date: Mon, 9 May 2016 19:52:10 +0300
+Subject: [PATCH 1/3] Allow 0 ws.ws_row and ws.ws_col
+
+It used to be this way until it was changed to <=, but there is no
+rational for it in corresponding commit, so assuming that it was
+done just in case.
+---
+ src/ui/ui.c | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+--- a/src/ui/ui.c
++++ b/src/ui/ui.c
+@@ -1034,7 +1034,9 @@
+ 		LOG_SERROR_MSG(errno, "Failed to query terminal size.");
+ 		vifm_finish("Terminal error.");
+ 	}
+-	if(ws.ws_row <= 0 || ws.ws_col <= 0)
++	/* Allow 0 as GNU Hurd returns this, is_term_resized() returns false then, but
++	 * everything works. */
++	if(ws.ws_row < 0 || ws.ws_col < 0)
+ 	{
+ 		LOG_INFO_MSG("ws.ws_row = %d; ws.ws_col = %d", ws.ws_row, ws.ws_col);
+ 		vifm_finish("Terminal is unable to run vifm.");
+--- a/tests/fileops/generic.c
++++ b/tests/fileops/generic.c
+@@ -179,6 +179,9 @@
+ 	create_empty_dir("second/nested1");
+ 
+ #ifndef _WIN32
++	/* Something about GNU Hurd differs, so skip this workaround there.  Really
++	 * need to figure out what's wrong with this thing... */
++#ifndef __gnu_hurd__
+ 	{
+ 		struct timeval tv[2];
+ 		gettimeofday(&tv[0], NULL);
+@@ -193,6 +196,7 @@
+ 		tv[1].tv_usec += 2;
+ 		utimes("first/nested1", tv);
+ 	}
++#endif
+ 	assert_success(chmod("first/nested1", 0700));
+ 	assert_success(os_stat("first/nested1", &src));
+ #endif
+--- a/tests/utils/str_to_case.c
++++ b/tests/utils/str_to_case.c
+@@ -3,10 +3,17 @@
+ #include <locale.h> /* LC_ALL setlocale() */
+ 
+ #include "../../src/utils/str.h"
++#include "../../src/utils/utils.h"
++
++static int locale_works(void);
+ 
+ SETUP_ONCE()
+ {
+ 	(void)setlocale(LC_ALL, "");
++	if(!locale_works())
++	{
++		(void)setlocale(LC_ALL, "en_US.utf8");
++	}
+ }
+ 
+ TEST(str_to_upper_ascii)
+@@ -18,7 +25,7 @@
+ 	assert_string_equal("ABCDEF", buf);
+ }
+ 
+-TEST(str_to_upper_utf)
++TEST(str_to_upper_utf, IF(locale_works))
+ {
+ 	char str[] = "АбВгДе";
+ 	char buf[sizeof(str)*4];
+@@ -27,7 +34,7 @@
+ 	assert_string_equal("АБВГДЕ", buf);
+ }
+ 
+-TEST(str_to_upper_mixed)
++TEST(str_to_upper_mixed, IF(locale_works))
+ {
+ 	char str[] = "АaбbВcгdДeеf";
+ 	char buf[sizeof(str)*4];
+@@ -45,7 +52,7 @@
+ 	assert_string_equal("abcdef", buf);
+ }
+ 
+-TEST(str_to_lower_utf)
++TEST(str_to_lower_utf, IF(locale_works))
+ {
+ 	char str[] = "АбВгДе";
+ 	char buf[sizeof(str)*4];
+@@ -54,7 +61,7 @@
+ 	assert_string_equal("абвгде", buf);
+ }
+ 
+-TEST(str_to_lower_mixed)
++TEST(str_to_lower_mixed, IF(locale_works))
+ {
+ 	char str[] = "АaбbВcгdДeеf";
+ 	char buf[sizeof(str)*4];
+@@ -81,7 +88,7 @@
+ 	assert_string_equal("ABCDE", buf);
+ }
+ 
+-TEST(str_to_lower_too_short_utf)
++TEST(str_to_lower_too_short_utf, IF(locale_works))
+ {
+ 	char str[] = "абвг";
+ 	char buf[sizeof(str) - 1];
+@@ -90,7 +97,7 @@
+ 	assert_string_equal("абв", buf);
+ }
+ 
+-TEST(str_to_upper_too_short_utf)
++TEST(str_to_upper_too_short_utf, IF(locale_works))
+ {
+ 	char str[] = "абвг";
+ 	char buf[sizeof(str) - 1];
+@@ -99,7 +106,7 @@
+ 	assert_string_equal("АБВ", buf);
+ }
+ 
+-TEST(str_to_lower_too_short_mixed)
++TEST(str_to_lower_too_short_mixed, IF(locale_works))
+ {
+ 	char str[] = "аaбbвcгd";
+ 	char buf[sizeof(str) - 1];
+@@ -108,7 +115,7 @@
+ 	assert_string_equal("аaбbвcг", buf);
+ }
+ 
+-TEST(str_to_upper_too_short_mixed)
++TEST(str_to_upper_too_short_mixed, IF(locale_works))
+ {
+ 	char str[] = "аaбbвcгd";
+ 	char buf[sizeof(str) - 1];
+@@ -117,5 +124,11 @@
+ 	assert_string_equal("АAБBВCГ", buf);
+ }
+ 
++static int
++locale_works(void)
++{
++	return (vifm_wcwidth(L'丝') == 2);
++}
++
+ /* vim: set tabstop=2 softtabstop=2 shiftwidth=2 noexpandtab cinoptions-=(0 : */
+ /* vim: set cinoptions+=t0 filetype=c : */
